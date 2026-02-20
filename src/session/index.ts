@@ -1,8 +1,9 @@
 /**
- * SessionIndex - Filesystem-based session discovery for Codex rollout files.
+ * SessionIndex - Hybrid session discovery for Codex rollout files.
  *
- * Scans the Codex sessions directory (~/.codex/sessions/YYYY/MM/DD/)
- * and parses session metadata from rollout JSONL files.
+ * Strategy: Try SQLite first (fast path), fallback to filesystem scan.
+ * SQLite reads Codex's own state DB; filesystem scans
+ * ~/.codex/sessions/YYYY/MM/DD/ for rollout JSONL files.
  */
 
 import { readdir, stat } from "node:fs/promises";
@@ -11,6 +12,12 @@ import { homedir } from "node:os";
 import { parseSessionMeta, extractFirstUserMessage } from "../rollout/reader";
 import type { CodexSession, SessionListOptions, SessionListResult } from "../types/session";
 import type { SessionMetaLine } from "../types/rollout";
+import {
+  openCodexDb,
+  listSessionsSqlite,
+  findSessionSqlite,
+  findLatestSessionSqlite,
+} from "./sqlite";
 
 const DEFAULT_CODEX_HOME = join(homedir(), ".codex");
 const SESSIONS_DIR = "sessions";
@@ -95,8 +102,33 @@ export async function buildSession(
 
 /**
  * List sessions with optional filtering and pagination.
+ * Tries SQLite first; falls back to filesystem scan if DB is unavailable.
  */
 export async function listSessions(
+  options?: SessionListOptions & { codexHome?: string },
+): Promise<SessionListResult> {
+  const codexHome = options?.codexHome;
+
+  // Fast path: SQLite
+  const db = openCodexDb(codexHome);
+  if (db !== null) {
+    try {
+      return listSessionsSqlite(db, options);
+    } catch {
+      // Fall through to filesystem scan
+    } finally {
+      db.close();
+    }
+  }
+
+  // Slow path: filesystem scan
+  return listSessionsFilesystem(options);
+}
+
+/**
+ * Filesystem-based session listing (fallback).
+ */
+async function listSessionsFilesystem(
   options?: SessionListOptions & { codexHome?: string },
 ): Promise<SessionListResult> {
   const codexHome = options?.codexHome;
@@ -133,11 +165,28 @@ export async function listSessions(
 
 /**
  * Find a session by its UUID.
+ * Tries SQLite first; falls back to filesystem scan.
  */
 export async function findSession(
   id: string,
   codexHome?: string,
 ): Promise<CodexSession | null> {
+  // Fast path: SQLite
+  const db = openCodexDb(codexHome);
+  if (db !== null) {
+    try {
+      const session = findSessionSqlite(db, id);
+      if (session !== null) {
+        return session;
+      }
+    } catch {
+      // Fall through to filesystem scan
+    } finally {
+      db.close();
+    }
+  }
+
+  // Slow path: filesystem scan
   for await (const rolloutPath of discoverRolloutPaths(codexHome)) {
     // Quick check: the UUID is embedded in the filename
     if (!rolloutPath.includes(id)) {
@@ -153,11 +202,28 @@ export async function findSession(
 
 /**
  * Find the most recent session, optionally filtered by working directory.
+ * Tries SQLite first; falls back to filesystem scan.
  */
 export async function findLatestSession(
   codexHome?: string,
   cwd?: string,
 ): Promise<CodexSession | null> {
+  // Fast path: SQLite
+  const db = openCodexDb(codexHome);
+  if (db !== null) {
+    try {
+      const session = findLatestSessionSqlite(db, cwd);
+      if (session !== null) {
+        return session;
+      }
+    } catch {
+      // Fall through to filesystem scan
+    } finally {
+      db.close();
+    }
+  }
+
+  // Slow path: filesystem scan
   for await (const rolloutPath of discoverRolloutPaths(codexHome)) {
     const session = await buildSession(rolloutPath);
     if (session === null) {

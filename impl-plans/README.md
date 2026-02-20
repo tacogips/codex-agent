@@ -79,7 +79,7 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Status | Design Reference | Last Updated |
 |------|--------|------------------|--------------|
-| [phase3-sqlite-group-queue](active/phase3-sqlite-group-queue.md) | Ready | design-codex-session-management.md#4.3.2, #5.1, #4.6 | 2026-02-20 |
+| (none) | - | - | - |
 
 ## Completed Plans
 
@@ -87,6 +87,8 @@ Large features are split into multiple related plans with cross-references.
 |------|-----------|------------------|
 | [phase1-core-types-rollout-reader](active/phase1-core-types-rollout-reader.md) | 2026-02-19 | design-codex-session-management.md#2, #4.3.1 |
 | [phase2-watcher-process-cli](active/phase2-watcher-process-cli.md) | 2026-02-19 | design-codex-session-management.md#4.3.3, #4.3.4, #4.6 |
+| [phase3-sqlite-group-queue](active/phase3-sqlite-group-queue.md) | 2026-02-20 | design-codex-session-management.md#4.3.2, #5.1, #4.6 |
+| [phase4-daemon-app-server](active/phase4-daemon-app-server.md) | 2026-02-20 | design-codex-session-management.md#4.5, #4.6, #5.2, #6 |
 
 ## Phase Dependencies (for impl-exec-auto)
 
@@ -99,8 +101,8 @@ Only plans from eligible phases should be read to minimize context loading.
 |-------|--------|------------|
 | 1 | COMPLETED | - |
 | 2 | COMPLETED | Phase 1 |
-| 3 | READY | Phase 2 |
-| 4 | BLOCKED | Phase 3 |
+| 3 | COMPLETED | Phase 2 |
+| 4 | COMPLETED | Phase 3 |
 
 ### Phase to Plans Mapping
 
@@ -116,7 +118,7 @@ PHASE_TO_PLANS = {
     "phase3-sqlite-group-queue.md"
   ],
   4: [
-    # Add Phase 4 plan files here (daemon server, app-server)
+    "phase4-daemon-app-server.md"
   ]
 }
 ```

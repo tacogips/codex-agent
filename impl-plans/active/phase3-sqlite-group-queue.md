@@ -1,6 +1,6 @@
 # Phase 3: SQLite SessionIndex, GroupManager, QueueManager Implementation Plan
 
-**Status**: Ready
+**Status**: Completed
 **Design Reference**: design-docs/specs/design-codex-session-management.md#4.3.2, #5.1, #4.6
 **Created**: 2026-02-20
 **Last Updated**: 2026-02-20
@@ -189,15 +189,15 @@ queue run <name>                      # Run queue sequentially
 
 | Module | File Path | Status | Tests |
 |--------|-----------|--------|-------|
-| SQLite session index | `src/session/sqlite.ts` | NOT_STARTED | - |
-| Session index hybrid | `src/session/index.ts` | NOT_STARTED | - |
-| Group types | `src/group/types.ts` | NOT_STARTED | - |
-| Group repository | `src/group/repository.ts` | NOT_STARTED | - |
-| Group manager | `src/group/manager.ts` | NOT_STARTED | - |
-| Queue types | `src/queue/types.ts` | NOT_STARTED | - |
-| Queue repository | `src/queue/repository.ts` | NOT_STARTED | - |
-| Queue runner | `src/queue/runner.ts` | NOT_STARTED | - |
-| CLI extensions | `src/cli/index.ts` | NOT_STARTED | - |
+| SQLite session index | `src/session/sqlite.ts` | DONE | sqlite.test.ts (17) |
+| Session index hybrid | `src/session/index.ts` | DONE | index.test.ts (13) |
+| Group types | `src/group/types.ts` | DONE | - |
+| Group repository | `src/group/repository.ts` | DONE | repository.test.ts (14) |
+| Group manager | `src/group/manager.ts` | DONE | - |
+| Queue types | `src/queue/types.ts` | DONE | - |
+| Queue repository | `src/queue/repository.ts` | DONE | repository.test.ts (13) |
+| Queue runner | `src/queue/runner.ts` | DONE | - |
+| CLI extensions | `src/cli/index.ts` | DONE | - |
 
 ## Dependencies
 
@@ -220,13 +220,13 @@ queue run <name>                      # Run queue sequentially
 
 ## Completion Criteria
 
-- [ ] SQLite index reads Codex's state DB correctly
-- [ ] Hybrid index transparently falls back to filesystem
-- [ ] Groups can be created, modified, and run with concurrency control
-- [ ] Queues execute prompts sequentially with status tracking
-- [ ] CLI commands work end-to-end
-- [ ] All tests passing
-- [ ] Type checking passes
+- [x] SQLite index reads Codex's state DB correctly
+- [x] Hybrid index transparently falls back to filesystem
+- [x] Groups can be created, modified, and run with concurrency control
+- [x] Queues execute prompts sequentially with status tracking
+- [x] CLI commands work end-to-end
+- [x] All tests passing (99 total)
+- [x] Type checking passes
 
 ## Key Design Decisions
 
@@ -255,7 +255,11 @@ queue run <name>                      # Run queue sequentially
 
 ## Progress Log
 
-### Session: 2026-02-20
-**Tasks Completed**: Plan created
-**Tasks In Progress**: None (awaiting implementation start)
+### Session: 2026-02-20 (Implementation)
+**Tasks Completed**: TASK-001, TASK-002, TASK-003, TASK-004
+**Summary**:
+- TASK-001: Created `src/session/sqlite.ts` with `openCodexDb`, `listSessionsSqlite`, `findSessionSqlite`, `findLatestSessionSqlite`. Updated `src/session/index.ts` with hybrid SQLite-first fallback. 17 tests.
+- TASK-002: Created `src/group/types.ts`, `src/group/repository.ts`, `src/group/manager.ts`, `src/group/index.ts`. JSON persistence with atomic writes. Concurrency-controlled group runner via AsyncGenerator. 14 tests.
+- TASK-003: Created `src/queue/types.ts`, `src/queue/repository.ts`, `src/queue/runner.ts`, `src/queue/index.ts`. Sequential prompt execution with stop signal and crash recovery. 13 tests.
+- TASK-004: Extended `src/cli/index.ts` with session resume/fork, group create/list/add/remove/run, queue create/add/list/run commands. Updated `src/main.ts` with all new exports.
 **Blockers**: None
