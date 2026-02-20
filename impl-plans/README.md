@@ -79,7 +79,7 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Status | Design Reference | Last Updated |
 |------|--------|------------------|--------------|
-| (none) | - | - | - |
+| [phase5-claude-parity-features](active/phase5-claude-parity-features.md) | Ready | design-claude-parity-gap.md | 2026-02-20 |
 
 ## Completed Plans
 
@@ -103,6 +103,7 @@ Only plans from eligible phases should be read to minimize context loading.
 | 2 | COMPLETED | Phase 1 |
 | 3 | COMPLETED | Phase 2 |
 | 4 | COMPLETED | Phase 3 |
+| 5 | READY | Phase 4 |
 
 ### Phase to Plans Mapping
 
@@ -119,6 +120,9 @@ PHASE_TO_PLANS = {
   ],
   4: [
     "phase4-daemon-app-server.md"
+  ],
+  5: [
+    "phase5-claude-parity-features.md"
   ]
 }
 ```

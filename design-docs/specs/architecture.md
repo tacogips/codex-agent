@@ -30,4 +30,15 @@ For detailed research findings and design, see [design-codex-session-management.
 - RolloutWatcher: fs.watch-based real-time monitoring
 - GroupManager/QueueManager: Multi-session orchestration (from claude-code-agent)
 
+### Claude Parity Gap and Phase 5 Scope
+
+A feature parity inventory against `/g/gits/tacogips/claude-code-agent` is documented in [design-claude-parity-gap.md](./design-claude-parity-gap.md).
+
+The next architecture phase (Phase 5) adds missing subsystems:
+- Bookmark management
+- Token/permission auth control plane
+- File-change indexing and query
+- Activity tracking and markdown parsing
+- Expanded queue/group controls and SDK parity surface
+
 ---

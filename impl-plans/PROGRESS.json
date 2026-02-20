@@ -1,10 +1,11 @@
 {
-  "lastUpdated": "2026-02-20T11:35:00Z",
+  "lastUpdated": "2026-02-20T13:00:00Z",
   "phases": {
     "1": { "status": "COMPLETED" },
     "2": { "status": "COMPLETED" },
     "3": { "status": "COMPLETED" },
-    "4": { "status": "COMPLETED" }
+    "4": { "status": "COMPLETED" },
+    "5": { "status": "READY" }
   },
   "plans": {
     "phase1-core-types-rollout-reader": {
@@ -43,6 +44,19 @@
         "TASK-002": { "status": "Completed", "parallelizable": false, "deps": ["TASK-001"] },
         "TASK-003": { "status": "Completed", "parallelizable": false, "deps": ["TASK-001"] },
         "TASK-004": { "status": "Completed", "parallelizable": false, "deps": ["TASK-002", "TASK-003"] }
+      }
+    },
+    "phase5-claude-parity-features": {
+      "phase": 5,
+      "status": "Ready",
+      "tasks": {
+        "TASK-001": { "status": "Not Started", "parallelizable": true, "deps": [] },
+        "TASK-002": { "status": "Not Started", "parallelizable": true, "deps": [] },
+        "TASK-003": { "status": "Not Started", "parallelizable": true, "deps": ["TASK-001"] },
+        "TASK-004": { "status": "Not Started", "parallelizable": true, "deps": [] },
+        "TASK-005": { "status": "Not Started", "parallelizable": false, "deps": ["TASK-001", "TASK-002"] },
+        "TASK-006": { "status": "Not Started", "parallelizable": false, "deps": ["TASK-001", "TASK-002", "TASK-003", "TASK-004"] },
+        "TASK-007": { "status": "Not Started", "parallelizable": false, "deps": ["TASK-005", "TASK-006"] }
       }
     }
   }

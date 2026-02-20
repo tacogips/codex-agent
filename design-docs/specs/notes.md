@@ -29,4 +29,14 @@ Two modes for integration:
 
 The exec mode is the simpler starting point. App-server provides richer control for later phases.
 
+### Claude-Code-Agent Feature Parity Findings (2026-02-20)
+
+Detailed parity results are documented in [design-claude-parity-gap.md](./design-claude-parity-gap.md).
+
+Main findings:
+1. Core session/group/queue/server/daemon baselines are implemented in `codex-agent`.
+2. `codex-agent` lacks bookmark, token management, file-change indexing, activity tracking, and markdown parser modules.
+3. Group/queue command surfaces are narrower than `claude-code-agent` (missing several lifecycle and edit operations).
+4. SDK-oriented event/tool-registry compatibility is currently absent.
+
 ---
