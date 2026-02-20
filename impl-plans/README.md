@@ -79,13 +79,14 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Status | Design Reference | Last Updated |
 |------|--------|------------------|--------------|
-| (No active plans yet) | - | - | - |
+| [phase3-sqlite-group-queue](active/phase3-sqlite-group-queue.md) | Ready | design-codex-session-management.md#4.3.2, #5.1, #4.6 | 2026-02-20 |
 
 ## Completed Plans
 
 | Plan | Completed | Design Reference |
 |------|-----------|------------------|
-| (No completed plans yet) | - | - |
+| [phase1-core-types-rollout-reader](active/phase1-core-types-rollout-reader.md) | 2026-02-19 | design-codex-session-management.md#2, #4.3.1 |
+| [phase2-watcher-process-cli](active/phase2-watcher-process-cli.md) | 2026-02-19 | design-codex-session-management.md#4.3.3, #4.3.4, #4.6 |
 
 ## Phase Dependencies (for impl-exec-auto)
 
@@ -96,9 +97,9 @@ Only plans from eligible phases should be read to minimize context loading.
 
 | Phase | Status | Depends On |
 |-------|--------|------------|
-| 1 | READY | - |
-| 2 | BLOCKED | Phase 1 |
-| 3 | BLOCKED | Phase 2 |
+| 1 | COMPLETED | - |
+| 2 | COMPLETED | Phase 1 |
+| 3 | READY | Phase 2 |
 | 4 | BLOCKED | Phase 3 |
 
 ### Phase to Plans Mapping
@@ -106,16 +107,16 @@ Only plans from eligible phases should be read to minimize context loading.
 ```
 PHASE_TO_PLANS = {
   1: [
-    # Add Phase 1 plan files here
+    "phase1-core-types-rollout-reader.md"
   ],
   2: [
-    # Add Phase 2 plan files here
+    "phase2-watcher-process-cli.md"
   ],
   3: [
-    # Add Phase 3 plan files here
+    "phase3-sqlite-group-queue.md"
   ],
   4: [
-    # Add Phase 4 plan files here
+    # Add Phase 4 plan files here (daemon server, app-server)
   ]
 }
 ```
