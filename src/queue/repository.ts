@@ -33,6 +33,7 @@ function toPrompt(data: QueuePromptData): QueuePrompt {
     id: data.id,
     prompt: data.prompt,
     status: data.status,
+    mode: data.mode,
     result: data.result,
     addedAt: new Date(data.addedAt),
     startedAt: data.startedAt ? new Date(data.startedAt) : undefined,
@@ -45,6 +46,7 @@ function toPromptData(prompt: QueuePrompt): QueuePromptData {
     id: prompt.id,
     prompt: prompt.prompt,
     status: prompt.status,
+    mode: prompt.mode,
     result: prompt.result,
     addedAt: prompt.addedAt.toISOString(),
     startedAt: prompt.startedAt?.toISOString(),
@@ -57,6 +59,7 @@ function toQueue(data: PromptQueueData): PromptQueue {
     id: data.id,
     name: data.name,
     projectPath: data.projectPath,
+    paused: data.paused ?? false,
     prompts: data.prompts.map(toPrompt),
     createdAt: new Date(data.createdAt),
   };
@@ -67,6 +70,7 @@ function toQueueData(queue: PromptQueue): PromptQueueData {
     id: queue.id,
     name: queue.name,
     projectPath: queue.projectPath,
+    paused: queue.paused ?? false,
     prompts: queue.prompts.map(toPromptData),
     createdAt: queue.createdAt.toISOString(),
   };
@@ -111,6 +115,7 @@ export async function createQueue(
     id: randomUUID(),
     name,
     projectPath,
+    paused: false,
     prompts: [],
     createdAt: new Date(),
   };
@@ -134,6 +139,7 @@ export async function addPrompt(
     id: randomUUID(),
     prompt,
     status: "pending",
+    mode: "auto",
     addedAt: new Date().toISOString(),
   };
   const newQueues = config.queues.map((q) => {
@@ -194,4 +200,164 @@ export async function updateQueuePrompts(
     return { ...q, prompts: prompts.map(toPromptData) };
   });
   await saveQueues({ queues: newQueues }, configDir);
+}
+
+export async function pauseQueue(queueId: string, configDir?: string): Promise<boolean> {
+  const config = await loadQueues(configDir);
+  let found = false;
+  const queues = config.queues.map((queue) => {
+    if (queue.id !== queueId) {
+      return queue;
+    }
+    found = true;
+    return { ...queue, paused: true };
+  });
+  if (!found) {
+    return false;
+  }
+  await saveQueues({ queues }, configDir);
+  return true;
+}
+
+export async function resumeQueue(queueId: string, configDir?: string): Promise<boolean> {
+  const config = await loadQueues(configDir);
+  let found = false;
+  const queues = config.queues.map((queue) => {
+    if (queue.id !== queueId) {
+      return queue;
+    }
+    found = true;
+    return { ...queue, paused: false };
+  });
+  if (!found) {
+    return false;
+  }
+  await saveQueues({ queues }, configDir);
+  return true;
+}
+
+export interface UpdateQueueCommandInput {
+  readonly prompt?: string | undefined;
+  readonly status?: QueuePrompt["status"] | undefined;
+}
+
+export async function updateQueueCommand(
+  queueId: string,
+  commandId: string,
+  patch: UpdateQueueCommandInput,
+  configDir?: string,
+): Promise<boolean> {
+  const config = await loadQueues(configDir);
+  let found = false;
+  const queues = config.queues.map((queue) => {
+    if (queue.id !== queueId) {
+      return queue;
+    }
+    const prompts = queue.prompts.map((prompt) => {
+      if (prompt.id !== commandId) {
+        return prompt;
+      }
+      found = true;
+      return {
+        ...prompt,
+        prompt: patch.prompt ?? prompt.prompt,
+        status: patch.status ?? prompt.status,
+      };
+    });
+    return { ...queue, prompts };
+  });
+  if (!found) {
+    return false;
+  }
+  await saveQueues({ queues }, configDir);
+  return true;
+}
+
+export async function removeQueueCommand(
+  queueId: string,
+  commandId: string,
+  configDir?: string,
+): Promise<boolean> {
+  const config = await loadQueues(configDir);
+  let found = false;
+  const queues = config.queues.map((queue) => {
+    if (queue.id !== queueId) {
+      return queue;
+    }
+    const before = queue.prompts.length;
+    const prompts = queue.prompts.filter((prompt) => prompt.id !== commandId);
+    if (prompts.length !== before) {
+      found = true;
+    }
+    return { ...queue, prompts };
+  });
+  if (!found) {
+    return false;
+  }
+  await saveQueues({ queues }, configDir);
+  return true;
+}
+
+export async function moveQueueCommand(
+  queueId: string,
+  from: number,
+  to: number,
+  configDir?: string,
+): Promise<boolean> {
+  const config = await loadQueues(configDir);
+  let found = false;
+  const queues = config.queues.map((queue) => {
+    if (queue.id !== queueId) {
+      return queue;
+    }
+    if (
+      from < 0 ||
+      to < 0 ||
+      from >= queue.prompts.length ||
+      to >= queue.prompts.length
+    ) {
+      return queue;
+    }
+    const prompts = [...queue.prompts];
+    const [item] = prompts.splice(from, 1);
+    if (item === undefined) {
+      return queue;
+    }
+    prompts.splice(to, 0, item);
+    found = true;
+    return { ...queue, prompts };
+  });
+  if (!found) {
+    return false;
+  }
+  await saveQueues({ queues }, configDir);
+  return true;
+}
+
+export async function toggleQueueCommandMode(
+  queueId: string,
+  commandId: string,
+  mode: "auto" | "manual",
+  configDir?: string,
+): Promise<boolean> {
+  const config = await loadQueues(configDir);
+  let found = false;
+  const queues = config.queues.map((queue) => {
+    if (queue.id !== queueId) {
+      return queue;
+    }
+    const prompts = queue.prompts.map((prompt) => {
+      if (prompt.id !== commandId) {
+        return prompt;
+      }
+      found = true;
+      return { ...prompt, mode };
+    });
+    return { ...queue, prompts };
+  });
+  if (!found) {
+    return false;
+  }
+  await saveQueues({ queues }, configDir);
+  return true;
 }

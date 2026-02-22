@@ -44,6 +44,17 @@ export async function* runQueue(
   options?: CodexProcessOptions & { configDir?: string },
   stopSignal?: { stopped: boolean },
 ): AsyncGenerator<QueueEvent, void, undefined> {
+  if (queue.paused === true) {
+    yield {
+      type: "queue_stopped",
+      queueId: queue.id,
+      completed: [],
+      pending: queue.prompts.filter((p) => p.status === "pending").map((p) => p.id),
+      failed: [],
+    };
+    return;
+  }
+
   const pm = new ProcessManager(options?.codexBinary);
   const prompts: MutablePrompt[] = queue.prompts.map((p) => ({
     id: p.id,

@@ -90,6 +90,8 @@ export {
   listGroups,
   addSessionToGroup,
   removeSessionFromGroup,
+  pauseGroup,
+  resumeGroup,
   runGroup,
 } from "./group/index";
 
@@ -103,6 +105,7 @@ export type {
   QueuePromptStatus,
   QueueEvent,
   QueueEventType,
+  UpdateQueueCommandInput,
 } from "./queue/index";
 
 export {
@@ -114,8 +117,100 @@ export {
   findQueue,
   listQueues,
   updateQueuePrompts,
+  pauseQueue,
+  resumeQueue,
+  updateQueueCommand,
+  removeQueueCommand,
+  moveQueueCommand,
+  toggleQueueCommandMode,
   runQueue,
 } from "./queue/index";
+
+// Bookmark manager
+export type {
+  BookmarkType,
+  Bookmark,
+  BookmarkData,
+  BookmarkConfig,
+  CreateBookmarkInput,
+  BookmarkFilter,
+  SearchOptions,
+  BookmarkSearchResult,
+} from "./bookmark/index";
+
+export {
+  BOOKMARK_TYPES,
+  isBookmarkType,
+  validateCreateBookmarkInput,
+  loadBookmarks,
+  saveBookmarks,
+  addBookmark,
+  listBookmarks,
+  getBookmark,
+  deleteBookmark,
+  searchBookmarks,
+} from "./bookmark/index";
+
+// Auth/token manager
+export type {
+  Permission,
+  ApiTokenMetadata,
+  CreateTokenInput,
+  VerifyTokenResult,
+} from "./auth/index";
+export {
+  PERMISSIONS,
+  isPermission,
+  normalizePermissions,
+  hasPermission,
+  loadTokenConfig,
+  saveTokenConfig,
+  createToken,
+  listTokens,
+  revokeToken,
+  rotateToken,
+  verifyToken,
+  parsePermissionList,
+} from "./auth/index";
+
+// File changes
+export type {
+  FileOperation,
+  ChangedFile,
+  ChangedFilesSummary,
+  FileHistory,
+  FileHistoryEntry,
+  IndexStats,
+  GetFilesOptions,
+  FindOptions,
+} from "./file-changes/index";
+export {
+  extractChangedFiles,
+  getChangedFiles,
+  findSessionsByFile,
+  rebuildFileIndex,
+} from "./file-changes/index";
+
+// Activity
+export type { ActivityStatus, ActivityEntry } from "./activity/index";
+export { deriveActivityEntry, getSessionActivity } from "./activity/index";
+
+// Markdown
+export type { ParsedMarkdownSection, ParsedMarkdown, MarkdownTask } from "./markdown/index";
+export { parseMarkdown, extractMarkdownTasks } from "./markdown/index";
+
+// SDK
+export type {
+  SdkEventType,
+  SdkEventPayloadMap,
+  SdkEventPayload,
+  SdkEventHandler,
+  SdkEventEmitter,
+  ToolContext,
+  ToolConfig,
+  RegisteredTool,
+} from "./sdk/index";
+export { BasicSdkEventEmitter, tool, ToolRegistry } from "./sdk/index";
 
 // Server
 export {

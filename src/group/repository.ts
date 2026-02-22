@@ -27,6 +27,7 @@ function toGroup(data: SessionGroupData): SessionGroup {
     id: data.id,
     name: data.name,
     description: data.description,
+    paused: data.paused,
     sessionIds: [...data.sessionIds],
     createdAt: new Date(data.createdAt),
     updatedAt: new Date(data.updatedAt),
@@ -38,6 +39,7 @@ function toData(group: SessionGroup): SessionGroupData {
     id: group.id,
     name: group.name,
     description: group.description,
+    paused: group.paused,
     sessionIds: [...group.sessionIds],
     createdAt: group.createdAt.toISOString(),
     updatedAt: group.updatedAt.toISOString(),
@@ -84,6 +86,7 @@ export async function addGroup(
     id: randomUUID(),
     name,
     description,
+    paused: false,
     sessionIds: [],
     createdAt: now,
     updatedAt: now,
@@ -170,4 +173,46 @@ export async function removeSessionFromGroup(
     };
   });
   await saveGroups({ groups: newGroups }, configDir);
+}
+
+export async function pauseGroup(groupId: string, configDir?: string): Promise<boolean> {
+  const config = await loadGroups(configDir);
+  let found = false;
+  const groups = config.groups.map((group) => {
+    if (group.id !== groupId) {
+      return group;
+    }
+    found = true;
+    return {
+      ...group,
+      paused: true,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  if (!found) {
+    return false;
+  }
+  await saveGroups({ groups }, configDir);
+  return true;
+}
+
+export async function resumeGroup(groupId: string, configDir?: string): Promise<boolean> {
+  const config = await loadGroups(configDir);
+  let found = false;
+  const groups = config.groups.map((group) => {
+    if (group.id !== groupId) {
+      return group;
+    }
+    found = true;
+    return {
+      ...group,
+      paused: false,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  if (!found) {
+    return false;
+  }
+  await saveGroups({ groups }, configDir);
+  return true;
 }

@@ -16,6 +16,8 @@ export {
   listGroups,
   addSessionToGroup,
   removeSessionFromGroup,
+  pauseGroup,
+  resumeGroup,
 } from "./repository";
 
 export { runGroup } from "./manager";

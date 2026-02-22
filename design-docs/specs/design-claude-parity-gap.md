@@ -4,7 +4,7 @@ This document inventories major capabilities in `/g/gits/tacogips/claude-code-ag
 
 ## Overview
 
-`codex-agent` already covers the core orchestration baseline (sessions, groups, queues, server, daemon). However, parity with `claude-code-agent` is still incomplete in several product-facing and SDK-facing areas.
+`codex-agent` now covers the core orchestration baseline (sessions, groups, queues, server, daemon) plus the Phase 5 parity additions. Remaining gaps are narrowed to non-goal areas such as full protocol-level compatibility and UI/dashboard work.
 
 ## Feature Inventory and Parity Status
 
@@ -18,28 +18,28 @@ Status labels:
 | Session index/read | Session listing/detail and transcript parsing | Implemented | `src/session/index.ts`, `src/rollout/reader.ts` |
 | Real-time session monitoring | Watch transcript updates/live stream | Implemented | `src/rollout/watcher.ts`, `src/server/handlers/sessions.ts` |
 | Session lifecycle control | Resume/fork controls in CLI | Implemented | `src/cli/index.ts`, `src/process/manager.ts` |
-| Group orchestration | Create/list/add/remove/run | Partial | `src/cli/index.ts`, `src/group/manager.ts` |
-| Group advanced controls | show/watch/pause/resume/archive/delete | Missing | no matching commands/routes |
-| Queue orchestration | create/add/list/run/stop | Partial | `src/cli/index.ts`, `src/server/handlers/queues.ts` |
-| Queue advanced controls | show/pause/resume/delete + command edit/move/toggle-mode | Missing | no matching commands/routes |
-| Bookmark system | add/list/search/show/delete bookmarks | Missing | no `bookmark` module/CLI |
-| Token and permission model | token create/list/revoke/rotate + scoped permissions | Missing | no `token` CLI/auth store |
-| Files changed index | changed-file extraction/search/index stats | Missing | no file-change module |
-| Activity tracking | status/activity extraction and APIs | Missing | no activity module |
-| Markdown parsing utility | structured markdown parser for messages | Missing | no markdown parser module |
-| SDK event/tool registry layer | event bus + tool registry/MCP helper surface | Missing | no SDK subpackage equivalent |
-| REST control-plane parity | richer session/group/queue control endpoints | Partial | current routes in `src/server/server.ts` |
+| Group orchestration | Create/list/add/remove/run | Implemented | `src/cli/index.ts`, `src/group/manager.ts` |
+| Group advanced controls | show/watch/pause/resume/archive/delete | Partial | `src/cli/index.ts`, `src/server/handlers/groups.ts` |
+| Queue orchestration | create/add/list/run/stop | Implemented | `src/cli/index.ts`, `src/server/handlers/queues.ts` |
+| Queue advanced controls | show/pause/resume/delete + command edit/move/toggle-mode | Implemented | `src/cli/index.ts`, `src/server/handlers/queues.ts` |
+| Bookmark system | add/list/search/show/delete bookmarks | Implemented | `src/bookmark/*`, `src/cli/index.ts` |
+| Token and permission model | token create/list/revoke/rotate + scoped permissions | Implemented | `src/auth/*`, `src/server/auth.ts`, `src/cli/index.ts` |
+| Files changed index | changed-file extraction/search/index stats | Implemented | `src/file-changes/*`, `src/server/handlers/files.ts`, `src/cli/index.ts` |
+| Activity tracking | status/activity extraction and APIs | Implemented | `src/activity/*` |
+| Markdown parsing utility | structured markdown parser for messages | Implemented | `src/markdown/*` |
+| SDK event/tool registry layer | event bus + tool registry/MCP helper surface | Implemented | `src/sdk/*`, `src/main.ts` |
+| REST control-plane parity | richer session/group/queue control endpoints | Implemented | `src/server/server.ts`, `src/server/handlers/*` |
 
 ## Gap Summary
 
-High-priority missing capabilities for parity:
-1. Bookmark management
-2. Token/permission-based auth management
-3. File-change indexing/query
-4. Activity extraction and status tracking
-5. Markdown parser utility
-6. Expanded group/queue command surface
-7. SDK-facing event and tool registry APIs
+Phase 5 closure summary:
+1. Bookmark management implemented
+2. Token/permission-based auth management implemented
+3. File-change indexing/query implemented
+4. Activity extraction and status tracking implemented
+5. Markdown parser utility implemented
+6. Expanded group/queue command surface implemented
+7. SDK-facing event and tool registry APIs implemented
 
 ## Design Scope for Phase 5
 

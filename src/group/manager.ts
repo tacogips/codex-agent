@@ -21,6 +21,10 @@ export async function* runGroup(
   prompt: string,
   options?: GroupRunOptions,
 ): AsyncGenerator<GroupEvent, void, undefined> {
+  if (group.paused === true) {
+    throw new Error(`group is paused: ${group.id}`);
+  }
+
   const maxConcurrent = options?.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
   const pm = new ProcessManager(options?.codexBinary);
 

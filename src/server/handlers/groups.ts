@@ -8,6 +8,9 @@ import {
   listGroups,
   addSessionToGroup,
   removeSessionFromGroup,
+  removeGroup,
+  pauseGroup,
+  resumeGroup,
   runGroup,
 } from "../../group/index";
 import { sseResponse } from "../sse";
@@ -139,4 +142,40 @@ export const handleRunGroup: RouteHandler = async (req, params, config) => {
   });
 
   return sseResponse(generator);
+};
+
+export const handlePauseGroup: RouteHandler = async (_req, params, config) => {
+  const groupId = params["id"];
+  if (groupId === undefined) {
+    return json({ error: "Missing group id" }, 400);
+  }
+  const ok = await pauseGroup(groupId, config.configDir);
+  if (!ok) {
+    return json({ error: "Group not found" }, 404);
+  }
+  return json({ ok: true });
+};
+
+export const handleResumeGroup: RouteHandler = async (_req, params, config) => {
+  const groupId = params["id"];
+  if (groupId === undefined) {
+    return json({ error: "Missing group id" }, 400);
+  }
+  const ok = await resumeGroup(groupId, config.configDir);
+  if (!ok) {
+    return json({ error: "Group not found" }, 404);
+  }
+  return json({ ok: true });
+};
+
+export const handleDeleteGroup: RouteHandler = async (_req, params, config) => {
+  const groupId = params["id"];
+  if (groupId === undefined) {
+    return json({ error: "Missing group id" }, 400);
+  }
+  const ok = await removeGroup(groupId, config.configDir);
+  if (!ok) {
+    return json({ error: "Group not found" }, 404);
+  }
+  return json({ ok: true });
 };

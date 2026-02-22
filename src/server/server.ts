@@ -6,7 +6,7 @@
  */
 
 import { Router } from "./router";
-import { checkAuth } from "./auth";
+import { authenticateRequest, ensurePermission } from "./auth";
 import { WebSocketManager } from "./websocket";
 import { createAppServerClient } from "./app-server-client";
 import { handleHealth, handleStatus } from "./handlers/health";
@@ -22,6 +22,9 @@ import {
   handleAddSessionToGroup,
   handleRemoveSessionFromGroup,
   handleRunGroup,
+  handlePauseGroup,
+  handleResumeGroup,
+  handleDeleteGroup,
 } from "./handlers/groups";
 import {
   handleListQueues,
@@ -30,9 +33,22 @@ import {
   handleAddPrompt,
   handleRunQueue,
   handleStopQueue,
+  handleDeleteQueue,
+  handlePauseQueue,
+  handleResumeQueue,
+  handleUpdateQueueCommand,
+  handleRemoveQueueCommand,
+  handleMoveQueueCommand,
+  handleToggleQueueCommandMode,
 } from "./handlers/queues";
+import {
+  handleGetChangedFiles,
+  handleFindSessionsByFile,
+  handleRebuildFileIndex,
+} from "./handlers/files";
 import type { ServerConfig, ServerHandle } from "./types";
 import type { ServerWebSocket } from "bun";
+import type { Permission } from "../auth/index";
 
 interface WsData {
   subscribedSessions: Set<string>;
@@ -42,9 +58,35 @@ interface WsData {
 function corsHeaders(): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
   };
+}
+
+function requiredPermission(method: string, path: string): Permission | undefined {
+  if (path === "/health" || path === "/status" || path === "/ws") {
+    return undefined;
+  }
+
+  if (path === "/api/sessions" && method === "GET") {
+    return "session:read";
+  }
+  if (path.startsWith("/api/sessions/") && method === "GET") {
+    return "session:read";
+  }
+  if (path.startsWith("/api/groups")) {
+    return "group:*";
+  }
+  if (path.startsWith("/api/queues")) {
+    return "queue:*";
+  }
+  if (path.startsWith("/api/files")) {
+    return "session:read";
+  }
+  if (path.startsWith("/api/bookmarks")) {
+    return "bookmark:*";
+  }
+  return undefined;
 }
 
 export function startServer(config: ServerConfig): ServerHandle {
@@ -103,6 +145,9 @@ export function startServer(config: ServerConfig): ServerHandle {
     handleRemoveSessionFromGroup,
   );
   router.add("POST", "/api/groups/:id/run", handleRunGroup);
+  router.add("POST", "/api/groups/:id/pause", handlePauseGroup);
+  router.add("POST", "/api/groups/:id/resume", handleResumeGroup);
+  router.add("DELETE", "/api/groups/:id", handleDeleteGroup);
 
   // Queues
   router.add("GET", "/api/queues", handleListQueues);
@@ -111,6 +156,18 @@ export function startServer(config: ServerConfig): ServerHandle {
   router.add("POST", "/api/queues/:id/prompts", handleAddPrompt);
   router.add("POST", "/api/queues/:id/run", handleRunQueue);
   router.add("POST", "/api/queues/:id/stop", handleStopQueue);
+  router.add("POST", "/api/queues/:id/pause", handlePauseQueue);
+  router.add("POST", "/api/queues/:id/resume", handleResumeQueue);
+  router.add("DELETE", "/api/queues/:id", handleDeleteQueue);
+  router.add("PATCH", "/api/queues/:id/commands/:cid", handleUpdateQueueCommand);
+  router.add("DELETE", "/api/queues/:id/commands/:cid", handleRemoveQueueCommand);
+  router.add("POST", "/api/queues/:id/commands/move", handleMoveQueueCommand);
+  router.add("POST", "/api/queues/:id/commands/:cid/mode", handleToggleQueueCommandMode);
+
+  // File-change index
+  router.add("GET", "/api/files/find", handleFindSessionsByFile);
+  router.add("GET", "/api/files/:id", handleGetChangedFiles);
+  router.add("POST", "/api/files/rebuild", handleRebuildFileIndex);
 
   const startedAt = new Date();
 
@@ -135,9 +192,14 @@ export function startServer(config: ServerConfig): ServerHandle {
         return new Response("WebSocket upgrade failed", { status: 400 });
       }
 
-      // Auth check
-      const authErr = checkAuth(req, config.token);
-      if (authErr !== null) return authErr;
+      // Auth + permission checks
+      const authResult = await authenticateRequest(req, config);
+      if (authResult.error !== null) return authResult.error;
+      const permErr = ensurePermission(
+        authResult.context,
+        requiredPermission(req.method, url.pathname),
+      );
+      if (permErr !== null) return permErr;
 
       // Route matching
       const match = router.match(req.method, url.pathname);

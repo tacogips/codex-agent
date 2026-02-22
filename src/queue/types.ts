@@ -8,6 +8,7 @@ export interface QueuePrompt {
   readonly id: string;
   readonly prompt: string;
   readonly status: QueuePromptStatus;
+  readonly mode?: "auto" | "manual" | undefined;
   readonly result?: { exitCode: number } | undefined;
   readonly addedAt: Date;
   readonly startedAt?: Date | undefined;
@@ -18,6 +19,7 @@ export interface PromptQueue {
   readonly id: string;
   readonly name: string;
   readonly projectPath: string;
+  readonly paused?: boolean | undefined;
   readonly prompts: readonly QueuePrompt[];
   readonly createdAt: Date;
 }
@@ -47,6 +49,7 @@ export interface QueuePromptData {
   readonly id: string;
   readonly prompt: string;
   readonly status: QueuePromptStatus;
+  readonly mode?: "auto" | "manual" | undefined;
   readonly result?: { exitCode: number } | undefined;
   readonly addedAt: string;
   readonly startedAt?: string | undefined;
@@ -57,6 +60,7 @@ export interface PromptQueueData {
   readonly id: string;
   readonly name: string;
   readonly projectPath: string;
+  readonly paused?: boolean | undefined;
   readonly prompts: readonly QueuePromptData[];
   readonly createdAt: string;
 }

@@ -8,6 +8,7 @@ export interface SessionGroup {
   readonly id: string;
   readonly name: string;
   readonly description?: string | undefined;
+  readonly paused?: boolean | undefined;
   readonly sessionIds: readonly string[];
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -42,6 +43,7 @@ export interface SessionGroupData {
   readonly id: string;
   readonly name: string;
   readonly description?: string | undefined;
+  readonly paused?: boolean | undefined;
   readonly sessionIds: readonly string[];
   readonly createdAt: string;
   readonly updatedAt: string;

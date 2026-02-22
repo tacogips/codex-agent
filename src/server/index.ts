@@ -6,7 +6,7 @@ export { startServer } from "./server";
 export { createAppServerClient } from "./app-server-client";
 export { Router } from "./router";
 export { sseResponse } from "./sse";
-export { checkAuth } from "./auth";
+export { checkAuth, authenticateRequest, ensurePermission } from "./auth";
 export { WebSocketManager } from "./websocket";
 export { resolveServerConfig } from "./types";
 export type {

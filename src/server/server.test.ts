@@ -8,6 +8,7 @@ import { checkAuth } from "./auth";
 import { sseResponse } from "./sse";
 import { resolveServerConfig } from "./types";
 import type { ServerHandle } from "./types";
+import { createToken } from "../auth/index";
 
 // ---------------------------------------------------------------------------
 // Router unit tests
@@ -409,6 +410,23 @@ describe("HTTP Server", () => {
     });
     expect(resp.status).toBe(404);
   });
+
+  // File-change endpoints
+
+  it("GET /api/files/find returns 400 when path query is missing", async () => {
+    const resp = await fetch(`${baseUrl}/api/files/find`);
+    expect(resp.status).toBe(400);
+  });
+
+  it("POST /api/files/rebuild returns index stats", async () => {
+    const resp = await fetch(`${baseUrl}/api/files/rebuild`, {
+      method: "POST",
+    });
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as Record<string, unknown>;
+    expect(body["indexedSessions"]).toBeTypeOf("number");
+    expect(body["indexedFiles"]).toBeTypeOf("number");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -603,5 +621,169 @@ describe("Group and Queue CRUD", () => {
     const resp = await fetch(`${baseUrl}/api/queues`);
     const queues = (await resp.json()) as unknown[];
     expect(queues).toHaveLength(1);
+  });
+
+  it("pauses, resumes, and deletes a group", async () => {
+    const createResp = await fetch(`${baseUrl}/api/groups`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "ctl-group" }),
+    });
+    const group = (await createResp.json()) as Record<string, unknown>;
+    const groupId = group["id"] as string;
+
+    const pauseResp = await fetch(`${baseUrl}/api/groups/${groupId}/pause`, {
+      method: "POST",
+    });
+    expect(pauseResp.status).toBe(200);
+
+    const resumeResp = await fetch(`${baseUrl}/api/groups/${groupId}/resume`, {
+      method: "POST",
+    });
+    expect(resumeResp.status).toBe(200);
+
+    const delResp = await fetch(`${baseUrl}/api/groups/${groupId}`, {
+      method: "DELETE",
+    });
+    expect(delResp.status).toBe(200);
+  });
+
+  it("pauses, resumes, updates commands, and deletes a queue", async () => {
+    const createResp = await fetch(`${baseUrl}/api/queues`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "ctl-queue", projectPath: "/tmp/proj" }),
+    });
+    const queue = (await createResp.json()) as Record<string, unknown>;
+    const queueId = queue["id"] as string;
+
+    const promptRespA = await fetch(`${baseUrl}/api/queues/${queueId}/prompts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "A" }),
+    });
+    const promptA = (await promptRespA.json()) as Record<string, unknown>;
+    const commandA = promptA["id"] as string;
+
+    const promptRespB = await fetch(`${baseUrl}/api/queues/${queueId}/prompts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "B" }),
+    });
+    const promptB = (await promptRespB.json()) as Record<string, unknown>;
+    const commandB = promptB["id"] as string;
+
+    const pauseResp = await fetch(`${baseUrl}/api/queues/${queueId}/pause`, {
+      method: "POST",
+    });
+    expect(pauseResp.status).toBe(200);
+
+    const resumeResp = await fetch(`${baseUrl}/api/queues/${queueId}/resume`, {
+      method: "POST",
+    });
+    expect(resumeResp.status).toBe(200);
+
+    const patchResp = await fetch(`${baseUrl}/api/queues/${queueId}/commands/${commandA}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "A-updated" }),
+    });
+    expect(patchResp.status).toBe(200);
+
+    const modeResp = await fetch(`${baseUrl}/api/queues/${queueId}/commands/${commandB}/mode`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "manual" }),
+    });
+    expect(modeResp.status).toBe(200);
+
+    const moveResp = await fetch(`${baseUrl}/api/queues/${queueId}/commands/move`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: 0, to: 1 }),
+    });
+    expect(moveResp.status).toBe(200);
+
+    const removeResp = await fetch(`${baseUrl}/api/queues/${queueId}/commands/${commandA}`, {
+      method: "DELETE",
+    });
+    expect(removeResp.status).toBe(200);
+
+    const delResp = await fetch(`${baseUrl}/api/queues/${queueId}`, {
+      method: "DELETE",
+    });
+    expect(delResp.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Managed token permissions integration
+// ---------------------------------------------------------------------------
+
+describe("HTTP Server with managed token permissions", () => {
+  let server: ServerHandle;
+  let baseUrl: string;
+  let codexHome: string;
+  let configDir: string;
+  let sessionReadToken: string;
+
+  beforeAll(async () => {
+    codexHome = await mkdtemp(join(tmpdir(), "codex-agent-managed-auth-home-"));
+    configDir = await mkdtemp(join(tmpdir(), "codex-agent-managed-auth-config-"));
+    await mkdir(join(codexHome, "sessions"), { recursive: true });
+
+    sessionReadToken = await createToken(
+      {
+        name: "read-only-session",
+        permissions: ["session:read"],
+      },
+      configDir,
+    );
+
+    server = startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      codexHome,
+      configDir,
+      transport: "local-cli",
+    });
+    baseUrl = `http://127.0.0.1:${server.port}`;
+  });
+
+  afterAll(async () => {
+    server.stop();
+    await rm(codexHome, { recursive: true, force: true });
+    await rm(configDir, { recursive: true, force: true });
+  });
+
+  it("allows session-read endpoint with managed token", async () => {
+    const resp = await fetch(`${baseUrl}/api/sessions`, {
+      headers: { Authorization: `Bearer ${sessionReadToken}` },
+    });
+    expect(resp.status).toBe(200);
+  });
+
+  it("rejects group endpoint when token lacks group permission", async () => {
+    const resp = await fetch(`${baseUrl}/api/groups`, {
+      headers: { Authorization: `Bearer ${sessionReadToken}` },
+    });
+    expect(resp.status).toBe(403);
+    const body = (await resp.json()) as Record<string, unknown>;
+    expect(String(body["error"])).toContain("missing permission");
+  });
+
+  it("rejects malformed managed token", async () => {
+    const resp = await fetch(`${baseUrl}/api/sessions`, {
+      headers: { Authorization: "Bearer invalid-token" },
+    });
+    expect(resp.status).toBe(401);
+  });
+
+  it("allows file index endpoints with session:read permission", async () => {
+    const resp = await fetch(`${baseUrl}/api/files/rebuild`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${sessionReadToken}` },
+    });
+    expect(resp.status).toBe(200);
   });
 });

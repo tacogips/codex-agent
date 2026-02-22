@@ -18,6 +18,14 @@ export {
   findQueue,
   listQueues,
   updateQueuePrompts,
+  pauseQueue,
+  resumeQueue,
+  updateQueueCommand,
+  removeQueueCommand,
+  moveQueueCommand,
+  toggleQueueCommandMode,
 } from "./repository";
+
+export type { UpdateQueueCommandInput } from "./repository";
 
 export { runQueue } from "./runner";
