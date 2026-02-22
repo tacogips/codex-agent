@@ -24,8 +24,14 @@
     "lint": "bun run typecheck",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepare": "bun run build"
   },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE"
+  ],
   "homepage": "https://github.com/user/repo",
   "repository": {
     "type": "git",
