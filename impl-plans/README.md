@@ -79,16 +79,17 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Status | Design Reference | Last Updated |
 |------|--------|------------------|--------------|
-| [phase5-claude-parity-features](active/phase5-claude-parity-features.md) | Ready | design-claude-parity-gap.md | 2026-02-20 |
+| _None_ | - | - | - |
 
 ## Completed Plans
 
 | Plan | Completed | Design Reference |
 |------|-----------|------------------|
-| [phase1-core-types-rollout-reader](active/phase1-core-types-rollout-reader.md) | 2026-02-19 | design-codex-session-management.md#2, #4.3.1 |
-| [phase2-watcher-process-cli](active/phase2-watcher-process-cli.md) | 2026-02-19 | design-codex-session-management.md#4.3.3, #4.3.4, #4.6 |
-| [phase3-sqlite-group-queue](active/phase3-sqlite-group-queue.md) | 2026-02-20 | design-codex-session-management.md#4.3.2, #5.1, #4.6 |
-| [phase4-daemon-app-server](active/phase4-daemon-app-server.md) | 2026-02-20 | design-codex-session-management.md#4.5, #4.6, #5.2, #6 |
+| [phase1-core-types-rollout-reader](completed/phase1-core-types-rollout-reader.md) | 2026-02-22 | design-codex-session-management.md#2, #4.3.1 |
+| [phase2-watcher-process-cli](completed/phase2-watcher-process-cli.md) | 2026-02-22 | design-codex-session-management.md#4.3.3, #4.3.4, #4.6 |
+| [phase3-sqlite-group-queue](completed/phase3-sqlite-group-queue.md) | 2026-02-20 | design-codex-session-management.md#4.3.2, #5.1, #4.6 |
+| [phase4-daemon-app-server](completed/phase4-daemon-app-server.md) | 2026-02-20 | design-codex-session-management.md#4.5, #4.6, #5.2, #6 |
+| [phase5-claude-parity-features](completed/phase5-claude-parity-features.md) | 2026-02-20 | design-claude-parity-gap.md |
 
 ## Phase Dependencies (for impl-exec-auto)
 
@@ -103,7 +104,7 @@ Only plans from eligible phases should be read to minimize context loading.
 | 2 | COMPLETED | Phase 1 |
 | 3 | COMPLETED | Phase 2 |
 | 4 | COMPLETED | Phase 3 |
-| 5 | READY | Phase 4 |
+| 5 | COMPLETED | Phase 4 |
 
 ### Phase to Plans Mapping
 

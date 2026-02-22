@@ -1,9 +1,9 @@
 # Phase 1: Core Types & RolloutReader Implementation Plan
 
-**Status**: In Progress
+**Status**: Completed
 **Design Reference**: design-docs/specs/design-codex-session-management.md#2
 **Created**: 2026-02-19
-**Last Updated**: 2026-02-19
+**Last Updated**: 2026-02-22
 
 ---
 
