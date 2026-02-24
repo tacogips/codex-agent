@@ -44,10 +44,12 @@ function makeUserMessage(msg: string): string {
 const SESSION_1_ID = "aaaa0000-0000-0000-0000-000000000001";
 const SESSION_2_ID = "bbbb0000-0000-0000-0000-000000000002";
 const SESSION_3_ID = "cccc0000-0000-0000-0000-000000000003";
+const MALFORMED_SESSION_ID = "dddd0000-0000-0000-0000-000000000004";
 
 let rollout1Path: string;
 let rollout2Path: string;
 let rollout3Path: string;
+let malformedRolloutPath: string;
 
 beforeAll(async () => {
   // Create a fake Codex sessions directory structure
@@ -59,6 +61,10 @@ beforeAll(async () => {
   rollout1Path = join(day1, `rollout-2025-05-07T17-24-21-${SESSION_1_ID}.jsonl`);
   rollout2Path = join(day1, `rollout-2025-05-07T18-00-00-${SESSION_2_ID}.jsonl`);
   rollout3Path = join(day2, `rollout-2025-05-08T10-00-00-${SESSION_3_ID}.jsonl`);
+  malformedRolloutPath = join(
+    day2,
+    `rollout-2025-05-08T11-00-00-${MALFORMED_SESSION_ID}.jsonl`,
+  );
 
   await writeFile(
     rollout1Path,
@@ -81,6 +87,21 @@ beforeAll(async () => {
       makeUserMessage("Run CI"),
     "utf-8",
   );
+  await writeFile(
+    malformedRolloutPath,
+    JSON.stringify({
+      timestamp: "2025-05-08T11:00:00.000Z",
+      type: "session_meta",
+      payload: {
+        meta: {
+          id: MALFORMED_SESSION_ID,
+          cwd: "/tmp/broken",
+          source: "cli",
+        },
+      },
+    }) + "\n",
+    "utf-8",
+  );
 });
 
 afterAll(async () => {
@@ -93,12 +114,14 @@ describe("discoverRolloutPaths", () => {
     for await (const path of discoverRolloutPaths(TEST_DIR)) {
       paths.push(path);
     }
-    expect(paths).toHaveLength(3);
+    expect(paths).toHaveLength(4);
     // Newest first (day 08 before day 07)
     expect(paths[0]).toContain("2025/05/08");
-    // Within same day, sorted descending by filename (timestamp)
-    expect(paths[1]).toContain(SESSION_2_ID);
-    expect(paths[2]).toContain(SESSION_1_ID);
+    // Within same day, sorted descending by filename (timestamp + id)
+    expect(paths[0]).toContain(MALFORMED_SESSION_ID);
+    expect(paths[1]).toContain(SESSION_3_ID);
+    expect(paths[2]).toContain(SESSION_2_ID);
+    expect(paths[3]).toContain(SESSION_1_ID);
   });
 
   test("returns empty for non-existent codex home", async () => {
@@ -168,6 +191,10 @@ describe("findSession", () => {
   test("returns null for unknown ID", async () => {
     const session = await findSession("nonexistent-id", TEST_DIR);
     expect(session).toBeNull();
+  });
+
+  test("returns null instead of throwing when session meta is malformed", async () => {
+    await expect(findSession(MALFORMED_SESSION_ID, TEST_DIR)).resolves.toBeNull();
   });
 });
 

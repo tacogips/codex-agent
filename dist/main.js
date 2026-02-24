@@ -720,22 +720,52 @@ async function findLatestSession(codexHome, cwd) {
   return null;
 }
 function sessionFromMeta(meta, rolloutPath, mtime, firstUserMessage, isArchived) {
-  const createdAt = new Date(meta.meta.timestamp);
+  const metaRecord = toRecord2(meta.meta);
+  if (metaRecord === null) {
+    return null;
+  }
+  const id = readString(metaRecord, "id");
+  const timestamp = readString(metaRecord, "timestamp");
+  const cwd = readString(metaRecord, "cwd");
+  const source = toSessionSource(readString(metaRecord, "source"));
+  if (id === undefined || timestamp === undefined || cwd === undefined || source === undefined) {
+    return null;
+  }
+  const createdAt = new Date(timestamp);
+  if (Number.isNaN(createdAt.getTime())) {
+    return null;
+  }
   return {
-    id: meta.meta.id,
+    id,
     rolloutPath,
     createdAt,
     updatedAt: mtime,
-    source: meta.meta.source,
-    modelProvider: meta.meta.model_provider,
-    cwd: meta.meta.cwd,
-    cliVersion: meta.meta.cli_version,
-    title: firstUserMessage ?? meta.meta.id,
+    source,
+    modelProvider: readString(metaRecord, "model_provider"),
+    cwd,
+    cliVersion: readString(metaRecord, "cli_version") ?? "unknown",
+    title: firstUserMessage ?? id,
     firstUserMessage,
     archivedAt: isArchived ? mtime : undefined,
     git: meta.git,
-    forkedFromId: meta.meta.forked_from_id
+    forkedFromId: readString(metaRecord, "forked_from_id")
   };
+}
+function toRecord2(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+function readString(record, key) {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+function toSessionSource(value) {
+  if (value === "cli" || value === "vscode" || value === "exec" || value === "unknown") {
+    return value;
+  }
+  return;
 }
 function matchesFilter(session, options) {
   if (options === undefined) {
@@ -2592,7 +2622,7 @@ function toCharStreamChunks(line, sessionId) {
 }
 function extractAssistantTextSegments(line) {
   if (line.type === "event_msg") {
-    const payload2 = toRecord2(line.payload);
+    const payload2 = toRecord3(line.payload);
     if (payload2?.["type"] === "AgentMessage" && typeof payload2["message"] === "string") {
       return [payload2["message"]];
     }
@@ -2601,13 +2631,13 @@ function extractAssistantTextSegments(line) {
   if (line.type !== "response_item") {
     return [];
   }
-  const payload = toRecord2(line.payload);
+  const payload = toRecord3(line.payload);
   if (payload?.["type"] !== "message" || payload["role"] !== "assistant" || !Array.isArray(payload["content"])) {
     return [];
   }
   const segments = [];
   for (const item of payload["content"]) {
-    const content = toRecord2(item);
+    const content = toRecord3(item);
     if (content === null) {
       continue;
     }
@@ -2617,7 +2647,7 @@ function extractAssistantTextSegments(line) {
   }
   return segments;
 }
-function toRecord2(value) {
+function toRecord3(value) {
   if (typeof value !== "object" || value === null) {
     return null;
   }

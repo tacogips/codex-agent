@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { parseSessionMeta, extractFirstUserMessage } from "../rollout/reader";
 import type { CodexSession, SessionListOptions, SessionListResult } from "../types/session";
-import type { SessionMetaLine } from "../types/rollout";
+import type { SessionMetaLine, SessionSource } from "../types/rollout";
 import {
   openCodexDb,
   listSessionsSqlite,
@@ -247,23 +247,67 @@ function sessionFromMeta(
   mtime: Date,
   firstUserMessage: string | undefined,
   isArchived: boolean,
-): CodexSession {
-  const createdAt = new Date(meta.meta.timestamp);
+): CodexSession | null {
+  const metaRecord = toRecord(meta.meta);
+  if (metaRecord === null) {
+    return null;
+  }
+
+  const id = readString(metaRecord, "id");
+  const timestamp = readString(metaRecord, "timestamp");
+  const cwd = readString(metaRecord, "cwd");
+  const source = toSessionSource(readString(metaRecord, "source"));
+  if (
+    id === undefined ||
+    timestamp === undefined ||
+    cwd === undefined ||
+    source === undefined
+  ) {
+    return null;
+  }
+
+  const createdAt = new Date(timestamp);
+  if (Number.isNaN(createdAt.getTime())) {
+    return null;
+  }
+
   return {
-    id: meta.meta.id,
+    id,
     rolloutPath,
     createdAt,
     updatedAt: mtime,
-    source: meta.meta.source,
-    modelProvider: meta.meta.model_provider,
-    cwd: meta.meta.cwd,
-    cliVersion: meta.meta.cli_version,
-    title: firstUserMessage ?? meta.meta.id,
+    source,
+    modelProvider: readString(metaRecord, "model_provider"),
+    cwd,
+    cliVersion: readString(metaRecord, "cli_version") ?? "unknown",
+    title: firstUserMessage ?? id,
     firstUserMessage,
     archivedAt: isArchived ? mtime : undefined,
     git: meta.git,
-    forkedFromId: meta.meta.forked_from_id,
+    forkedFromId: readString(metaRecord, "forked_from_id"),
   };
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function readString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function toSessionSource(value: string | undefined): SessionSource | undefined {
+  if (value === "cli" || value === "vscode" || value === "exec" || value === "unknown") {
+    return value;
+  }
+  return undefined;
 }
 
 function matchesFilter(
