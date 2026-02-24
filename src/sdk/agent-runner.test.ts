@@ -206,4 +206,57 @@ describe("runAgent", () => {
     const completedEvent = events.find((event) => event.type === "session.completed");
     expect(completedEvent).toBeDefined();
   });
+
+  test("emits session.message for exec-stream item.completed agent_message", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-exec-stream-"));
+    createdDirs.push(fixtureDir);
+
+    const fakeCodexPath = join(fixtureDir, "fake-codex-exec-stream.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"exec-thread-001\"}'",
+        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"hello from exec\"}}'",
+        "printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}'",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      {
+        prompt: "say hello",
+      },
+      {
+        codexBinary: fakeCodexPath,
+      },
+    )) {
+      events.push(event);
+    }
+
+    const messageEvents = events.filter(
+      (event): event is Extract<AgentEvent, { type: "session.message" }> =>
+        event.type === "session.message",
+    );
+    const agentMessageEvent = messageEvents.find((event) => {
+      const chunk = event.chunk;
+      if ("kind" in chunk) {
+        return false;
+      }
+      return (
+        chunk.type === "event_msg" &&
+        typeof chunk.payload === "object" &&
+        chunk.payload !== null &&
+        "type" in chunk.payload &&
+        "message" in chunk.payload &&
+        chunk.payload.type === "AgentMessage" &&
+        chunk.payload.message === "hello from exec"
+      );
+    });
+    expect(agentMessageEvent).toBeDefined();
+  });
 });

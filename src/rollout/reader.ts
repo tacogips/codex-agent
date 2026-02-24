@@ -27,15 +27,15 @@ export function parseRolloutLine(line: string): RolloutLine | null {
   }
   try {
     const parsed: unknown = JSON.parse(trimmed);
-    if (!isValidRolloutLine(parsed)) {
+    const normalized = normalizeRolloutLine(parsed);
+    if (normalized === null) {
       return null;
     }
-    const rolloutLine = parsed as RolloutLine;
-    const provenance = deriveProvenance(rolloutLine);
+    const provenance = deriveProvenance(normalized);
     return provenance === undefined
-      ? rolloutLine
+      ? normalized
       : {
-          ...rolloutLine,
+          ...normalized,
           provenance,
         };
   } catch {
@@ -150,8 +150,112 @@ function isValidRolloutLine(value: unknown): value is RolloutLine {
   return (
     typeof obj["timestamp"] === "string" &&
     typeof obj["type"] === "string" &&
-    "payload" in obj
+      "payload" in obj
   );
+}
+
+function normalizeRolloutLine(value: unknown): RolloutLine | null {
+  if (isValidRolloutLine(value)) {
+    return value;
+  }
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  if (typeof raw["type"] !== "string") {
+    return null;
+  }
+
+  const timestamp =
+    typeof raw["timestamp"] === "string"
+      ? raw["timestamp"]
+      : new Date().toISOString();
+  const execEventType = raw["type"];
+
+  if (execEventType === "thread.started") {
+    const sessionId =
+      typeof raw["thread_id"] === "string" && raw["thread_id"].length > 0
+        ? raw["thread_id"]
+        : "unknown-session";
+    return {
+      timestamp,
+      type: "session_meta",
+      payload: {
+        meta: {
+          id: sessionId,
+          timestamp,
+          cwd: "",
+          originator: "codex",
+          cli_version: "unknown",
+          source: "exec",
+        },
+      },
+    };
+  }
+
+  if (execEventType === "item.completed") {
+    const item = toRecord(raw["item"]);
+    if (item === null || typeof item["type"] !== "string") {
+      return null;
+    }
+    if (item["type"] === "agent_message" && typeof item["text"] === "string") {
+      return {
+        timestamp,
+        type: "event_msg",
+        payload: {
+          type: "AgentMessage",
+          message: item["text"],
+        },
+      };
+    }
+    return {
+      timestamp,
+      type: "response_item",
+      payload: item,
+    };
+  }
+
+  const payload = toEventPayload(execEventType, raw);
+  if (payload === null) {
+    return null;
+  }
+  return {
+    timestamp,
+    type: "event_msg",
+    payload,
+  };
+}
+
+function toEventPayload(
+  eventType: string,
+  raw: Record<string, unknown>,
+): Record<string, unknown> | null {
+  switch (eventType) {
+    case "turn.started":
+      return {
+        type: "TurnStarted",
+        ...(typeof raw["turn_id"] === "string"
+          ? { turn_id: raw["turn_id"] }
+          : {}),
+      };
+    case "turn.completed":
+      return {
+        type: "TurnComplete",
+        ...(typeof raw["turn_id"] === "string"
+          ? { turn_id: raw["turn_id"] }
+          : {}),
+        ...(raw["usage"] !== undefined ? { usage: raw["usage"] } : {}),
+      };
+    case "error":
+      return {
+        type: "Error",
+        ...(typeof raw["message"] === "string"
+          ? { message: raw["message"] }
+          : {}),
+      };
+    default:
+      return null;
+  }
 }
 
 function isUserMessagePayload(
@@ -319,6 +423,13 @@ function extractMessageText(content: unknown): string | undefined {
     return undefined;
   }
   return textParts.join("\n");
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as Record<string, unknown>;
 }
 
 function toSnakeCase(value: string): string {

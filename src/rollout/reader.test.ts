@@ -80,6 +80,20 @@ const RESPONSE_ITEM_LINE = JSON.stringify({
   },
 });
 
+const EXEC_THREAD_STARTED_LINE = JSON.stringify({
+  type: "thread.started",
+  thread_id: "exec-thread-001",
+});
+
+const EXEC_AGENT_ITEM_COMPLETED_LINE = JSON.stringify({
+  type: "item.completed",
+  item: {
+    id: "item_1",
+    type: "agent_message",
+    text: "hello from exec stream",
+  },
+});
+
 const SAMPLE_ROLLOUT = [
   SESSION_META_LINE,
   TURN_STARTED_LINE,
@@ -143,6 +157,29 @@ describe("parseRolloutLine", () => {
         '{"timestamp": "2025-01-01T00:00:00Z", "type": "session_meta"}',
       ),
     ).toBeNull();
+  });
+
+  test("normalizes exec thread.started into session_meta", () => {
+    const result = parseRolloutLine(EXEC_THREAD_STARTED_LINE);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe("session_meta");
+    if (result !== null && result.type === "session_meta") {
+      const payload = result.payload as { readonly meta: { readonly id: string; readonly source: string } };
+      expect(payload.meta.id).toBe("exec-thread-001");
+      expect(payload.meta.source).toBe("exec");
+    }
+  });
+
+  test("normalizes exec item.completed agent_message into event_msg", () => {
+    const result = parseRolloutLine(EXEC_AGENT_ITEM_COMPLETED_LINE);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe("event_msg");
+    if (result?.type === "event_msg") {
+      expect(result.payload).toEqual({
+        type: "AgentMessage",
+        message: "hello from exec stream",
+      });
+    }
   });
 });
 
