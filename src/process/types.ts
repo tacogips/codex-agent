@@ -6,6 +6,7 @@ import type { RolloutLine } from "../types/rollout";
 
 export type SandboxMode = "full" | "network-only" | "none";
 export type ApprovalMode = "always" | "unless-allow-listed" | "never" | "on-failure";
+export type StreamGranularity = "event" | "char";
 
 export interface CodexProcessOptions {
   readonly model?: string | undefined;
@@ -15,6 +16,7 @@ export interface CodexProcessOptions {
   readonly fullAuto?: boolean | undefined;
   readonly images?: readonly string[] | undefined;
   readonly configOverrides?: readonly string[] | undefined;
+  readonly streamGranularity?: StreamGranularity | undefined;
   readonly codexBinary?: string | undefined;
 }
 

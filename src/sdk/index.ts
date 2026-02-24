@@ -18,5 +18,7 @@ export type {
   SessionRunnerOptions,
   SessionConfig,
   SessionResult,
+  SessionCharStreamChunk,
+  SessionStreamChunk,
 } from "./session-runner";
 export { SessionRunner, RunningSession } from "./session-runner";

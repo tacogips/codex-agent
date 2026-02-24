@@ -64,6 +64,7 @@ export type {
   ProcessStatus,
   SandboxMode,
   ApprovalMode,
+  StreamGranularity,
 } from "./process/index";
 
 // SQLite session index
@@ -219,6 +220,8 @@ export type {
   SessionRunnerOptions,
   SessionConfig,
   SessionResult,
+  SessionCharStreamChunk,
+  SessionStreamChunk,
 } from "./sdk/index";
 export {
   BasicSdkEventEmitter,

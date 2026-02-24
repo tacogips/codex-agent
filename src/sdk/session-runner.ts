@@ -5,6 +5,7 @@ import type {
   CodexProcessOptions,
   ExecStreamResult,
   SandboxMode,
+  StreamGranularity,
 } from "../process/types";
 import { findSession } from "../session/index";
 import type { RolloutLine } from "../types/rollout";
@@ -27,6 +28,7 @@ export interface SessionConfig {
   readonly fullAuto?: boolean | undefined;
   readonly model?: string | undefined;
   readonly images?: readonly string[] | undefined;
+  readonly streamGranularity?: StreamGranularity | undefined;
 }
 
 export interface SessionResult {
@@ -39,11 +41,22 @@ export interface SessionResult {
   };
 }
 
+export interface SessionCharStreamChunk {
+  readonly kind: "char";
+  readonly char: string;
+  readonly sessionId: string;
+  readonly timestamp: string;
+  readonly sourceType: RolloutLine["type"];
+  readonly source: RolloutLine;
+}
+
+export type SessionStreamChunk = RolloutLine | SessionCharStreamChunk;
+
 interface RunningSessionState {
   completed: boolean;
   completionResolver: ((result: SessionResult) => void) | null;
   completionPromise: Promise<SessionResult>;
-  queued: RolloutLine[];
+  queued: SessionStreamChunk[];
   waiter: (() => void) | null;
   messageCount: number;
 }
@@ -54,6 +67,7 @@ export class RunningSession extends EventEmitter {
   private readonly pm: ProcessManager;
   private readonly processId: string;
   private readonly startedAt: Date;
+  private readonly streamGranularity: StreamGranularity;
   private readonly state: RunningSessionState;
   private stopHook: (() => void) | null = null;
 
@@ -62,6 +76,7 @@ export class RunningSession extends EventEmitter {
     pm: ProcessManager,
     processId: string,
     startedAt: Date,
+    streamGranularity: StreamGranularity,
     allowSessionIdUpdate = true,
   ) {
     super();
@@ -70,6 +85,7 @@ export class RunningSession extends EventEmitter {
     this.pm = pm;
     this.processId = processId;
     this.startedAt = startedAt;
+    this.streamGranularity = streamGranularity;
     let resolveCompletion: ((result: SessionResult) => void) | null = null;
     const completionPromise = new Promise<SessionResult>((resolve) => {
       resolveCompletion = resolve;
@@ -102,8 +118,14 @@ export class RunningSession extends EventEmitter {
       this.emit("sessionId", this._sessionId);
     }
     this.state.messageCount += 1;
-    this.state.queued.push(line);
     this.emit("message", line);
+    const chunks =
+      this.streamGranularity === "char"
+        ? toCharStreamChunks(line, this._sessionId)
+        : [line];
+    for (const chunk of chunks) {
+      this.state.queued.push(chunk);
+    }
     if (this.state.waiter !== null) {
       const waiter = this.state.waiter;
       this.state.waiter = null;
@@ -138,7 +160,7 @@ export class RunningSession extends EventEmitter {
     }
   }
 
-  async *messages(): AsyncGenerator<RolloutLine, void, undefined> {
+  async *messages(): AsyncGenerator<SessionStreamChunk, void, undefined> {
     while (!this.state.completed || this.state.queued.length > 0) {
       while (this.state.queued.length > 0) {
         const line = this.state.queued.shift();
@@ -196,6 +218,7 @@ export class SessionRunner {
         approvalMode: config.approvalMode,
         fullAuto: config.fullAuto,
         images: config.images,
+        streamGranularity: config.streamGranularity,
       });
     }
 
@@ -207,6 +230,7 @@ export class SessionRunner {
       this.pm,
       execStream.process.id,
       startedAt,
+      options.streamGranularity ?? "event",
     );
 
     this.trackSession(session);
@@ -234,6 +258,7 @@ export class SessionRunner {
       this.pm,
       proc.id,
       startedAt,
+      options?.streamGranularity ?? "event",
       false,
     );
     this.trackSession(running);
@@ -286,6 +311,7 @@ export class SessionRunner {
       approvalMode: config.approvalMode,
       fullAuto: config.fullAuto,
       images: config.images,
+      streamGranularity: config.streamGranularity,
     };
   }
 
@@ -302,6 +328,78 @@ export class SessionRunner {
       session.finish(exitCode);
     });
   }
+}
+
+function toCharStreamChunks(
+  line: RolloutLine,
+  sessionId: string,
+): readonly SessionStreamChunk[] {
+  const textSegments = extractAssistantTextSegments(line);
+  if (textSegments.length === 0) {
+    return [line];
+  }
+
+  const chunks: SessionCharStreamChunk[] = [];
+  for (const segment of textSegments) {
+    for (const char of Array.from(segment)) {
+      chunks.push({
+        kind: "char",
+        char,
+        sessionId,
+        timestamp: line.timestamp,
+        sourceType: line.type,
+        source: line,
+      });
+    }
+  }
+  return chunks;
+}
+
+function extractAssistantTextSegments(line: RolloutLine): readonly string[] {
+  if (line.type === "event_msg") {
+    const payload = toRecord(line.payload);
+    if (
+      payload?.["type"] === "AgentMessage" &&
+      typeof payload["message"] === "string"
+    ) {
+      return [payload["message"]];
+    }
+    return [];
+  }
+
+  if (line.type !== "response_item") {
+    return [];
+  }
+  const payload = toRecord(line.payload);
+  if (
+    payload?.["type"] !== "message" ||
+    payload["role"] !== "assistant" ||
+    !Array.isArray(payload["content"])
+  ) {
+    return [];
+  }
+  const segments: string[] = [];
+  for (const item of payload["content"]) {
+    const content = toRecord(item);
+    if (content === null) {
+      continue;
+    }
+    if (
+      (content["type"] === "output_text" || content["type"] === "input_text") &&
+      typeof content["text"] === "string" &&
+      content["text"].length > 0
+    ) {
+      segments.push(content["text"]);
+    }
+  }
+  return segments;
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as Record<string, unknown>;
 }
 
 async function waitForExit(pm: ProcessManager, processId: string): Promise<number> {

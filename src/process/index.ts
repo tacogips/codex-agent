@@ -7,4 +7,5 @@ export type {
   ProcessStatus,
   SandboxMode,
   ApprovalMode,
+  StreamGranularity,
 } from "./types";
