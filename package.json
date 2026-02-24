@@ -22,6 +22,7 @@
     "test:ui": "vitest --ui",
     "typecheck": "tsc --noEmit",
     "lint": "bun run typecheck",
+    "check:dist-sync": "bash scripts/check-dist-sync.sh",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "clean": "rm -rf dist",

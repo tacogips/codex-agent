@@ -42,6 +42,7 @@ bun run start
 bun run test
 bun run test:watch
 bun run typecheck
+bun run check:dist-sync
 bun run format
 bun run format:check
 ```
@@ -144,6 +145,12 @@ Run type checks:
 
 ```bash
 bun run typecheck
+```
+
+Verify distribution artifacts are synced with source:
+
+```bash
+bun run check:dist-sync
 ```
 
 ## Notes
