@@ -7,6 +7,7 @@ export type QueuePromptStatus = "pending" | "running" | "completed" | "failed";
 export interface QueuePrompt {
   readonly id: string;
   readonly prompt: string;
+  readonly images?: readonly string[] | undefined;
   readonly status: QueuePromptStatus;
   readonly mode?: "auto" | "manual" | undefined;
   readonly result?: { exitCode: number } | undefined;
@@ -48,6 +49,7 @@ export interface QueueEvent {
 export interface QueuePromptData {
   readonly id: string;
   readonly prompt: string;
+  readonly images?: readonly string[] | undefined;
   readonly status: QueuePromptStatus;
   readonly mode?: "auto" | "manual" | undefined;
   readonly result?: { exitCode: number } | undefined;

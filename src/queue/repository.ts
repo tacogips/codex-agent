@@ -32,6 +32,7 @@ function toPrompt(data: QueuePromptData): QueuePrompt {
   return {
     id: data.id,
     prompt: data.prompt,
+    images: data.images,
     status: data.status,
     mode: data.mode,
     result: data.result,
@@ -45,6 +46,7 @@ function toPromptData(prompt: QueuePrompt): QueuePromptData {
   return {
     id: prompt.id,
     prompt: prompt.prompt,
+    images: prompt.images,
     status: prompt.status,
     mode: prompt.mode,
     result: prompt.result,
@@ -132,12 +134,14 @@ export async function createQueue(
 export async function addPrompt(
   queueId: string,
   prompt: string,
+  images?: readonly string[],
   configDir?: string,
 ): Promise<QueuePrompt> {
   const config = await loadQueues(configDir);
   const newPrompt: QueuePromptData = {
     id: randomUUID(),
     prompt,
+    images,
     status: "pending",
     mode: "auto",
     addedAt: new Date().toISOString(),

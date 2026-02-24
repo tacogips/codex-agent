@@ -78,7 +78,7 @@ describe("QueueRepository", () => {
   describe("addPrompt", () => {
     it("adds a prompt to a queue", async () => {
       const queue = await createQueue("with-prompts", "/path", configDir);
-      const prompt = await addPrompt(queue.id, "Do something", configDir);
+      const prompt = await addPrompt(queue.id, "Do something", undefined, configDir);
 
       expect(prompt.id).toBeTruthy();
       expect(prompt.prompt).toBe("Do something");
@@ -91,11 +91,22 @@ describe("QueueRepository", () => {
 
     it("adds multiple prompts", async () => {
       const queue = await createQueue("multi", "/path", configDir);
-      await addPrompt(queue.id, "First", configDir);
-      await addPrompt(queue.id, "Second", configDir);
+      await addPrompt(queue.id, "First", undefined, configDir);
+      await addPrompt(queue.id, "Second", undefined, configDir);
 
       const found = await findQueue(queue.id, configDir);
       expect(found!.prompts).toHaveLength(2);
+    });
+
+    it("persists prompt image attachments", async () => {
+      const queue = await createQueue("with-images", "/path", configDir);
+      const images = ["./screenshots/a.png", "./screenshots/b.png"];
+      const prompt = await addPrompt(queue.id, "Analyze screenshots", images, configDir);
+
+      expect(prompt.images).toEqual(images);
+
+      const found = await findQueue(queue.id, configDir);
+      expect(found!.prompts[0]!.images).toEqual(images);
     });
   });
 
@@ -139,7 +150,7 @@ describe("QueueRepository", () => {
   describe("updateQueuePrompts", () => {
     it("updates prompt statuses", async () => {
       const queue = await createQueue("updateable", "/path", configDir);
-      const prompt = await addPrompt(queue.id, "Test", configDir);
+      const prompt = await addPrompt(queue.id, "Test", undefined, configDir);
 
       const updatedPrompts = [
         {

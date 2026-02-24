@@ -95,4 +95,16 @@ describe("ProcessManager", () => {
     // echo exits 0
     expect(result.exitCode).toBe(0);
   });
+
+  test("spawnExec includes image attachment args", async () => {
+    const pm = new ProcessManager("echo");
+    await pm.spawnExec("test prompt", {
+      codexBinary: "echo",
+      images: ["./one.png", "./two.png"],
+    });
+
+    const command = pm.list()[0]?.command;
+    expect(command).toContain("--image ./one.png");
+    expect(command).toContain("--image ./two.png");
+  });
 });

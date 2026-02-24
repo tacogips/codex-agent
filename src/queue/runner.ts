@@ -14,6 +14,7 @@ import type { PromptQueue, QueuePrompt, QueueEvent } from "./types";
 interface MutablePrompt {
   id: string;
   prompt: string;
+  images?: readonly string[] | undefined;
   status: QueuePrompt["status"];
   result?: { exitCode: number } | undefined;
   addedAt: Date;
@@ -25,6 +26,7 @@ function toQueuePrompt(m: MutablePrompt): QueuePrompt {
   return {
     id: m.id,
     prompt: m.prompt,
+    images: m.images,
     status: m.status,
     result: m.result,
     addedAt: m.addedAt,
@@ -59,6 +61,7 @@ export async function* runQueue(
   const prompts: MutablePrompt[] = queue.prompts.map((p) => ({
     id: p.id,
     prompt: p.prompt,
+    images: p.images,
     status: p.status,
     result: p.result,
     addedAt: p.addedAt,
@@ -110,6 +113,7 @@ export async function* runQueue(
       const result = await pm.spawnExec(mp.prompt, {
         ...options,
         cwd: queue.projectPath,
+        images: mergeImages(mp.images, options?.images),
       });
 
       mp.completedAt = new Date();
@@ -137,4 +141,21 @@ export async function* runQueue(
   }
 
   yield makeEvent("queue_completed");
+}
+
+function mergeImages(
+  promptImages?: readonly string[] | undefined,
+  runImages?: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (promptImages === undefined && runImages === undefined) {
+    return undefined;
+  }
+  const merged = new Set<string>();
+  for (const image of promptImages ?? []) {
+    merged.add(image);
+  }
+  for (const image of runImages ?? []) {
+    merged.add(image);
+  }
+  return [...merged];
 }

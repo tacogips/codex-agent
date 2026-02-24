@@ -190,6 +190,11 @@ function buildExecArgs(
   options?: CodexProcessOptions,
 ): string[] {
   const args = ["exec", "--json", prompt];
+  if (options?.images !== undefined) {
+    for (const imagePath of options.images) {
+      args.push("--image", imagePath);
+    }
+  }
   args.push(...buildCommonArgs(options));
   return args;
 }

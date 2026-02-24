@@ -93,12 +93,27 @@ export const handleAddPrompt: RouteHandler = async (req, params, config) => {
     return json({ error: "Queue not found" }, 404);
   }
 
-  const body = (await readJsonBody(req)) as { prompt?: string } | null;
+  const body = (await readJsonBody(req)) as {
+    prompt?: string;
+    images?: unknown;
+  } | null;
   if (body === null || typeof body.prompt !== "string" || body.prompt === "") {
     return json({ error: "Missing required field: prompt" }, 400);
   }
+  if (
+    body.images !== undefined &&
+    (!Array.isArray(body.images) ||
+      body.images.some((v) => typeof v !== "string" || v.length === 0))
+  ) {
+    return json({ error: "Invalid field: images must be a string array" }, 400);
+  }
 
-  const prompt = await addPrompt(queue.id, body.prompt, config.configDir);
+  const prompt = await addPrompt(
+    queue.id,
+    body.prompt,
+    body.images as readonly string[] | undefined,
+    config.configDir,
+  );
   return json(prompt, 201);
 };
 
@@ -117,7 +132,15 @@ export const handleRunQueue: RouteHandler = async (req, params, config) => {
     model?: string;
     sandbox?: string;
     fullAuto?: boolean;
+    images?: unknown;
   } | null;
+  if (
+    body?.images !== undefined &&
+    (!Array.isArray(body.images) ||
+      body.images.some((v) => typeof v !== "string" || v.length === 0))
+  ) {
+    return json({ error: "Invalid field: images must be a string array" }, 400);
+  }
 
   const stopSignal = { stopped: false };
   activeQueues.set(queue.id, stopSignal);
@@ -125,6 +148,7 @@ export const handleRunQueue: RouteHandler = async (req, params, config) => {
   const runOpts: Parameters<typeof runQueue>[1] = {};
   if (body?.model !== undefined) (runOpts as Record<string, unknown>)["model"] = body.model;
   if (body?.fullAuto !== undefined) (runOpts as Record<string, unknown>)["fullAuto"] = body.fullAuto;
+  if (body?.images !== undefined) (runOpts as Record<string, unknown>)["images"] = body.images;
   if (config.configDir !== undefined) (runOpts as Record<string, unknown>)["configDir"] = config.configDir;
 
   const generator = runQueue(queue, runOpts, stopSignal);

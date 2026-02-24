@@ -16,7 +16,7 @@
  *   group pause <group>
  *   group resume <group>
  *   group delete <group>
- *   group run <name> --prompt <P> [--max-concurrent N] [--model M]
+ *   group run <name> --prompt <P> [--max-concurrent N] [--model M] [--image FILE]...
  *
  *   bookmark add --type <session|message|range> --session <id> --name <name> [options]
  *   bookmark list [--format json|table] [--session <id>] [--type <type>] [--tag <tag>]
@@ -34,7 +34,7 @@
  *   files rebuild
  *
  *   queue create <name> --project <path>
- *   queue add <name> --prompt <prompt>
+ *   queue add <name> --prompt <prompt> [--image FILE]...
  *   queue show <name>
  *   queue list [--format json|table]
  *   queue pause <name>
@@ -44,7 +44,7 @@
  *   queue remove <name> <command-id>
  *   queue move <name> --from <n> --to <n>
  *   queue mode <name> <command-id> --mode <auto|manual>
- *   queue run <name> [--model M] [--sandbox S] [--full-auto]
+ *   queue run <name> [--model M] [--sandbox S] [--full-auto] [--image FILE]...
  *
  *   server start [--port N] [--host H] [--token T] [--transport local-cli|app-server] [--app-server-url ws://...]
  *
@@ -139,7 +139,7 @@ Usage:
   codex-agent group pause <group>
   codex-agent group resume <group>
   codex-agent group delete <group>
-  codex-agent group run <name> --prompt <P> [--max-concurrent N]
+  codex-agent group run <name> --prompt <P> [--max-concurrent N] [--image FILE]...
 
   codex-agent bookmark add --type <session|message|range> --session <id> --name <name> [options]
   codex-agent bookmark list [--format json|table] [--session <id>] [--type <type>] [--tag <tag>]
@@ -157,7 +157,7 @@ Usage:
   codex-agent files rebuild
 
   codex-agent queue create <name> --project <path>
-  codex-agent queue add <name> --prompt <prompt>
+  codex-agent queue add <name> --prompt <prompt> [--image FILE]...
   codex-agent queue show <name>
   codex-agent queue list [--format json|table]
   codex-agent queue pause <name>
@@ -167,7 +167,7 @@ Usage:
   codex-agent queue remove <name> <command-id>
   codex-agent queue move <name> --from <n> --to <n>
   codex-agent queue mode <name> <command-id> --mode <auto|manual>
-  codex-agent queue run <name>
+  codex-agent queue run <name> [--image FILE]...
 
   codex-agent server start [--port N] [--host H] [--token T] [--transport local-cli|app-server] [--app-server-url ws://...]
 
@@ -186,6 +186,7 @@ Common process options:
   --model <model>             Model to use
   --sandbox <full|network-only|none>  Sandbox mode
   --full-auto                 Enable full-auto mode
+  --image <path>              Attach image(s) to prompt (repeatable)
 
 Server options:
   --port <n>                  Port number (default: 3100, env: CODEX_AGENT_PORT)
@@ -1154,7 +1155,7 @@ async function handleQueueCreate(args: readonly string[]): Promise<void> {
 async function handleQueueAdd(args: readonly string[]): Promise<void> {
   const name = args[0];
   if (name === undefined) {
-    console.error("Usage: codex-agent queue add <name> --prompt <prompt>");
+    console.error("Usage: codex-agent queue add <name> --prompt <prompt> [--image <path>]...");
     process.exitCode = 1;
     return;
   }
@@ -1165,6 +1166,7 @@ async function handleQueueAdd(args: readonly string[]): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  const images = getArgValues(args, "--image");
 
   const queue = await findQueue(name);
   if (queue === null) {
@@ -1173,7 +1175,11 @@ async function handleQueueAdd(args: readonly string[]): Promise<void> {
     return;
   }
 
-  const queuePrompt = await addPrompt(queue.id, prompt);
+  const queuePrompt = await addPrompt(
+    queue.id,
+    prompt,
+    images.length > 0 ? images : undefined,
+  );
   console.log(`Prompt added to queue ${queue.name}: ${queuePrompt.id.slice(0, 8)}`);
 }
 
@@ -1668,6 +1674,7 @@ function parseProcessOptions(args: readonly string[]): CodexProcessOptions {
     sandbox?: SandboxMode;
     approvalMode?: ApprovalMode;
     fullAuto?: boolean;
+    images?: readonly string[];
   } = {};
 
   const model = getArgValue(args, "--model");
@@ -1680,6 +1687,11 @@ function parseProcessOptions(args: readonly string[]): CodexProcessOptions {
 
   if (args.includes("--full-auto")) {
     opts.fullAuto = true;
+  }
+
+  const images = getArgValues(args, "--image");
+  if (images.length > 0) {
+    opts.images = images;
   }
 
   return opts;

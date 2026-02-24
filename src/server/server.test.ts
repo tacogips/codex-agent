@@ -404,6 +404,23 @@ describe("HTTP Server", () => {
     expect(resp.status).toBe(404);
   });
 
+  it("POST /api/queues/:id/prompts returns 400 for invalid images payload", async () => {
+    const createResp = await fetch(`${baseUrl}/api/queues`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "img-queue", projectPath: "/tmp/project" }),
+    });
+    const created = (await createResp.json()) as Record<string, unknown>;
+    const queueId = created["id"] as string;
+
+    const resp = await fetch(`${baseUrl}/api/queues/${queueId}/prompts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "test", images: ["ok.png", 123] }),
+    });
+    expect(resp.status).toBe(400);
+  });
+
   it("POST /api/queues/:id/stop returns 404 when queue not running", async () => {
     const resp = await fetch(`${baseUrl}/api/queues/nonexistent/stop`, {
       method: "POST",
@@ -579,11 +596,12 @@ describe("Group and Queue CRUD", () => {
     const addResp = await fetch(`${baseUrl}/api/queues/${queueId}/prompts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "Do something" }),
+      body: JSON.stringify({ prompt: "Do something", images: ["./one.png", "./two.png"] }),
     });
     expect(addResp.status).toBe(201);
     const prompt = (await addResp.json()) as Record<string, unknown>;
     expect(prompt["prompt"]).toBe("Do something");
+    expect(prompt["images"]).toEqual(["./one.png", "./two.png"]);
     expect(prompt["status"]).toBe("pending");
 
     // Get queue

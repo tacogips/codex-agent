@@ -130,15 +130,24 @@ export const handleRunGroup: RouteHandler = async (req, params, config) => {
     model?: string;
     sandbox?: string;
     fullAuto?: boolean;
+    images?: unknown;
   } | null;
   if (body === null || typeof body.prompt !== "string" || body.prompt === "") {
     return json({ error: "Missing required field: prompt" }, 400);
+  }
+  if (
+    body.images !== undefined &&
+    (!Array.isArray(body.images) ||
+      body.images.some((v) => typeof v !== "string" || v.length === 0))
+  ) {
+    return json({ error: "Invalid field: images must be a string array" }, 400);
   }
 
   const generator = runGroup(group, body.prompt, {
     maxConcurrent: body.maxConcurrent,
     model: body.model,
     fullAuto: body.fullAuto,
+    images: body.images as readonly string[] | undefined,
   });
 
   return sseResponse(generator);

@@ -13,6 +13,7 @@ export interface CodexProcessOptions {
   readonly sandbox?: SandboxMode | undefined;
   readonly approvalMode?: ApprovalMode | undefined;
   readonly fullAuto?: boolean | undefined;
+  readonly images?: readonly string[] | undefined;
   readonly configOverrides?: readonly string[] | undefined;
   readonly codexBinary?: string | undefined;
 }
