@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, chmod, appendFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionRunner } from "./session-runner";
@@ -79,5 +79,94 @@ describe("SessionRunner", () => {
     expect(result.success).toBe(true);
     expect(streamed.length).toBeGreaterThanOrEqual(2);
     expect(session.sessionId).toBe(sessionId);
+  });
+
+  test("resumeSession keeps requested session id when rollout meta differs", async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), "codex-agent-sdk-home-"));
+    createdDirs.push(codexHome);
+
+    const requestedSessionId = "requested-session-001";
+    const emittedSessionId = "unexpected-new-session-999";
+    const now = new Date();
+    const dir = join(
+      codexHome,
+      "sessions",
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    );
+    await mkdir(dir, { recursive: true });
+
+    const rolloutPath = join(dir, `rollout-${requestedSessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({
+        timestamp: "2026-01-01T00:00:00Z",
+        type: "session_meta",
+        payload: {
+          meta: {
+            id: requestedSessionId,
+            timestamp: "2026-01-01T00:00:00Z",
+            cwd: "/tmp/project",
+            originator: "codex",
+            cli_version: "1.0.0",
+            source: "cli",
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-01-01T00:00:01Z",
+        type: "event_msg",
+        payload: { type: "AgentMessage", message: "hello" },
+      }),
+    ];
+    await writeFile(rolloutPath, lines.join("\n") + "\n");
+    const fakeCodexPath = join(codexHome, "fake-codex.sh");
+    await writeFile(
+      fakeCodexPath,
+      "#!/usr/bin/env bash\nsleep 0.3\nexit 0\n",
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    const runner = new SessionRunner({
+      codexBinary: fakeCodexPath,
+      codexHome,
+      includeExistingOnResume: true,
+    });
+
+    const session = await runner.resumeSession(requestedSessionId);
+    const sessionIdEvents: string[] = [];
+    session.on("sessionId", (id: string) => {
+      sessionIdEvents.push(id);
+    });
+
+    await appendFile(
+      rolloutPath,
+      JSON.stringify({
+        timestamp: "2026-01-01T00:00:02Z",
+        type: "session_meta",
+        payload: {
+          meta: {
+            id: emittedSessionId,
+            timestamp: "2026-01-01T00:00:02Z",
+            cwd: "/tmp/project",
+            originator: "codex",
+            cli_version: "1.0.0",
+            source: "cli",
+          },
+        },
+      }) + "\n",
+      "utf-8",
+    );
+
+    for await (const _line of session.messages()) {
+      // Drain stream
+    }
+
+    const result = await session.waitForCompletion();
+
+    expect(result.success).toBe(true);
+    expect(session.sessionId).toBe(requestedSessionId);
+    expect(sessionIdEvents).toEqual([]);
   });
 });

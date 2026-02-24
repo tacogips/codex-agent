@@ -50,6 +50,7 @@ interface RunningSessionState {
 
 export class RunningSession extends EventEmitter {
   private _sessionId: string;
+  private readonly allowSessionIdUpdate: boolean;
   private readonly pm: ProcessManager;
   private readonly processId: string;
   private readonly startedAt: Date;
@@ -61,9 +62,11 @@ export class RunningSession extends EventEmitter {
     pm: ProcessManager,
     processId: string,
     startedAt: Date,
+    allowSessionIdUpdate = true,
   ) {
     super();
     this._sessionId = sessionId;
+    this.allowSessionIdUpdate = allowSessionIdUpdate;
     this.pm = pm;
     this.processId = processId;
     this.startedAt = startedAt;
@@ -90,7 +93,11 @@ export class RunningSession extends EventEmitter {
   }
 
   pushLine(line: RolloutLine): void {
-    if (isSessionMeta(line) && this._sessionId !== line.payload.meta.id) {
+    if (
+      this.allowSessionIdUpdate &&
+      isSessionMeta(line) &&
+      this._sessionId !== line.payload.meta.id
+    ) {
       this._sessionId = line.payload.meta.id;
       this.emit("sessionId", this._sessionId);
     }
@@ -222,7 +229,13 @@ export class SessionRunner {
       ...options,
       codexBinary: this.options.codexBinary,
     });
-    const running = new RunningSession(sessionId, this.pm, proc.id, startedAt);
+    const running = new RunningSession(
+      sessionId,
+      this.pm,
+      proc.id,
+      startedAt,
+      false,
+    );
     this.trackSession(running);
 
     const watcher = new RolloutWatcher();
