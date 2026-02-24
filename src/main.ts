@@ -16,6 +16,8 @@ export type {
   EventMsg,
   CompactedItem,
   TurnContextItem,
+  MessageOrigin,
+  MessageProvenance,
   CodexSession,
   SessionListOptions,
   SessionListResult,
@@ -196,7 +198,11 @@ export type { ActivityStatus, ActivityEntry } from "./activity/index";
 export { deriveActivityEntry, getSessionActivity } from "./activity/index";
 
 // Markdown
-export type { ParsedMarkdownSection, ParsedMarkdown, MarkdownTask } from "./markdown/index";
+export type {
+  ParsedMarkdownSection,
+  ParsedMarkdown,
+  MarkdownTask,
+} from "./markdown/index";
 export { parseMarkdown, extractMarkdownTasks } from "./markdown/index";
 
 // SDK

@@ -37,6 +37,8 @@ export type {
   GenericEvent,
   CompactedItem,
   TurnContextItem,
+  MessageOrigin,
+  MessageProvenance,
 } from "./rollout";
 
 export {

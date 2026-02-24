@@ -232,6 +232,19 @@ export interface TurnContextItem {
   readonly [key: string]: unknown;
 }
 
+export type MessageOrigin =
+  | "user_input"
+  | "system_injected"
+  | "tool_generated"
+  | "framework_event";
+
+export interface MessageProvenance {
+  readonly role?: string;
+  readonly origin: MessageOrigin;
+  readonly display_default: boolean;
+  readonly source_tag?: string;
+}
+
 // ---------------------------------------------------------------------------
 // RolloutItem (tagged union) and RolloutLine
 // ---------------------------------------------------------------------------
@@ -275,6 +288,7 @@ export interface RolloutLine {
   readonly timestamp: string;
   readonly type: RolloutItem["type"];
   readonly payload: RolloutItem["payload"];
+  readonly provenance?: MessageProvenance;
 }
 
 // ---------------------------------------------------------------------------

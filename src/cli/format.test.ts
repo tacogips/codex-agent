@@ -19,7 +19,11 @@ const SAMPLE_SESSION: CodexSession = {
   cliVersion: "0.1.0",
   title: "Fix auth bug",
   firstUserMessage: "Fix auth bug",
-  git: { sha: "abc123", branch: "main", origin_url: "https://github.com/test/repo" },
+  git: {
+    sha: "abc123",
+    branch: "main",
+    origin_url: "https://github.com/test/repo",
+  },
 };
 
 describe("formatSessionTable", () => {
@@ -71,10 +75,12 @@ describe("formatRolloutLine", () => {
       timestamp: "2025-05-07T17:25:00Z",
       type: "event_msg",
       payload: { type: "UserMessage", message: "Hello world" },
+      provenance: { role: "user", origin: "user_input", display_default: true },
     };
     const output = formatRolloutLine(line);
     expect(output).toContain("user:");
     expect(output).toContain("Hello world");
+    expect(output).toContain("origin=user_input");
   });
 
   test("formats an agent message event", () => {
@@ -93,9 +99,15 @@ describe("formatRolloutLine", () => {
       timestamp: "2025-05-07T17:24:21Z",
       type: "session_meta",
       payload: { meta: { id: "test" } } as never,
+      provenance: {
+        origin: "framework_event",
+        display_default: false,
+        source_tag: "session_meta",
+      },
     };
     const output = formatRolloutLine(line);
     expect(output).toContain("session started");
+    expect(output).toContain("display_default=false");
   });
 
   test("formats a turn context line", () => {
@@ -112,7 +124,13 @@ describe("formatRolloutLine", () => {
     const line: RolloutLine = {
       timestamp: "2025-05-07T17:26:00Z",
       type: "event_msg",
-      payload: { type: "ExecCommandBegin", command: ["ls", "-la"], call_id: "c1", turn_id: "t1", cwd: "/tmp" },
+      payload: {
+        type: "ExecCommandBegin",
+        command: ["ls", "-la"],
+        call_id: "c1",
+        turn_id: "t1",
+        cwd: "/tmp",
+      },
     };
     const output = formatRolloutLine(line);
     expect(output).toContain("exec:");

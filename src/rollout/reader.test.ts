@@ -42,6 +42,15 @@ const USER_MSG_LINE = JSON.stringify({
   },
 });
 
+const INJECTED_AGENTS_LINE = JSON.stringify({
+  timestamp: "2025-05-07T17:24:24.500Z",
+  type: "event_msg",
+  payload: {
+    type: "UserMessage",
+    message: "# AGENTS.md instructions for /tmp/test-project",
+  },
+});
+
 const AGENT_MSG_LINE = JSON.stringify({
   timestamp: "2025-05-07T17:24:30.000Z",
   type: "event_msg",
@@ -74,6 +83,7 @@ const RESPONSE_ITEM_LINE = JSON.stringify({
 const SAMPLE_ROLLOUT = [
   SESSION_META_LINE,
   TURN_STARTED_LINE,
+  INJECTED_AGENTS_LINE,
   USER_MSG_LINE,
   AGENT_MSG_LINE,
   RESPONSE_ITEM_LINE,
@@ -129,7 +139,9 @@ describe("parseRolloutLine", () => {
 
   test("returns null for JSON missing payload", () => {
     expect(
-      parseRolloutLine('{"timestamp": "2025-01-01T00:00:00Z", "type": "session_meta"}'),
+      parseRolloutLine(
+        '{"timestamp": "2025-01-01T00:00:00Z", "type": "session_meta"}',
+      ),
     ).toBeNull();
   });
 });
@@ -137,12 +149,13 @@ describe("parseRolloutLine", () => {
 describe("readRollout", () => {
   test("reads all lines from a rollout file", async () => {
     const lines = await readRollout(rolloutFilePath);
-    expect(lines).toHaveLength(5);
+    expect(lines).toHaveLength(6);
     expect(lines[0]?.type).toBe("session_meta");
     expect(lines[1]?.type).toBe("event_msg");
     expect(lines[2]?.type).toBe("event_msg");
     expect(lines[3]?.type).toBe("event_msg");
-    expect(lines[4]?.type).toBe("response_item");
+    expect(lines[4]?.type).toBe("event_msg");
+    expect(lines[5]?.type).toBe("response_item");
   });
 
   test("skips empty lines", async () => {
@@ -182,7 +195,7 @@ describe("streamEvents", () => {
     for await (const event of streamEvents(rolloutFilePath)) {
       events.push(event);
     }
-    expect(events).toHaveLength(5);
+    expect(events).toHaveLength(6);
   });
 });
 
@@ -192,9 +205,30 @@ describe("extractFirstUserMessage", () => {
     expect(msg).toBe("Fix the auth bug");
   });
 
+  test("assigns provenance for injected and normal user messages", () => {
+    const injected = parseRolloutLine(INJECTED_AGENTS_LINE);
+    const user = parseRolloutLine(USER_MSG_LINE);
+
+    expect(injected?.provenance).toEqual({
+      role: "user",
+      origin: "system_injected",
+      display_default: false,
+      source_tag: "agents_instructions",
+    });
+    expect(user?.provenance).toEqual({
+      role: "user",
+      origin: "user_input",
+      display_default: true,
+    });
+  });
+
   test("returns undefined when no user message exists", async () => {
     const noMsgPath = join(TEST_DIR, "rollout-nouser.jsonl");
-    await writeFile(noMsgPath, SESSION_META_LINE + "\n" + AGENT_MSG_LINE, "utf-8");
+    await writeFile(
+      noMsgPath,
+      SESSION_META_LINE + "\n" + AGENT_MSG_LINE,
+      "utf-8",
+    );
     const msg = await extractFirstUserMessage(noMsgPath);
     expect(msg).toBeUndefined();
   });

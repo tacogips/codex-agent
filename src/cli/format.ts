@@ -3,7 +3,7 @@
  */
 
 import type { CodexSession } from "../types/session";
-import type { RolloutLine } from "../types/rollout";
+import type { MessageProvenance, RolloutLine } from "../types/rollout";
 
 /**
  * Format a session list as a table for terminal output.
@@ -22,7 +22,14 @@ export function formatSessionTable(sessions: readonly CodexSession[]): string {
     branch: s.git?.branch ?? "-",
   }));
 
-  const headers = { id: "ID", source: "SOURCE", cwd: "CWD", title: "TITLE", created: "CREATED", branch: "BRANCH" };
+  const headers = {
+    id: "ID",
+    source: "SOURCE",
+    cwd: "CWD",
+    title: "TITLE",
+    created: "CREATED",
+    branch: "BRANCH",
+  };
   const cols = Object.keys(headers) as (keyof typeof headers)[];
 
   const widths: Record<string, number> = {};
@@ -32,7 +39,9 @@ export function formatSessionTable(sessions: readonly CodexSession[]): string {
     widths[col] = Math.max(headerLen, maxRow);
   }
 
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const headerLine = cols
+    .map((c) => headers[c].padEnd(widths[c] ?? 0))
+    .join("  ");
   const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
   const dataLines = rows.map((row) =>
     cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "),
@@ -81,20 +90,21 @@ export function formatRolloutLine(line: RolloutLine): string {
   const ts = line.timestamp;
   const payload = line.payload as Record<string, unknown>;
   const eventType = (payload["type"] as string | undefined) ?? "";
+  const suffix = formatProvenanceSuffix(line.provenance);
 
   switch (line.type) {
     case "event_msg":
-      return formatEventMsg(ts, eventType, payload);
+      return `${formatEventMsg(ts, eventType, payload)}${suffix}`;
     case "response_item":
-      return `[${ts}] response: ${eventType}`;
+      return `[${ts}] response: ${eventType}${suffix}`;
     case "session_meta":
-      return `[${ts}] session started`;
+      return `[${ts}] session started${suffix}`;
     case "turn_context":
-      return `[${ts}] turn context: model=${String(payload["model"] ?? "?")}`;
+      return `[${ts}] turn context: model=${String(payload["model"] ?? "?")}${suffix}`;
     case "compacted":
-      return `[${ts}] context compacted`;
+      return `[${ts}] context compacted${suffix}`;
     default:
-      return `[${ts}] ${line.type}`;
+      return `[${ts}] ${line.type}${suffix}`;
   }
 }
 
@@ -109,7 +119,11 @@ export function formatSessionsJson(sessions: readonly CodexSession[]): string {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formatEventMsg(ts: string, eventType: string, payload: Record<string, unknown>): string {
+function formatEventMsg(
+  ts: string,
+  eventType: string,
+  payload: Record<string, unknown>,
+): string {
   switch (eventType) {
     case "UserMessage":
       return `[${ts}] user: ${truncate(String(payload["message"] ?? ""), 80)}`;
@@ -136,6 +150,25 @@ function formatEventMsg(ts: string, eventType: string, payload: Record<string, u
     default:
       return `[${ts}] event: ${eventType}`;
   }
+}
+
+function formatProvenanceSuffix(
+  provenance: MessageProvenance | undefined,
+): string {
+  if (provenance === undefined) {
+    return "";
+  }
+  const fields = [`origin=${provenance.origin}`];
+  if (provenance.role !== undefined) {
+    fields.push(`role=${provenance.role}`);
+  }
+  if (provenance.source_tag !== undefined) {
+    fields.push(`tag=${provenance.source_tag}`);
+  }
+  if (!provenance.display_default) {
+    fields.push("display_default=false");
+  }
+  return ` {${fields.join(", ")}}`;
 }
 
 function formatDate(d: Date): string {
