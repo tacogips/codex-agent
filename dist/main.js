@@ -29,7 +29,12 @@ function parseRolloutLine(line) {
     if (!isValidRolloutLine(parsed)) {
       return null;
     }
-    return parsed;
+    const rolloutLine = parsed;
+    const provenance = deriveProvenance(rolloutLine);
+    return provenance === undefined ? rolloutLine : {
+      ...rolloutLine,
+      provenance
+    };
   } catch {
     return null;
   }
@@ -86,7 +91,12 @@ async function* streamEvents(path) {
 async function extractFirstUserMessage(path) {
   for await (const item of streamEvents(path)) {
     if (item.type === "event_msg" && isUserMessagePayload(item.payload)) {
-      return item.payload.message;
+      if (item.provenance?.origin === "user_input") {
+        return item.payload.message;
+      }
+      if (item.provenance === undefined && detectSourceTag(item.payload.message) === undefined) {
+        return item.payload.message;
+      }
     }
   }
   return;
@@ -104,6 +114,150 @@ function isUserMessagePayload(payload) {
   }
   const obj = payload;
   return obj["type"] === "UserMessage" && typeof obj["message"] === "string";
+}
+function deriveProvenance(line) {
+  switch (line.type) {
+    case "event_msg":
+      return deriveEventMsgProvenance(line.payload);
+    case "response_item":
+      return deriveResponseItemProvenance(line.payload);
+    case "session_meta":
+      return {
+        origin: "framework_event",
+        display_default: false,
+        source_tag: "session_meta"
+      };
+    case "turn_context":
+      return {
+        origin: "framework_event",
+        display_default: false,
+        source_tag: "turn_context"
+      };
+    case "compacted":
+      return {
+        origin: "framework_event",
+        display_default: false,
+        source_tag: "compacted"
+      };
+    default:
+      return;
+  }
+}
+function deriveEventMsgProvenance(payload) {
+  if (typeof payload !== "object" || payload === null) {
+    return {
+      origin: "framework_event",
+      display_default: false,
+      source_tag: "event_msg_unknown"
+    };
+  }
+  const event = payload;
+  const eventType = typeof event["type"] === "string" ? event["type"] : "unknown";
+  if (eventType === "UserMessage" && typeof event["message"] === "string") {
+    return classifyUserMessage(event["message"]);
+  }
+  if (eventType === "AgentMessage") {
+    return {
+      role: "assistant",
+      origin: "tool_generated",
+      display_default: true,
+      source_tag: "agent_message"
+    };
+  }
+  return {
+    origin: "framework_event",
+    display_default: false,
+    source_tag: toSnakeCase(eventType)
+  };
+}
+function deriveResponseItemProvenance(payload) {
+  if (typeof payload !== "object" || payload === null) {
+    return {
+      origin: "tool_generated",
+      display_default: false,
+      source_tag: "response_item_unknown"
+    };
+  }
+  const item = payload;
+  const itemType = typeof item["type"] === "string" ? item["type"] : "unknown";
+  if (itemType === "message") {
+    const role = typeof item["role"] === "string" ? item["role"] : undefined;
+    const messageText = extractMessageText(item["content"]);
+    if (role === "user" && messageText !== undefined) {
+      return classifyUserMessage(messageText);
+    }
+    return {
+      ...role !== undefined ? { role } : {},
+      origin: role === "assistant" ? "tool_generated" : "framework_event",
+      display_default: true,
+      source_tag: "response_message"
+    };
+  }
+  const generatedItemTypes = new Set([
+    "reasoning",
+    "local_shell_call",
+    "function_call",
+    "function_call_output"
+  ]);
+  const origin = generatedItemTypes.has(itemType) ? "tool_generated" : "framework_event";
+  return {
+    origin,
+    display_default: origin !== "framework_event",
+    source_tag: toSnakeCase(itemType)
+  };
+}
+function classifyUserMessage(message) {
+  const sourceTag = detectSourceTag(message);
+  if (sourceTag === undefined) {
+    return {
+      role: "user",
+      origin: "user_input",
+      display_default: true
+    };
+  }
+  const origin = sourceTag === "turn_aborted" ? "framework_event" : "system_injected";
+  return {
+    role: "user",
+    origin,
+    display_default: false,
+    source_tag: sourceTag
+  };
+}
+function detectSourceTag(message) {
+  const text = message.trimStart();
+  if (text.startsWith("# AGENTS.md instructions")) {
+    return "agents_instructions";
+  }
+  if (text.startsWith("<environment_context>")) {
+    return "environment_context";
+  }
+  if (text.startsWith("<turn_aborted>")) {
+    return "turn_aborted";
+  }
+  return;
+}
+function extractMessageText(content) {
+  if (!Array.isArray(content)) {
+    return;
+  }
+  const textParts = [];
+  for (const part of content) {
+    if (typeof part !== "object" || part === null) {
+      continue;
+    }
+    const record = part;
+    if ((record["type"] === "input_text" || record["type"] === "output_text") && typeof record["text"] === "string") {
+      textParts.push(record["text"]);
+    }
+  }
+  if (textParts.length === 0) {
+    return;
+  }
+  return textParts.join(`
+`);
+}
+function toSnakeCase(value) {
+  return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[\s-]+/g, "_").toLowerCase();
 }
 // src/rollout/watcher.ts
 import { watch } from "fs";
@@ -556,6 +710,15 @@ class ProcessManager {
     this.binary = binary ?? DEFAULT_BINARY;
   }
   async spawnExec(prompt, options) {
+    const stream = this.spawnExecStream(prompt, options);
+    const lines = [];
+    for await (const line of stream.lines) {
+      lines.push(line);
+    }
+    const exitCode = await stream.completion;
+    return { exitCode, lines };
+  }
+  spawnExecStream(prompt, options) {
     const args = buildExecArgs(prompt, options);
     const binary = options?.codexBinary ?? this.binary;
     const cwd = options?.cwd;
@@ -567,11 +730,16 @@ class ProcessManager {
     const id = randomUUID();
     const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
     this.processes.set(id, managed);
-    const lines = await collectJsonlOutput(child);
-    const exitCode = await waitForExit(child);
-    managed.status = "exited";
-    managed.exitCode = exitCode;
-    return { exitCode, lines };
+    const completion = waitForExit(child).then((exitCode) => {
+      managed.status = "exited";
+      managed.exitCode = exitCode;
+      return exitCode;
+    });
+    return {
+      process: toCodexProcess(managed),
+      lines: streamJsonlOutput(child),
+      completion
+    };
   }
   spawnResume(sessionId, options) {
     const args = ["resume", sessionId, ...buildCommonArgs(options)];
@@ -605,6 +773,17 @@ class ProcessManager {
     }
     managed.child.kill("SIGTERM");
     managed.status = "killed";
+    return true;
+  }
+  writeInput(id, input) {
+    const managed = this.processes.get(id);
+    if (managed === undefined || managed.status !== "running") {
+      return false;
+    }
+    if (managed.child.stdin === null) {
+      return false;
+    }
+    managed.child.stdin.write(input);
     return true;
   }
   killAll() {
@@ -645,6 +824,11 @@ class ProcessManager {
 }
 function buildExecArgs(prompt, options) {
   const args = ["exec", "--json", prompt];
+  if (options?.images !== undefined) {
+    for (const imagePath of options.images) {
+      args.push("--image", imagePath);
+    }
+  }
   args.push(...buildCommonArgs(options));
   return args;
 }
@@ -691,19 +875,21 @@ function toCodexProcess(managed) {
     exitCode: managed.exitCode
   };
 }
-async function collectJsonlOutput(child) {
+async function* streamJsonlOutput(child) {
   if (child.stdout === null) {
-    return [];
+    return;
   }
-  const lines = [];
   const rl = createInterface2({ input: child.stdout, crlfDelay: Infinity });
-  for await (const line of rl) {
-    const parsed = parseRolloutLine(line);
-    if (parsed !== null) {
-      lines.push(parsed);
+  try {
+    for await (const line of rl) {
+      const parsed = parseRolloutLine(line);
+      if (parsed !== null) {
+        yield parsed;
+      }
     }
+  } finally {
+    rl.close();
   }
-  return lines;
 }
 function waitForExit(child) {
   return new Promise((resolve2) => {
@@ -955,6 +1141,7 @@ function toPrompt(data) {
   return {
     id: data.id,
     prompt: data.prompt,
+    images: data.images,
     status: data.status,
     mode: data.mode,
     result: data.result,
@@ -967,6 +1154,7 @@ function toPromptData(prompt) {
   return {
     id: prompt.id,
     prompt: prompt.prompt,
+    images: prompt.images,
     status: prompt.status,
     mode: prompt.mode,
     result: prompt.result,
@@ -1030,11 +1218,12 @@ async function createQueue(name, projectPath, configDir) {
   await saveQueues(newConfig, configDir);
   return queue;
 }
-async function addPrompt(queueId, prompt, configDir) {
+async function addPrompt(queueId, prompt, images, configDir) {
   const config = await loadQueues(configDir);
   const newPrompt = {
     id: randomUUID3(),
     prompt,
+    images,
     status: "pending",
     mode: "auto",
     addedAt: new Date().toISOString()
@@ -1204,6 +1393,7 @@ function toQueuePrompt(m) {
   return {
     id: m.id,
     prompt: m.prompt,
+    images: m.images,
     status: m.status,
     result: m.result,
     addedAt: m.addedAt,
@@ -1226,6 +1416,7 @@ async function* runQueue(queue, options, stopSignal) {
   const prompts = queue.prompts.map((p) => ({
     id: p.id,
     prompt: p.prompt,
+    images: p.images,
     status: p.status,
     result: p.result,
     addedAt: p.addedAt,
@@ -1265,7 +1456,8 @@ async function* runQueue(queue, options, stopSignal) {
     try {
       const result = await pm.spawnExec(mp.prompt, {
         ...options,
-        cwd: queue.projectPath
+        cwd: queue.projectPath,
+        images: mergeImages(mp.images, options?.images)
       });
       mp.completedAt = new Date;
       if (result.exitCode === 0) {
@@ -1289,6 +1481,19 @@ async function* runQueue(queue, options, stopSignal) {
     await updateQueuePrompts(queue.id, prompts.map(toQueuePrompt), configDir);
   }
   yield makeEvent("queue_completed");
+}
+function mergeImages(promptImages, runImages) {
+  if (promptImages === undefined && runImages === undefined) {
+    return;
+  }
+  const merged = new Set;
+  for (const image of promptImages ?? []) {
+    merged.add(image);
+  }
+  for (const image of runImages ?? []) {
+    merged.add(image);
+  }
+  return [...merged];
 }
 // src/bookmark/types.ts
 var BOOKMARK_TYPES = ["session", "message", "range"];
@@ -2070,6 +2275,457 @@ class ToolRegistry {
     return registered.run(input, context);
   }
 }
+// src/sdk/session-runner.ts
+import { EventEmitter as EventEmitter2 } from "events";
+class RunningSession extends EventEmitter2 {
+  _sessionId;
+  allowSessionIdUpdate;
+  pm;
+  processId;
+  startedAt;
+  streamGranularity;
+  state;
+  stopHook = null;
+  constructor(sessionId, pm, processId, startedAt, streamGranularity, allowSessionIdUpdate = true) {
+    super();
+    this._sessionId = sessionId;
+    this.allowSessionIdUpdate = allowSessionIdUpdate;
+    this.pm = pm;
+    this.processId = processId;
+    this.startedAt = startedAt;
+    this.streamGranularity = streamGranularity;
+    let resolveCompletion = null;
+    const completionPromise = new Promise((resolve2) => {
+      resolveCompletion = resolve2;
+    });
+    this.state = {
+      completed: false,
+      completionResolver: resolveCompletion,
+      completionPromise,
+      queued: [],
+      waiter: null,
+      messageCount: 0
+    };
+  }
+  get sessionId() {
+    return this._sessionId;
+  }
+  setStopHook(stop) {
+    this.stopHook = stop;
+  }
+  pushLine(line) {
+    if (this.allowSessionIdUpdate && isSessionMeta(line) && this._sessionId !== line.payload.meta.id) {
+      this._sessionId = line.payload.meta.id;
+      this.emit("sessionId", this._sessionId);
+    }
+    this.state.messageCount += 1;
+    this.emit("message", line);
+    const chunks = this.streamGranularity === "char" ? toCharStreamChunks(line, this._sessionId) : [line];
+    for (const chunk of chunks) {
+      this.state.queued.push(chunk);
+    }
+    if (this.state.waiter !== null) {
+      const waiter = this.state.waiter;
+      this.state.waiter = null;
+      waiter();
+    }
+  }
+  finish(exitCode) {
+    if (this.state.completed) {
+      return;
+    }
+    this.state.completed = true;
+    const completedAt = new Date;
+    const result = {
+      success: exitCode === 0,
+      exitCode,
+      stats: {
+        startedAt: this.startedAt.toISOString(),
+        completedAt: completedAt.toISOString(),
+        messageCount: this.state.messageCount
+      }
+    };
+    this.emit("complete", result);
+    if (this.state.completionResolver !== null) {
+      this.state.completionResolver(result);
+      this.state.completionResolver = null;
+    }
+    if (this.state.waiter !== null) {
+      const waiter = this.state.waiter;
+      this.state.waiter = null;
+      waiter();
+    }
+  }
+  async* messages() {
+    while (!this.state.completed || this.state.queued.length > 0) {
+      while (this.state.queued.length > 0) {
+        const line = this.state.queued.shift();
+        if (line !== undefined) {
+          yield line;
+        }
+      }
+      if (this.state.completed) {
+        break;
+      }
+      await new Promise((resolve2) => {
+        this.state.waiter = resolve2;
+      });
+    }
+  }
+  async waitForCompletion() {
+    return await this.state.completionPromise;
+  }
+  async cancel() {
+    this.stopHook?.();
+    this.pm.kill(this.processId);
+  }
+  async interrupt() {
+    this.pm.writeInput(this.processId, "\x03");
+  }
+  async pause() {}
+  async resume() {}
+}
+
+class SessionRunner {
+  options;
+  pm;
+  active = new Set;
+  constructor(options) {
+    this.options = options ?? {};
+    this.pm = new ProcessManager(options?.codexBinary);
+  }
+  async startSession(config) {
+    if (config.resumeSessionId !== undefined) {
+      return await this.resumeSession(config.resumeSessionId, config.prompt, {
+        cwd: config.cwd,
+        model: config.model,
+        sandbox: config.sandbox,
+        approvalMode: config.approvalMode,
+        fullAuto: config.fullAuto,
+        images: config.images,
+        streamGranularity: config.streamGranularity
+      });
+    }
+    const startedAt = new Date;
+    const options = this.toProcessOptions(config);
+    const execStream = this.pm.spawnExecStream(config.prompt, options);
+    const session = new RunningSession(`pending-${startedAt.getTime()}`, this.pm, execStream.process.id, startedAt, options.streamGranularity ?? "event");
+    this.trackSession(session);
+    this.forwardExecStream(execStream, session);
+    return session;
+  }
+  async resumeSession(sessionId, prompt, options) {
+    const sessionInfo = await findSession(sessionId, this.options.codexHome);
+    if (sessionInfo === null) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    const startedAt = new Date;
+    const proc = this.pm.spawnResume(sessionId, {
+      ...options,
+      codexBinary: this.options.codexBinary
+    });
+    const running = new RunningSession(sessionId, this.pm, proc.id, startedAt, options?.streamGranularity ?? "event", false);
+    this.trackSession(running);
+    const watcher = new RolloutWatcher;
+    watcher.on("line", (_path, line) => {
+      running.pushLine(line);
+    });
+    const includeExisting = this.options.includeExistingOnResume === true;
+    if (includeExisting) {
+      const existing = await readRollout(sessionInfo.rolloutPath);
+      for (const line of existing) {
+        running.pushLine(line);
+      }
+    }
+    await watcher.watchFile(sessionInfo.rolloutPath);
+    running.setStopHook(() => watcher.stop());
+    if (prompt !== undefined && prompt.trim().length > 0) {
+      this.pm.writeInput(proc.id, prompt + `
+`);
+    }
+    waitForExit2(this.pm, proc.id).then((exitCode) => {
+      watcher.stop();
+      running.finish(exitCode);
+    });
+    return running;
+  }
+  listActiveSessions() {
+    return Array.from(this.active);
+  }
+  trackSession(session) {
+    this.active.add(session);
+    session.on("complete", () => {
+      this.active.delete(session);
+    });
+  }
+  toProcessOptions(config) {
+    return {
+      codexBinary: this.options.codexBinary,
+      cwd: config.cwd,
+      model: config.model,
+      sandbox: config.sandbox,
+      approvalMode: config.approvalMode,
+      fullAuto: config.fullAuto,
+      images: config.images,
+      streamGranularity: config.streamGranularity
+    };
+  }
+  forwardExecStream(stream, session) {
+    (async () => {
+      for await (const line of stream.lines) {
+        session.pushLine(line);
+      }
+    })();
+    stream.completion.then((exitCode) => {
+      session.finish(exitCode);
+    });
+  }
+}
+function toCharStreamChunks(line, sessionId) {
+  const textSegments = extractAssistantTextSegments(line);
+  if (textSegments.length === 0) {
+    return [line];
+  }
+  const chunks = [];
+  for (const segment of textSegments) {
+    for (const char of Array.from(segment)) {
+      chunks.push({
+        kind: "char",
+        char,
+        sessionId,
+        timestamp: line.timestamp,
+        sourceType: line.type,
+        source: line
+      });
+    }
+  }
+  return chunks;
+}
+function extractAssistantTextSegments(line) {
+  if (line.type === "event_msg") {
+    const payload2 = toRecord(line.payload);
+    if (payload2?.["type"] === "AgentMessage" && typeof payload2["message"] === "string") {
+      return [payload2["message"]];
+    }
+    return [];
+  }
+  if (line.type !== "response_item") {
+    return [];
+  }
+  const payload = toRecord(line.payload);
+  if (payload?.["type"] !== "message" || payload["role"] !== "assistant" || !Array.isArray(payload["content"])) {
+    return [];
+  }
+  const segments = [];
+  for (const item of payload["content"]) {
+    const content = toRecord(item);
+    if (content === null) {
+      continue;
+    }
+    if ((content["type"] === "output_text" || content["type"] === "input_text") && typeof content["text"] === "string" && content["text"].length > 0) {
+      segments.push(content["text"]);
+    }
+  }
+  return segments;
+}
+function toRecord(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+async function waitForExit2(pm, processId) {
+  while (true) {
+    const process2 = pm.get(processId);
+    if (process2 === null) {
+      return 1;
+    }
+    if (process2.status !== "running") {
+      return process2.exitCode ?? 1;
+    }
+    await sleep(50);
+  }
+}
+function sleep(ms) {
+  return new Promise((resolve2) => {
+    setTimeout(resolve2, ms);
+  });
+}
+// src/sdk/agent-runner.ts
+import { mkdtemp, rm, writeFile as writeFile6 } from "fs/promises";
+import { tmpdir } from "os";
+import { extname, join as join9 } from "path";
+import { randomUUID as randomUUID8 } from "crypto";
+async function* runAgent(request, options) {
+  const runner = new SessionRunner(options);
+  const normalized = await normalizeAttachments(request.attachments);
+  let currentSessionId = isResumeRequest(request) ? request.sessionId : undefined;
+  try {
+    const session = await startFromRequest(runner, request, normalized.imagePaths);
+    currentSessionId = session.sessionId;
+    yield {
+      type: "session.started",
+      sessionId: session.sessionId,
+      resumed: isResumeRequest(request)
+    };
+    for await (const chunk of session.messages()) {
+      const resolvedSessionId = resolveSessionId(session.sessionId, chunk);
+      currentSessionId = resolvedSessionId;
+      yield {
+        type: "session.message",
+        sessionId: resolvedSessionId,
+        chunk
+      };
+    }
+    const result = await session.waitForCompletion();
+    yield {
+      type: "session.completed",
+      sessionId: session.sessionId,
+      result
+    };
+  } catch (error) {
+    yield {
+      type: "session.error",
+      sessionId: currentSessionId,
+      error: toError(error)
+    };
+  } finally {
+    await normalized.cleanup();
+  }
+}
+async function startFromRequest(runner, request, imagePaths) {
+  if (isResumeRequest(request)) {
+    const session = await runner.resumeSession(request.sessionId, request.prompt, {
+      cwd: request.cwd,
+      model: request.model,
+      sandbox: request.sandbox,
+      approvalMode: request.approvalMode,
+      fullAuto: request.fullAuto,
+      images: imagePaths,
+      streamGranularity: request.streamGranularity
+    });
+    return session;
+  }
+  const config = {
+    prompt: request.prompt,
+    cwd: request.cwd,
+    model: request.model,
+    sandbox: request.sandbox,
+    approvalMode: request.approvalMode,
+    fullAuto: request.fullAuto,
+    images: imagePaths,
+    streamGranularity: request.streamGranularity
+  };
+  return await runner.startSession(config);
+}
+async function normalizeAttachments(attachments) {
+  if (attachments === undefined || attachments.length === 0) {
+    return {
+      imagePaths: [],
+      cleanup: async () => {
+        return;
+      }
+    };
+  }
+  const paths = [];
+  const tempDirs = [];
+  for (const attachment of attachments) {
+    if (attachment.type === "path") {
+      paths.push(attachment.path);
+      continue;
+    }
+    const tempDir = await mkdtemp(join9(tmpdir(), "codex-agent-attachment-"));
+    tempDirs.push(tempDir);
+    const parsed = parseBase64Input(attachment.data);
+    const mediaType = attachment.mediaType ?? parsed.mediaType;
+    const ext = extensionForMediaType(mediaType);
+    const fileName = sanitizeFileName(attachment.filename, ext);
+    const filePath = join9(tempDir, fileName);
+    const body = parsed.body;
+    const content = Uint8Array.from(Buffer.from(body, "base64"));
+    await writeFile6(filePath, content);
+    paths.push(filePath);
+  }
+  return {
+    imagePaths: paths,
+    cleanup: async () => {
+      await Promise.all(tempDirs.map(async (dir) => {
+        await rm(dir, { recursive: true, force: true });
+      }));
+    }
+  };
+}
+function parseBase64Input(data) {
+  if (!data.startsWith("data:")) {
+    return { body: data };
+  }
+  const marker = ";base64,";
+  const markerIndex = data.indexOf(marker);
+  if (markerIndex < 0) {
+    return { body: data };
+  }
+  const mediaType = data.slice(5, markerIndex);
+  const body = data.slice(markerIndex + marker.length);
+  if (mediaType.length === 0) {
+    return { body };
+  }
+  return { body, mediaType };
+}
+function extensionForMediaType(mediaType) {
+  if (mediaType === undefined) {
+    return ".img";
+  }
+  switch (mediaType.toLowerCase()) {
+    case "image/png":
+      return ".png";
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/gif":
+      return ".gif";
+    default:
+      return ".img";
+  }
+}
+function sanitizeFileName(filename, defaultExt) {
+  if (filename === undefined || filename.trim().length === 0) {
+    return `${randomUUID8()}${defaultExt}`;
+  }
+  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  if (safe.length === 0) {
+    return `${randomUUID8()}${defaultExt}`;
+  }
+  if (extname(safe).length > 0) {
+    return safe;
+  }
+  return `${safe}${defaultExt}`;
+}
+function resolveSessionId(fallbackSessionId, chunk) {
+  if (isCharChunk(chunk)) {
+    return chunk.sessionId;
+  }
+  if (chunk.type === "session_meta" && typeof chunk.payload === "object" && chunk.payload !== null && "meta" in chunk.payload) {
+    const payload = chunk.payload;
+    const candidate = payload.meta?.id;
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return fallbackSessionId;
+}
+function isCharChunk(chunk) {
+  return chunk.kind === "char";
+}
+function toError(value) {
+  if (value instanceof Error) {
+    return value;
+  }
+  return new Error(typeof value === "string" ? value : "Unknown runAgent error");
+}
+function isResumeRequest(request) {
+  return typeof request.sessionId === "string";
+}
 // src/server/router.ts
 class Router {
   routes = [];
@@ -2692,10 +3348,14 @@ var handleRunGroup = async (req, params, config) => {
   if (body === null || typeof body.prompt !== "string" || body.prompt === "") {
     return json3({ error: "Missing required field: prompt" }, 400);
   }
+  if (body.images !== undefined && (!Array.isArray(body.images) || body.images.some((v) => typeof v !== "string" || v.length === 0))) {
+    return json3({ error: "Invalid field: images must be a string array" }, 400);
+  }
   const generator = runGroup(group, body.prompt, {
     maxConcurrent: body.maxConcurrent,
     model: body.model,
-    fullAuto: body.fullAuto
+    fullAuto: body.fullAuto,
+    images: body.images
   });
   return sseResponse(generator);
 };
@@ -2784,7 +3444,10 @@ var handleAddPrompt = async (req, params, config) => {
   if (body === null || typeof body.prompt !== "string" || body.prompt === "") {
     return json4({ error: "Missing required field: prompt" }, 400);
   }
-  const prompt = await addPrompt(queue.id, body.prompt, config.configDir);
+  if (body.images !== undefined && (!Array.isArray(body.images) || body.images.some((v) => typeof v !== "string" || v.length === 0))) {
+    return json4({ error: "Invalid field: images must be a string array" }, 400);
+  }
+  const prompt = await addPrompt(queue.id, body.prompt, body.images, config.configDir);
   return json4(prompt, 201);
 };
 var handleRunQueue = async (req, params, config) => {
@@ -2797,6 +3460,9 @@ var handleRunQueue = async (req, params, config) => {
     return json4({ error: "Queue not found" }, 404);
   }
   const body = await readJsonBody2(req);
+  if (body?.images !== undefined && (!Array.isArray(body.images) || body.images.some((v) => typeof v !== "string" || v.length === 0))) {
+    return json4({ error: "Invalid field: images must be a string array" }, 400);
+  }
   const stopSignal = { stopped: false };
   activeQueues.set(queue.id, stopSignal);
   const runOpts = {};
@@ -2804,6 +3470,8 @@ var handleRunQueue = async (req, params, config) => {
     runOpts["model"] = body.model;
   if (body?.fullAuto !== undefined)
     runOpts["fullAuto"] = body.fullAuto;
+  if (body?.images !== undefined)
+    runOpts["images"] = body.images;
   if (config.configDir !== undefined)
     runOpts["configDir"] = config.configDir;
   const generator = runQueue(queue, runOpts, stopSignal);
@@ -3157,15 +3825,15 @@ function resolveServerConfig(overrides) {
 }
 // src/daemon/manager.ts
 import { spawn as spawn2 } from "child_process";
-import { readFile as readFile7, writeFile as writeFile6, rename as rename6, unlink, mkdir as mkdir6 } from "fs/promises";
-import { join as join9 } from "path";
+import { readFile as readFile7, writeFile as writeFile7, rename as rename6, unlink, mkdir as mkdir6 } from "fs/promises";
+import { join as join10 } from "path";
 import { homedir as homedir7 } from "os";
-var DEFAULT_CONFIG_DIR6 = join9(homedir7(), ".config", "codex-agent");
+var DEFAULT_CONFIG_DIR6 = join10(homedir7(), ".config", "codex-agent");
 var PID_FILENAME = "daemon.pid";
 var POLL_INTERVAL_MS = 200;
 var POLL_TIMEOUT_MS = 1e4;
 function pidFilePath(configDir) {
-  return join9(configDir ?? DEFAULT_CONFIG_DIR6, PID_FILENAME);
+  return join10(configDir ?? DEFAULT_CONFIG_DIR6, PID_FILENAME);
 }
 async function readPidFile(configDir) {
   try {
@@ -3189,7 +3857,7 @@ async function writePidFile(info, configDir) {
   const finalPath = pidFilePath(configDir);
   const tmpPath = `${finalPath}.tmp-${process.pid}-${Date.now()}`;
   await mkdir6(dir, { recursive: true });
-  await writeFile6(tmpPath, JSON.stringify(info, null, 2));
+  await writeFile7(tmpPath, JSON.stringify(info, null, 2));
   await rename6(tmpPath, finalPath);
 }
 async function removePidFile(configDir) {
@@ -3232,7 +3900,7 @@ async function startDaemon(config = {}) {
   if (existing.status === "stale") {
     await removePidFile(configDir);
   }
-  const binPath = join9(import.meta.dir, "..", "bin.ts");
+  const binPath = join10(import.meta.dir, "..", "bin.ts");
   const daemonArgs = ["run", binPath, "server", "start", "--port", String(port)];
   if (host !== undefined && host !== "") {
     daemonArgs.push("--host", host);
@@ -3301,7 +3969,14 @@ function formatSessionTable(sessions) {
     created: formatDate(s.createdAt),
     branch: s.git?.branch ?? "-"
   }));
-  const headers = { id: "ID", source: "SOURCE", cwd: "CWD", title: "TITLE", created: "CREATED", branch: "BRANCH" };
+  const headers = {
+    id: "ID",
+    source: "SOURCE",
+    cwd: "CWD",
+    title: "TITLE",
+    created: "CREATED",
+    branch: "BRANCH"
+  };
   const cols = Object.keys(headers);
   const widths = {};
   for (const col of cols) {
@@ -3345,19 +4020,20 @@ function formatRolloutLine(line) {
   const ts = line.timestamp;
   const payload = line.payload;
   const eventType = payload["type"] ?? "";
+  const suffix = formatProvenanceSuffix(line.provenance);
   switch (line.type) {
     case "event_msg":
-      return formatEventMsg(ts, eventType, payload);
+      return `${formatEventMsg(ts, eventType, payload)}${suffix}`;
     case "response_item":
-      return `[${ts}] response: ${eventType}`;
+      return `[${ts}] response: ${eventType}${suffix}`;
     case "session_meta":
-      return `[${ts}] session started`;
+      return `[${ts}] session started${suffix}`;
     case "turn_context":
-      return `[${ts}] turn context: model=${String(payload["model"] ?? "?")}`;
+      return `[${ts}] turn context: model=${String(payload["model"] ?? "?")}${suffix}`;
     case "compacted":
-      return `[${ts}] context compacted`;
+      return `[${ts}] context compacted${suffix}`;
     default:
-      return `[${ts}] ${line.type}`;
+      return `[${ts}] ${line.type}${suffix}`;
   }
 }
 function formatSessionsJson(sessions) {
@@ -3391,6 +4067,22 @@ function formatEventMsg(ts, eventType, payload) {
       return `[${ts}] event: ${eventType}`;
   }
 }
+function formatProvenanceSuffix(provenance) {
+  if (provenance === undefined) {
+    return "";
+  }
+  const fields = [`origin=${provenance.origin}`];
+  if (provenance.role !== undefined) {
+    fields.push(`role=${provenance.role}`);
+  }
+  if (provenance.source_tag !== undefined) {
+    fields.push(`tag=${provenance.source_tag}`);
+  }
+  if (!provenance.display_default) {
+    fields.push("display_default=false");
+  }
+  return ` {${fields.join(", ")}}`;
+}
 function formatDate(d) {
   return d.toISOString().slice(0, 19).replace("T", " ");
 }
@@ -3419,7 +4111,7 @@ Usage:
   codex-agent group pause <group>
   codex-agent group resume <group>
   codex-agent group delete <group>
-  codex-agent group run <name> --prompt <P> [--max-concurrent N]
+  codex-agent group run <name> --prompt <P> [--max-concurrent N] [--image FILE]...
 
   codex-agent bookmark add --type <session|message|range> --session <id> --name <name> [options]
   codex-agent bookmark list [--format json|table] [--session <id>] [--type <type>] [--tag <tag>]
@@ -3437,7 +4129,7 @@ Usage:
   codex-agent files rebuild
 
   codex-agent queue create <name> --project <path>
-  codex-agent queue add <name> --prompt <prompt>
+  codex-agent queue add <name> --prompt <prompt> [--image FILE]...
   codex-agent queue show <name>
   codex-agent queue list [--format json|table]
   codex-agent queue pause <name>
@@ -3447,7 +4139,7 @@ Usage:
   codex-agent queue remove <name> <command-id>
   codex-agent queue move <name> --from <n> --to <n>
   codex-agent queue mode <name> <command-id> --mode <auto|manual>
-  codex-agent queue run <name>
+  codex-agent queue run <name> [--image FILE]...
 
   codex-agent server start [--port N] [--host H] [--token T] [--transport local-cli|app-server] [--app-server-url ws://...]
 
@@ -3466,6 +4158,7 @@ Common process options:
   --model <model>             Model to use
   --sandbox <full|network-only|none>  Sandbox mode
   --full-auto                 Enable full-auto mode
+  --image <path>              Attach image(s) to prompt (repeatable)
 
 Server options:
   --port <n>                  Port number (default: 3100, env: CODEX_AGENT_PORT)
@@ -4281,7 +4974,7 @@ async function handleQueueCreate(args) {
 async function handleQueueAdd(args) {
   const name = args[0];
   if (name === undefined) {
-    console.error("Usage: codex-agent queue add <name> --prompt <prompt>");
+    console.error("Usage: codex-agent queue add <name> --prompt <prompt> [--image <path>]...");
     process.exitCode = 1;
     return;
   }
@@ -4291,13 +4984,14 @@ async function handleQueueAdd(args) {
     process.exitCode = 1;
     return;
   }
+  const images = getArgValues(args, "--image");
   const queue = await findQueue(name);
   if (queue === null) {
     console.error(`Queue not found: ${name}`);
     process.exitCode = 1;
     return;
   }
-  const queuePrompt = await addPrompt(queue.id, prompt);
+  const queuePrompt = await addPrompt(queue.id, prompt, images.length > 0 ? images : undefined);
   console.log(`Prompt added to queue ${queue.name}: ${queuePrompt.id.slice(0, 8)}`);
 }
 async function handleQueueShow(args) {
@@ -4715,6 +5409,10 @@ function parseProcessOptions(args) {
   if (args.includes("--full-auto")) {
     opts.fullAuto = true;
   }
+  const images = getArgValues(args, "--image");
+  if (images.length > 0) {
+    opts.images = images;
+  }
   return opts;
 }
 function renderMarkdownTasks(lines) {
@@ -4782,6 +5480,7 @@ export {
   runQueue,
   runGroup,
   run as runCli,
+  runAgent,
   rotateToken,
   revokeToken,
   resumeQueue,
@@ -4847,6 +5546,8 @@ export {
   addGroup,
   addBookmark,
   ToolRegistry,
+  SessionRunner,
+  RunningSession,
   RolloutWatcher,
   ProcessManager,
   PERMISSIONS,
