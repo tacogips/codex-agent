@@ -26,13 +26,13 @@ function parseRolloutLine(line) {
   }
   try {
     const parsed = JSON.parse(trimmed);
-    if (!isValidRolloutLine(parsed)) {
+    const normalized = normalizeRolloutLine(parsed);
+    if (normalized === null) {
       return null;
     }
-    const rolloutLine = parsed;
-    const provenance = deriveProvenance(rolloutLine);
-    return provenance === undefined ? rolloutLine : {
-      ...rolloutLine,
+    const provenance = deriveProvenance(normalized);
+    return provenance === undefined ? normalized : {
+      ...normalized,
       provenance
     };
   } catch {
@@ -107,6 +107,89 @@ function isValidRolloutLine(value) {
   }
   const obj = value;
   return typeof obj["timestamp"] === "string" && typeof obj["type"] === "string" && "payload" in obj;
+}
+function normalizeRolloutLine(value) {
+  if (isValidRolloutLine(value)) {
+    return value;
+  }
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const raw = value;
+  if (typeof raw["type"] !== "string") {
+    return null;
+  }
+  const timestamp = typeof raw["timestamp"] === "string" ? raw["timestamp"] : new Date().toISOString();
+  const execEventType = raw["type"];
+  if (execEventType === "thread.started") {
+    const sessionId = typeof raw["thread_id"] === "string" && raw["thread_id"].length > 0 ? raw["thread_id"] : "unknown-session";
+    return {
+      timestamp,
+      type: "session_meta",
+      payload: {
+        meta: {
+          id: sessionId,
+          timestamp,
+          cwd: "",
+          originator: "codex",
+          cli_version: "unknown",
+          source: "exec"
+        }
+      }
+    };
+  }
+  if (execEventType === "item.completed") {
+    const item = toRecord(raw["item"]);
+    if (item === null || typeof item["type"] !== "string") {
+      return null;
+    }
+    if (item["type"] === "agent_message" && typeof item["text"] === "string") {
+      return {
+        timestamp,
+        type: "event_msg",
+        payload: {
+          type: "AgentMessage",
+          message: item["text"]
+        }
+      };
+    }
+    return {
+      timestamp,
+      type: "response_item",
+      payload: item
+    };
+  }
+  const payload = toEventPayload(execEventType, raw);
+  if (payload === null) {
+    return null;
+  }
+  return {
+    timestamp,
+    type: "event_msg",
+    payload
+  };
+}
+function toEventPayload(eventType, raw) {
+  switch (eventType) {
+    case "turn.started":
+      return {
+        type: "TurnStarted",
+        ...typeof raw["turn_id"] === "string" ? { turn_id: raw["turn_id"] } : {}
+      };
+    case "turn.completed":
+      return {
+        type: "TurnComplete",
+        ...typeof raw["turn_id"] === "string" ? { turn_id: raw["turn_id"] } : {},
+        ...raw["usage"] !== undefined ? { usage: raw["usage"] } : {}
+      };
+    case "error":
+      return {
+        type: "Error",
+        ...typeof raw["message"] === "string" ? { message: raw["message"] } : {}
+      };
+    default:
+      return null;
+  }
 }
 function isUserMessagePayload(payload) {
   if (typeof payload !== "object" || payload === null) {
@@ -255,6 +338,12 @@ function extractMessageText(content) {
   }
   return textParts.join(`
 `);
+}
+function toRecord(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
 }
 function toSnakeCase(value) {
   return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[\s-]+/g, "_").toLowerCase();
@@ -2503,7 +2592,7 @@ function toCharStreamChunks(line, sessionId) {
 }
 function extractAssistantTextSegments(line) {
   if (line.type === "event_msg") {
-    const payload2 = toRecord(line.payload);
+    const payload2 = toRecord2(line.payload);
     if (payload2?.["type"] === "AgentMessage" && typeof payload2["message"] === "string") {
       return [payload2["message"]];
     }
@@ -2512,13 +2601,13 @@ function extractAssistantTextSegments(line) {
   if (line.type !== "response_item") {
     return [];
   }
-  const payload = toRecord(line.payload);
+  const payload = toRecord2(line.payload);
   if (payload?.["type"] !== "message" || payload["role"] !== "assistant" || !Array.isArray(payload["content"])) {
     return [];
   }
   const segments = [];
   for (const item of payload["content"]) {
-    const content = toRecord(item);
+    const content = toRecord2(item);
     if (content === null) {
       continue;
     }
@@ -2528,7 +2617,7 @@ function extractAssistantTextSegments(line) {
   }
   return segments;
 }
-function toRecord(value) {
+function toRecord2(value) {
   if (typeof value !== "object" || value === null) {
     return null;
   }
