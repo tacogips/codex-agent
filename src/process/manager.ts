@@ -12,6 +12,7 @@ import type {
   CodexProcess,
   CodexProcessOptions,
   ExecResult,
+  ExecStreamResult,
   ProcessStatus,
 } from "./types";
 import type { RolloutLine } from "../types/rollout";
@@ -38,6 +39,24 @@ export class ProcessManager {
     prompt: string,
     options?: CodexProcessOptions,
   ): Promise<ExecResult> {
+    const stream = this.spawnExecStream(prompt, options);
+    const lines: RolloutLine[] = [];
+    for await (const line of stream.lines) {
+      lines.push(line);
+    }
+    const exitCode = await stream.completion;
+
+    return { exitCode, lines };
+  }
+
+  /**
+   * Spawn `codex exec --json` and stream parsed JSONL lines in real-time.
+   * Returns a process handle, line stream, and completion promise.
+   */
+  spawnExecStream(
+    prompt: string,
+    options?: CodexProcessOptions,
+  ): ExecStreamResult {
     const args = buildExecArgs(prompt, options);
     const binary = options?.codexBinary ?? this.binary;
     const cwd = options?.cwd;
@@ -49,16 +68,25 @@ export class ProcessManager {
     });
 
     const id = randomUUID();
-    const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
+    const managed = createManagedProcess(
+      id,
+      child,
+      binary + " " + args.join(" "),
+      prompt,
+    );
     this.processes.set(id, managed);
 
-    const lines = await collectJsonlOutput(child);
+    const completion = waitForExit(child).then((exitCode) => {
+      managed.status = "exited";
+      managed.exitCode = exitCode;
+      return exitCode;
+    });
 
-    const exitCode = await waitForExit(child);
-    managed.status = "exited";
-    managed.exitCode = exitCode;
-
-    return { exitCode, lines };
+    return {
+      process: toCodexProcess(managed),
+      lines: streamJsonlOutput(child),
+      completion,
+    };
   }
 
   /**
@@ -121,6 +149,21 @@ export class ProcessManager {
     }
     managed.child.kill("SIGTERM");
     managed.status = "killed";
+    return true;
+  }
+
+  /**
+   * Write plain text input to a running interactive process.
+   */
+  writeInput(id: string, input: string): boolean {
+    const managed = this.processes.get(id);
+    if (managed === undefined || managed.status !== "running") {
+      return false;
+    }
+    if (managed.child.stdin === null) {
+      return false;
+    }
+    managed.child.stdin.write(input);
     return true;
   }
 
@@ -264,22 +307,24 @@ function toCodexProcess(managed: ManagedProcess): CodexProcess {
   };
 }
 
-async function collectJsonlOutput(child: ChildProcess): Promise<readonly RolloutLine[]> {
+async function* streamJsonlOutput(
+  child: ChildProcess,
+): AsyncGenerator<RolloutLine, void, undefined> {
   if (child.stdout === null) {
-    return [];
+    return;
   }
 
-  const lines: RolloutLine[] = [];
   const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
-
-  for await (const line of rl) {
-    const parsed = parseRolloutLine(line);
-    if (parsed !== null) {
-      lines.push(parsed);
+  try {
+    for await (const line of rl) {
+      const parsed = parseRolloutLine(line);
+      if (parsed !== null) {
+        yield parsed;
+      }
     }
+  } finally {
+    rl.close();
   }
-
-  return lines;
 }
 
 function waitForExit(child: ChildProcess): Promise<number> {

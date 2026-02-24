@@ -60,6 +60,7 @@ export type {
   CodexProcess,
   CodexProcessOptions,
   ExecResult,
+  ExecStreamResult,
   ProcessStatus,
   SandboxMode,
   ApprovalMode,
@@ -215,8 +216,17 @@ export type {
   ToolContext,
   ToolConfig,
   RegisteredTool,
+  SessionRunnerOptions,
+  SessionConfig,
+  SessionResult,
 } from "./sdk/index";
-export { BasicSdkEventEmitter, tool, ToolRegistry } from "./sdk/index";
+export {
+  BasicSdkEventEmitter,
+  tool,
+  ToolRegistry,
+  SessionRunner,
+  RunningSession,
+} from "./sdk/index";
 
 // Server
 export {

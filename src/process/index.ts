@@ -3,6 +3,7 @@ export type {
   CodexProcess,
   CodexProcessOptions,
   ExecResult,
+  ExecStreamResult,
   ProcessStatus,
   SandboxMode,
   ApprovalMode,

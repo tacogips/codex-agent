@@ -14,3 +14,9 @@ export type {
 } from "./tool-registry";
 export { tool, ToolRegistry } from "./tool-registry";
 
+export type {
+  SessionRunnerOptions,
+  SessionConfig,
+  SessionResult,
+} from "./session-runner";
+export { SessionRunner, RunningSession } from "./session-runner";

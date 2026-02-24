@@ -34,3 +34,9 @@ export interface ExecResult {
   readonly exitCode: number;
   readonly lines: readonly RolloutLine[];
 }
+
+export interface ExecStreamResult {
+  readonly process: CodexProcess;
+  readonly lines: AsyncIterable<RolloutLine>;
+  readonly completion: Promise<number>;
+}

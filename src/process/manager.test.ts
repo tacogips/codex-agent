@@ -107,4 +107,21 @@ describe("ProcessManager", () => {
     expect(command).toContain("--image ./one.png");
     expect(command).toContain("--image ./two.png");
   });
+
+  test("spawnExecStream returns streaming handle and completion", async () => {
+    const pm = new ProcessManager("echo");
+    const stream = pm.spawnExecStream("hello", {
+      codexBinary: "echo",
+    });
+
+    const streamed: unknown[] = [];
+    for await (const line of stream.lines) {
+      streamed.push(line);
+    }
+
+    const exitCode = await stream.completion;
+    expect(exitCode).toBe(0);
+    expect(stream.process.status).toBe("running");
+    expect(Array.isArray(streamed)).toBe(true);
+  });
 });
