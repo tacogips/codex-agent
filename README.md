@@ -109,6 +109,29 @@ src/
   types/         Shared strict TypeScript types
 ```
 
+## Stable SDK Runner API
+
+Use the stable SDK facade when integrating from TypeScript applications.
+Callers pass a typed request object and do not compose Codex CLI command forms.
+
+```ts
+import { runAgent, type AgentEvent } from "codex-agent";
+
+const events: AgentEvent[] = [];
+for await (const event of runAgent({
+  prompt: "Summarize the latest test failures",
+  attachments: [
+    { type: "path", path: "./screenshots/failure.png" },
+    { type: "base64", data: "iVBORw0KGgoAAA...", mediaType: "image/png" },
+  ],
+})) {
+  events.push(event);
+}
+```
+
+Request routing (`exec` vs `resume`) and attachment normalization are handled
+inside `codex-agent` internals.
+
 ## Testing
 
 Run full tests:

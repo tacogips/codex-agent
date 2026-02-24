@@ -22,3 +22,17 @@ export type {
   SessionStreamChunk,
 } from "./session-runner";
 export { SessionRunner, RunningSession } from "./session-runner";
+
+export type {
+  AgentRunnerOptions,
+  AgentRequest,
+  NewAgentRequest,
+  ResumeAgentRequest,
+  AgentAttachment,
+  AgentEvent,
+  AgentSessionStartedEvent,
+  AgentSessionMessageEvent,
+  AgentSessionCompletedEvent,
+  AgentSessionErrorEvent,
+} from "./agent-runner";
+export { runAgent } from "./agent-runner";

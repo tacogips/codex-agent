@@ -222,6 +222,16 @@ export type {
   SessionResult,
   SessionCharStreamChunk,
   SessionStreamChunk,
+  AgentRunnerOptions,
+  AgentRequest,
+  NewAgentRequest,
+  ResumeAgentRequest,
+  AgentAttachment,
+  AgentEvent,
+  AgentSessionStartedEvent,
+  AgentSessionMessageEvent,
+  AgentSessionCompletedEvent,
+  AgentSessionErrorEvent,
 } from "./sdk/index";
 export {
   BasicSdkEventEmitter,
@@ -229,6 +239,7 @@ export {
   ToolRegistry,
   SessionRunner,
   RunningSession,
+  runAgent,
 } from "./sdk/index";
 
 // Server
