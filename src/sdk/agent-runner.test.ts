@@ -58,6 +58,41 @@ describe("runAgent", () => {
     expect(eventTypes).toContain("session.completed");
   });
 
+  test("emits started event with resolved session id for new session", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-started-id-"));
+    createdDirs.push(fixtureDir);
+
+    const fakeCodexPath = join(fixtureDir, "fake-codex-started-id.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"resolved-session-001\"}'",
+        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"hello\"}}'",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      {
+        prompt: "say hello",
+      },
+      {
+        codexBinary: fakeCodexPath,
+      },
+    )) {
+      events.push(event);
+    }
+
+    const started = events.find((event) => event.type === "session.started");
+    expect(started).toBeDefined();
+    expect(started?.sessionId).toBe("resolved-session-001");
+  });
+
   test("uses the same API for resume flow while keeping command details internal", async () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-resume-"));
     createdDirs.push(fixtureDir);
@@ -137,6 +172,69 @@ describe("runAgent", () => {
         event.chunk.type === "session_meta",
     );
     expect(hasExistingRolloutLine).toBe(true);
+  });
+
+  test("resume request does not fail when session index is temporarily missing", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-resume-missing-index-"));
+    createdDirs.push(fixtureDir);
+
+    const fakeCodexPath = join(fixtureDir, "fake-codex-resume-missing-index.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        "if [ \"$1\" = \"exec\" ]; then",
+        "  printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"missing-index-session-001\"}'",
+        "  printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"hello\"}}'",
+        "  exit 0",
+        "fi",
+        "if [ \"$1\" = \"resume\" ]; then",
+        "  sleep 0.05",
+        "  exit 0",
+        "fi",
+        "exit 1",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    let sessionId: string | undefined;
+    for await (const event of runAgent(
+      {
+        prompt: "say hello",
+      },
+      {
+        codexBinary: fakeCodexPath,
+      },
+    )) {
+      if (event.type === "session.message" || event.type === "session.completed") {
+        sessionId = event.sessionId;
+      }
+    }
+
+    expect(sessionId).toBe("missing-index-session-001");
+
+    const resumeEvents: AgentEvent[] = [];
+    for await (const event of runAgent(
+      {
+        sessionId: sessionId!,
+        prompt: "say hello again",
+      },
+      {
+        codexBinary: fakeCodexPath,
+      },
+    )) {
+      resumeEvents.push(event);
+    }
+
+    const errorEvent = resumeEvents.find((event) => event.type === "session.error");
+    expect(errorEvent).toBeUndefined();
+    const completedEvent = resumeEvents.find((event) => event.type === "session.completed");
+    expect(completedEvent).toBeDefined();
+    if (completedEvent !== undefined) {
+      expect(completedEvent.result.success).toBe(true);
+    }
   });
 
   test("normalizes base64 attachments internally and passes only image file paths", async () => {

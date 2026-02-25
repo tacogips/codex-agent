@@ -244,9 +244,6 @@ export class SessionRunner {
     options?: Omit<CodexProcessOptions, "codexBinary">,
   ): Promise<RunningSession> {
     const sessionInfo = await findSession(sessionId, this.options.codexHome);
-    if (sessionInfo === null) {
-      throw new Error(`Session not found: ${sessionId}`);
-    }
 
     const startedAt = new Date();
     const proc = this.pm.spawnResume(sessionId, {
@@ -269,14 +266,17 @@ export class SessionRunner {
     });
 
     const includeExisting = this.options.includeExistingOnResume === true;
-    if (includeExisting) {
-      const existing = await readRollout(sessionInfo.rolloutPath);
-      for (const line of existing) {
-        running.pushLine(line);
+    if (sessionInfo !== null) {
+      if (includeExisting) {
+        const existing = await readRollout(sessionInfo.rolloutPath);
+        for (const line of existing) {
+          running.pushLine(line);
+        }
       }
+      await watcher.watchFile(sessionInfo.rolloutPath);
+    } else {
+      void this.attachWatchWhenSessionAppears(sessionId, watcher, includeExisting);
     }
-
-    await watcher.watchFile(sessionInfo.rolloutPath);
     running.setStopHook(() => watcher.stop());
 
     if (prompt !== undefined && prompt.trim().length > 0) {
@@ -289,6 +289,33 @@ export class SessionRunner {
     });
 
     return running;
+  }
+
+  private async attachWatchWhenSessionAppears(
+    sessionId: string,
+    watcher: RolloutWatcher,
+    includeExisting: boolean,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (watcher.isClosed) {
+        return;
+      }
+      const discovered = await findSession(sessionId, this.options.codexHome);
+      if (discovered !== null) {
+        if (includeExisting) {
+          const existing = await readRollout(discovered.rolloutPath);
+          for (const line of existing) {
+            // Existing lines are replayed only when configured.
+            // Resume flow may initially start before index catches up.
+            // In that case, we backfill once the rollout path appears.
+            watcher.emit("line", discovered.rolloutPath, line);
+          }
+        }
+        await watcher.watchFile(discovered.rolloutPath);
+        return;
+      }
+      await sleep(100);
+    }
   }
 
   listActiveSessions(): readonly RunningSession[] {

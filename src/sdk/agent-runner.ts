@@ -84,33 +84,63 @@ export async function* runAgent(
 ): AsyncGenerator<AgentEvent, void, undefined> {
   const runner = new SessionRunner(options);
   const normalized = await normalizeAttachments(request.attachments);
+  const resumed = isResumeRequest(request);
   let currentSessionId: string | undefined =
-    isResumeRequest(request) ? request.sessionId : undefined;
+    resumed ? request.sessionId : undefined;
 
   try {
     const session = await startFromRequest(runner, request, normalized.imagePaths);
     currentSessionId = session.sessionId;
 
-    yield {
-      type: "session.started",
-      sessionId: session.sessionId,
-      resumed: isResumeRequest(request),
-    };
+    const iterator = session.messages();
+    if (resumed) {
+      yield {
+        type: "session.started",
+        sessionId: session.sessionId,
+        resumed: true,
+      };
+    } else {
+      const firstChunk = await iterator.next();
+      if (firstChunk.done) {
+        yield {
+          type: "session.started",
+          sessionId: session.sessionId,
+          resumed: false,
+        };
+      } else {
+        const startedSessionId = resolveSessionId(session.sessionId, firstChunk.value);
+        currentSessionId = startedSessionId;
+        yield {
+          type: "session.started",
+          sessionId: startedSessionId,
+          resumed: false,
+        };
+        yield {
+          type: "session.message",
+          sessionId: startedSessionId,
+          chunk: firstChunk.value,
+        };
+      }
+    }
 
-    for await (const chunk of session.messages()) {
-      const resolvedSessionId = resolveSessionId(session.sessionId, chunk);
+    while (true) {
+      const nextChunk = await iterator.next();
+      if (nextChunk.done) {
+        break;
+      }
+      const resolvedSessionId = resolveSessionId(session.sessionId, nextChunk.value);
       currentSessionId = resolvedSessionId;
       yield {
         type: "session.message",
         sessionId: resolvedSessionId,
-        chunk,
+        chunk: nextChunk.value,
       };
     }
 
     const result = await session.waitForCompletion();
     yield {
       type: "session.completed",
-      sessionId: session.sessionId,
+      sessionId: currentSessionId ?? session.sessionId,
       result,
     };
   } catch (error: unknown) {
