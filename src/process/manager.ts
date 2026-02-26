@@ -261,6 +261,9 @@ function buildCommonArgs(options?: CodexProcessOptions): string[] {
       args.push("-c", override);
     }
   }
+  if (options?.additionalArgs !== undefined) {
+    args.push(...options.additionalArgs);
+  }
   return args;
 }
 

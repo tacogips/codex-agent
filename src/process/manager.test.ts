@@ -108,6 +108,18 @@ describe("ProcessManager", () => {
     expect(command).toContain("--image ./two.png");
   });
 
+  test("spawnExec includes additional passthrough args", async () => {
+    const pm = new ProcessManager("echo");
+    await pm.spawnExec("test prompt", {
+      codexBinary: "echo",
+      additionalArgs: ["--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"],
+    });
+
+    const command = pm.list()[0]?.command;
+    expect(command).toContain("--skip-git-repo-check");
+    expect(command).toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
   test("spawnExecStream returns streaming handle and completion", async () => {
     const pm = new ProcessManager("echo");
     const stream = pm.spawnExecStream("hello", {

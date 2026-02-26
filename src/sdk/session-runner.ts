@@ -27,6 +27,7 @@ export interface SessionConfig {
   readonly approvalMode?: ApprovalMode | undefined;
   readonly fullAuto?: boolean | undefined;
   readonly model?: string | undefined;
+  readonly additionalArgs?: readonly string[] | undefined;
   readonly images?: readonly string[] | undefined;
   readonly streamGranularity?: StreamGranularity | undefined;
 }
@@ -217,6 +218,7 @@ export class SessionRunner {
         sandbox: config.sandbox,
         approvalMode: config.approvalMode,
         fullAuto: config.fullAuto,
+        additionalArgs: config.additionalArgs,
         images: config.images,
         streamGranularity: config.streamGranularity,
       });
@@ -337,6 +339,7 @@ export class SessionRunner {
       sandbox: config.sandbox,
       approvalMode: config.approvalMode,
       fullAuto: config.fullAuto,
+      additionalArgs: config.additionalArgs,
       images: config.images,
       streamGranularity: config.streamGranularity,
     };

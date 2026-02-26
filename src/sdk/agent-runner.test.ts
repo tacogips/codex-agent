@@ -93,6 +93,42 @@ describe("runAgent", () => {
     expect(started?.sessionId).toBe("resolved-session-001");
   });
 
+  test("forwards additional args for new sessions", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-new-additional-args-"));
+    createdDirs.push(fixtureDir);
+
+    const argsLogPath = join(fixtureDir, "new-additional-args.log");
+    const fakeCodexPath = join(fixtureDir, "fake-codex-new-additional-args.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"meta\":{\"id\":\"new-session-additional-args-001\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"codex\",\"cli_version\":\"1.0.0\",\"source\":\"exec\"}}}'",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    for await (const _event of runAgent(
+      {
+        prompt: "say hello",
+        additionalArgs: ["--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"],
+      },
+      {
+        codexBinary: fakeCodexPath,
+      },
+    )) {
+      // Drain stream.
+    }
+
+    const args = await readFile(argsLogPath, "utf-8");
+    expect(args).toContain("--skip-git-repo-check");
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
   test("uses the same API for resume flow while keeping command details internal", async () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-resume-"));
     createdDirs.push(fixtureDir);
@@ -172,6 +208,80 @@ describe("runAgent", () => {
         event.chunk.type === "session_meta",
     );
     expect(hasExistingRolloutLine).toBe(true);
+  });
+
+  test("forwards additional args for resume sessions", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-resume-additional-args-"));
+    createdDirs.push(fixtureDir);
+
+    const codexHome = join(fixtureDir, "codex-home");
+    const now = new Date();
+    const dayDir = join(
+      codexHome,
+      "sessions",
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    );
+    await mkdir(dayDir, { recursive: true });
+
+    const sessionId = "resume-additional-args-001";
+    const rolloutPath = join(dayDir, `rollout-${sessionId}.jsonl`);
+    await writeFile(
+      rolloutPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-01-01T00:00:00Z",
+          type: "session_meta",
+          payload: {
+            meta: {
+              id: sessionId,
+              timestamp: "2026-01-01T00:00:00Z",
+              cwd: "/tmp/project",
+              originator: "codex",
+              cli_version: "1.0.0",
+              source: "cli",
+            },
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const argsLogPath = join(fixtureDir, "resume-additional-args.log");
+    const fakeCodexPath = join(fixtureDir, "fake-codex-resume-additional-args.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        "sleep 0.05",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    for await (const _event of runAgent(
+      {
+        sessionId,
+        additionalArgs: ["--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"],
+      },
+      {
+        codexBinary: fakeCodexPath,
+        codexHome,
+        includeExistingOnResume: true,
+      },
+    )) {
+      // Drain stream.
+    }
+
+    const args = await readFile(argsLogPath, "utf-8");
+    expect(args).toContain("resume");
+    expect(args).toContain(sessionId);
+    expect(args).toContain("--skip-git-repo-check");
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
   test("resume request does not fail when session index is temporarily missing", async () => {

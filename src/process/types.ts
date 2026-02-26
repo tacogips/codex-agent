@@ -14,6 +14,7 @@ export interface CodexProcessOptions {
   readonly sandbox?: SandboxMode | undefined;
   readonly approvalMode?: ApprovalMode | undefined;
   readonly fullAuto?: boolean | undefined;
+  readonly additionalArgs?: readonly string[] | undefined;
   readonly images?: readonly string[] | undefined;
   readonly configOverrides?: readonly string[] | undefined;
   readonly streamGranularity?: StreamGranularity | undefined;

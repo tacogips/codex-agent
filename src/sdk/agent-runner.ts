@@ -20,6 +20,7 @@ interface AgentRequestBase {
   readonly approvalMode?: ApprovalMode | undefined;
   readonly fullAuto?: boolean | undefined;
   readonly model?: string | undefined;
+  readonly additionalArgs?: readonly string[] | undefined;
   readonly streamGranularity?: StreamGranularity | undefined;
   readonly attachments?: readonly AgentAttachment[] | undefined;
 }
@@ -170,6 +171,7 @@ async function startFromRequest(
       sandbox: request.sandbox,
       approvalMode: request.approvalMode,
       fullAuto: request.fullAuto,
+      additionalArgs: request.additionalArgs,
       images: imagePaths,
       streamGranularity: request.streamGranularity,
     });
@@ -183,6 +185,7 @@ async function startFromRequest(
     sandbox: request.sandbox,
     approvalMode: request.approvalMode,
     fullAuto: request.fullAuto,
+    additionalArgs: request.additionalArgs,
     images: imagePaths,
     streamGranularity: request.streamGranularity,
   };
