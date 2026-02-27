@@ -91,6 +91,7 @@ Large features are split into multiple related plans with cross-references.
 | [phase4-daemon-app-server](completed/phase4-daemon-app-server.md) | 2026-02-20 | design-codex-session-management.md#4.5, #4.6, #5.2, #6 |
 | [phase5-claude-parity-features](completed/phase5-claude-parity-features.md) | 2026-02-20 | design-claude-parity-gap.md |
 | [issue16-transcript-search](completed/issue16-transcript-search.md) | 2026-02-27 | github issue #16 |
+| [issue17-public-export-session-search](completed/issue17-public-export-session-search.md) | 2026-02-27 | github issue #17 |
 
 ## Phase Dependencies (for impl-exec-auto)
 
@@ -108,6 +109,7 @@ Only plans from eligible phases should be read to minimize context loading.
 | 5 | COMPLETED | Phase 4 |
 | 6 | COMPLETED | Phase 5 |
 | 7 | COMPLETED | Phase 6 |
+| 8 | COMPLETED | Phase 7 |
 
 ### Phase to Plans Mapping
 
@@ -133,6 +135,9 @@ PHASE_TO_PLANS = {
   ],
   7: [
     "issue16-transcript-search.md"
+  ],
+  8: [
+    "issue17-public-export-session-search.md"
   ]
 }
 ```

@@ -15,6 +15,13 @@ afterEach(async () => {
 });
 
 describe("dist runtime runAgent", () => {
+  test("exports session search API from dist entrypoint", async () => {
+    // @ts-expect-error dist artifact is runtime-only in this repository.
+    const distModule = await import("../../dist/main.js");
+    expect(typeof distModule.searchSessions).toBe("function");
+    expect(typeof distModule.searchSessionTranscript).toBe("function");
+  });
+
   test("emits session.message for exec-stream item.completed agent_message", async () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-dist-runtime-"));
     createdDirs.push(fixtureDir);

@@ -53,4 +53,9 @@ export type {
   CodexSession,
   SessionListOptions,
   SessionListResult,
+  SessionSearchRole,
+  SessionTranscriptSearchOptions,
+  SessionTranscriptSearchResult,
+  SessionsSearchOptions,
+  SessionsSearchResult,
 } from "./session";

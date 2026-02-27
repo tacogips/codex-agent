@@ -1,5 +1,5 @@
 {
-  "lastUpdated": "2026-02-27T18:40:00Z",
+  "lastUpdated": "2026-02-27T18:55:00Z",
   "phases": {
     "1": { "status": "COMPLETED" },
     "2": { "status": "COMPLETED" },
@@ -7,7 +7,8 @@
     "4": { "status": "COMPLETED" },
     "5": { "status": "COMPLETED" },
     "6": { "status": "COMPLETED" },
-    "7": { "status": "COMPLETED" }
+    "7": { "status": "COMPLETED" },
+    "8": { "status": "COMPLETED" }
   },
   "plans": {
     "phase1-core-types-rollout-reader": {
@@ -76,6 +77,14 @@
         "TASK-001": { "status": "Completed", "parallelizable": false, "deps": [] },
         "TASK-002": { "status": "Completed", "parallelizable": false, "deps": ["TASK-001"] },
         "TASK-003": { "status": "Completed", "parallelizable": false, "deps": ["TASK-001", "TASK-002"] }
+      }
+    },
+    "issue17-public-export-session-search": {
+      "phase": 8,
+      "status": "Completed",
+      "tasks": {
+        "TASK-001": { "status": "Completed", "parallelizable": false, "deps": [] },
+        "TASK-002": { "status": "Completed", "parallelizable": false, "deps": ["TASK-001"] }
       }
     }
   }

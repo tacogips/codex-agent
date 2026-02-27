@@ -21,6 +21,11 @@ export type {
   CodexSession,
   SessionListOptions,
   SessionListResult,
+  SessionSearchRole,
+  SessionTranscriptSearchOptions,
+  SessionTranscriptSearchResult,
+  SessionsSearchOptions,
+  SessionsSearchResult,
 } from "./types/index";
 
 export {
@@ -53,6 +58,12 @@ export {
   findSession,
   findLatestSession,
 } from "./session/index";
+
+// Session transcript search
+export {
+  searchSessionTranscript,
+  searchSessions,
+} from "./session/search";
 
 // Process manager
 export { ProcessManager } from "./process/index";

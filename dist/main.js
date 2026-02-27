@@ -816,6 +816,357 @@ async function readSortedFiles(parent, order) {
     return [];
   }
 }
+// src/session/search.ts
+import { resolve as resolve2 } from "path";
+import { Buffer as Buffer2 } from "buffer";
+var DEFAULT_LIMIT = 50;
+async function searchSessionTranscript(sessionId, query, options) {
+  const normalizedQuery = normalizeQuery(query);
+  const session = await findSession(sessionId, options?.codexHome);
+  const startedAt = Date.now();
+  if (session === null) {
+    return {
+      sessionId,
+      matched: false,
+      matchCount: 0,
+      scannedBytes: 0,
+      scannedEvents: 0,
+      truncated: false,
+      timedOut: false,
+      durationMs: Date.now() - startedAt
+    };
+  }
+  const budget = toBudget(options);
+  const result = await searchTranscriptFile(session.rolloutPath, normalizedQuery, options, budget, false);
+  return {
+    sessionId,
+    matched: result.matched,
+    matchCount: result.matchCount,
+    scannedBytes: result.scannedBytes,
+    scannedEvents: result.scannedEvents,
+    truncated: result.truncated,
+    timedOut: result.timedOut,
+    durationMs: Date.now() - startedAt
+  };
+}
+async function searchSessions(query, options) {
+  const normalizedQuery = normalizeQuery(query);
+  const limit = options?.limit ?? DEFAULT_LIMIT;
+  const offset = options?.offset ?? 0;
+  const maxSessions = options?.maxSessions;
+  const startedAt = Date.now();
+  const budget = toBudget(options);
+  const sessionIds = [];
+  let total = 0;
+  let scannedSessions = 0;
+  let scannedBytes = 0;
+  let scannedEvents = 0;
+  let timedOut = false;
+  let truncated = false;
+  for await (const candidate of iterCandidates(options)) {
+    if (maxSessions !== undefined && scannedSessions >= maxSessions) {
+      truncated = true;
+      break;
+    }
+    if (budget.maxBytes !== undefined && scannedBytes >= budget.maxBytes) {
+      truncated = true;
+      break;
+    }
+    if (budget.maxEvents !== undefined && scannedEvents >= budget.maxEvents) {
+      truncated = true;
+      break;
+    }
+    if (budget.deadlineAt !== undefined && Date.now() >= budget.deadlineAt) {
+      timedOut = true;
+      break;
+    }
+    scannedSessions += 1;
+    const sessionBudget = {
+      maxBytes: budget.maxBytes === undefined ? undefined : Math.max(0, budget.maxBytes - scannedBytes),
+      maxEvents: budget.maxEvents === undefined ? undefined : Math.max(0, budget.maxEvents - scannedEvents),
+      deadlineAt: budget.deadlineAt
+    };
+    const result = await searchTranscriptFile(candidate.rolloutPath, normalizedQuery, options, sessionBudget, true);
+    scannedBytes += result.scannedBytes;
+    scannedEvents += result.scannedEvents;
+    if (result.matched) {
+      total += 1;
+      if (total > offset && sessionIds.length < limit) {
+        sessionIds.push(candidate.id);
+      }
+    }
+    if (result.timedOut) {
+      timedOut = true;
+      break;
+    }
+    if (result.truncated) {
+      truncated = true;
+      break;
+    }
+  }
+  return {
+    sessionIds,
+    total,
+    offset,
+    limit,
+    scannedSessions,
+    scannedBytes,
+    scannedEvents,
+    truncated,
+    timedOut,
+    durationMs: Date.now() - startedAt
+  };
+}
+async function* iterCandidates(options) {
+  const db = openCodexDb(options?.codexHome);
+  if (db !== null) {
+    try {
+      const clauses = [];
+      const params = [];
+      if (options?.source !== undefined) {
+        clauses.push("source = ?");
+        params.push(options.source);
+      }
+      if (options?.cwd !== undefined) {
+        clauses.push("cwd = ?");
+        params.push(options.cwd);
+      }
+      if (options?.branch !== undefined) {
+        clauses.push("git_branch = ?");
+        params.push(options.branch);
+      }
+      const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+      const sql = `SELECT id, rollout_path FROM threads ${where} ORDER BY updated_at DESC`;
+      const rows = db.query(sql).all(...params);
+      for (const row of rows) {
+        const id = asString(row["id"]);
+        const rolloutPath = asString(row["rollout_path"]);
+        if (id !== undefined && rolloutPath !== undefined) {
+          yield { id, rolloutPath };
+        }
+      }
+      return;
+    } catch {} finally {
+      db.close();
+    }
+  }
+  for await (const rolloutPath of discoverRolloutPaths(options?.codexHome)) {
+    const meta = await parseSessionMeta(rolloutPath);
+    if (meta === null) {
+      continue;
+    }
+    const id = meta.meta.id;
+    if (id === "") {
+      continue;
+    }
+    if (options?.source !== undefined && meta.meta.source !== options.source) {
+      continue;
+    }
+    if (options?.cwd !== undefined && resolve2(meta.meta.cwd) !== resolve2(options.cwd)) {
+      continue;
+    }
+    if (options?.branch !== undefined && meta.git?.branch !== options.branch) {
+      continue;
+    }
+    yield { id, rolloutPath };
+  }
+}
+async function searchTranscriptFile(rolloutPath, query, options, budget, stopAtFirstMatch) {
+  const role = options?.role ?? "both";
+  const caseSensitive = options?.caseSensitive ?? false;
+  let matched = false;
+  let matchCount = 0;
+  let scannedBytes = 0;
+  let scannedEvents = 0;
+  let truncated = false;
+  let timedOut = false;
+  for await (const line of streamEvents(rolloutPath)) {
+    if (budget.maxEvents !== undefined && scannedEvents >= budget.maxEvents) {
+      truncated = true;
+      break;
+    }
+    if (budget.maxBytes !== undefined && scannedBytes >= budget.maxBytes) {
+      truncated = true;
+      break;
+    }
+    if (budget.deadlineAt !== undefined && Date.now() >= budget.deadlineAt) {
+      timedOut = true;
+      break;
+    }
+    scannedEvents += 1;
+    const texts = extractSearchableTexts(line, role);
+    if (texts.length === 0) {
+      continue;
+    }
+    for (const text of texts) {
+      const textBytes = Buffer2.byteLength(text, "utf8");
+      if (budget.maxBytes !== undefined && scannedBytes + textBytes > budget.maxBytes) {
+        truncated = true;
+        break;
+      }
+      scannedBytes += textBytes;
+      const count = countMatches(text, query, caseSensitive);
+      if (count > 0) {
+        matched = true;
+        matchCount += count;
+        if (stopAtFirstMatch) {
+          return {
+            matched,
+            matchCount,
+            scannedBytes,
+            scannedEvents,
+            truncated,
+            timedOut
+          };
+        }
+      }
+    }
+    if (truncated) {
+      break;
+    }
+  }
+  return {
+    matched,
+    matchCount,
+    scannedBytes,
+    scannedEvents,
+    truncated,
+    timedOut
+  };
+}
+function extractSearchableTexts(line, roleFilter) {
+  if (line.type === "event_msg") {
+    const payload = asRecord(line.payload);
+    if (payload === null) {
+      return [];
+    }
+    const eventType = asString(payload["type"]);
+    if (eventType === "UserMessage") {
+      const message = asString(payload["message"]);
+      return isRoleEnabled("user", roleFilter) && message !== undefined ? [message] : [];
+    }
+    if (eventType === "AgentMessage") {
+      const message = asString(payload["message"]);
+      return isRoleEnabled("assistant", roleFilter) && message !== undefined ? [message] : [];
+    }
+    if (eventType === "AgentReasoning") {
+      const text = asString(payload["text"]);
+      return isRoleEnabled("assistant", roleFilter) && text !== undefined ? [text] : [];
+    }
+    if (eventType === "TurnComplete") {
+      const lastAgentMessage = asString(payload["last_agent_message"]);
+      return isRoleEnabled("assistant", roleFilter) && lastAgentMessage !== undefined ? [lastAgentMessage] : [];
+    }
+    return [];
+  }
+  if (line.type === "response_item") {
+    const payload = asRecord(line.payload);
+    if (payload === null) {
+      return [];
+    }
+    const itemType = asString(payload["type"]);
+    if (itemType === "message") {
+      const role = asString(payload["role"]);
+      const text = extractResponseMessageText(payload["content"]);
+      if (text === undefined) {
+        return [];
+      }
+      if (role === "user" && isRoleEnabled("user", roleFilter)) {
+        return [text];
+      }
+      if (role === "assistant" && isRoleEnabled("assistant", roleFilter)) {
+        return [text];
+      }
+      return [];
+    }
+    if (itemType === "reasoning" && isRoleEnabled("assistant", roleFilter)) {
+      const summary = payload["summary"];
+      if (!Array.isArray(summary)) {
+        return [];
+      }
+      const texts = [];
+      for (const part of summary) {
+        const entry = asRecord(part);
+        const text = entry === null ? undefined : asString(entry["text"]);
+        if (text !== undefined) {
+          texts.push(text);
+        }
+      }
+      return texts;
+    }
+  }
+  return [];
+}
+function extractResponseMessageText(content) {
+  if (!Array.isArray(content)) {
+    return;
+  }
+  const parts = [];
+  for (const raw of content) {
+    const item = asRecord(raw);
+    if (item === null) {
+      continue;
+    }
+    const type = asString(item["type"]);
+    const text = asString(item["text"]);
+    if ((type === "input_text" || type === "output_text") && text !== undefined) {
+      parts.push(text);
+    }
+  }
+  if (parts.length === 0) {
+    return;
+  }
+  return parts.join(`
+`);
+}
+function isRoleEnabled(candidate, role) {
+  return role === "both" || role === candidate;
+}
+function countMatches(text, query, caseSensitive) {
+  const haystack = caseSensitive ? text : text.toLowerCase();
+  const needle = caseSensitive ? query : query.toLowerCase();
+  let count = 0;
+  let cursor = 0;
+  while (cursor <= haystack.length - needle.length) {
+    const idx = haystack.indexOf(needle, cursor);
+    if (idx < 0) {
+      break;
+    }
+    count += 1;
+    cursor = idx + needle.length;
+  }
+  return count;
+}
+function normalizeQuery(query) {
+  const normalized = query.trim();
+  if (normalized === "") {
+    throw new Error("query must not be empty");
+  }
+  return normalized;
+}
+function toBudget(options) {
+  const deadlineAt = options?.timeoutMs !== undefined ? Date.now() + Math.max(0, options.timeoutMs) : undefined;
+  return {
+    maxBytes: normalizePositiveInt(options?.maxBytes),
+    maxEvents: normalizePositiveInt(options?.maxEvents),
+    deadlineAt
+  };
+}
+function normalizePositiveInt(value) {
+  if (value === undefined || !Number.isFinite(value)) {
+    return;
+  }
+  return value > 0 ? Math.floor(value) : 0;
+}
+function asRecord(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+function asString(value) {
+  return typeof value === "string" ? value : undefined;
+}
 // src/process/manager.ts
 import { spawn } from "child_process";
 import { createInterface as createInterface2 } from "readline";
@@ -970,6 +1321,9 @@ function buildCommonArgs(options) {
       args.push("-c", override);
     }
   }
+  if (options?.additionalArgs !== undefined) {
+    args.push(...options.additionalArgs);
+  }
   return args;
 }
 function createManagedProcess(id, child, command, prompt) {
@@ -1011,12 +1365,12 @@ async function* streamJsonlOutput(child) {
   }
 }
 function waitForExit(child) {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     child.on("exit", (code) => {
-      resolve2(code ?? 1);
+      resolve3(code ?? 1);
     });
     child.on("error", () => {
-      resolve2(1);
+      resolve3(1);
     });
   });
 }
@@ -2414,8 +2768,8 @@ class RunningSession extends EventEmitter2 {
     this.startedAt = startedAt;
     this.streamGranularity = streamGranularity;
     let resolveCompletion = null;
-    const completionPromise = new Promise((resolve2) => {
-      resolveCompletion = resolve2;
+    const completionPromise = new Promise((resolve3) => {
+      resolveCompletion = resolve3;
     });
     this.state = {
       completed: false,
@@ -2486,8 +2840,8 @@ class RunningSession extends EventEmitter2 {
       if (this.state.completed) {
         break;
       }
-      await new Promise((resolve2) => {
-        this.state.waiter = resolve2;
+      await new Promise((resolve3) => {
+        this.state.waiter = resolve3;
       });
     }
   }
@@ -2521,6 +2875,7 @@ class SessionRunner {
         sandbox: config.sandbox,
         approvalMode: config.approvalMode,
         fullAuto: config.fullAuto,
+        additionalArgs: config.additionalArgs,
         images: config.images,
         streamGranularity: config.streamGranularity
       });
@@ -2535,9 +2890,6 @@ class SessionRunner {
   }
   async resumeSession(sessionId, prompt, options) {
     const sessionInfo = await findSession(sessionId, this.options.codexHome);
-    if (sessionInfo === null) {
-      throw new Error(`Session not found: ${sessionId}`);
-    }
     const startedAt = new Date;
     const proc = this.pm.spawnResume(sessionId, {
       ...options,
@@ -2550,13 +2902,17 @@ class SessionRunner {
       running.pushLine(line);
     });
     const includeExisting = this.options.includeExistingOnResume === true;
-    if (includeExisting) {
-      const existing = await readRollout(sessionInfo.rolloutPath);
-      for (const line of existing) {
-        running.pushLine(line);
+    if (sessionInfo !== null) {
+      if (includeExisting) {
+        const existing = await readRollout(sessionInfo.rolloutPath);
+        for (const line of existing) {
+          running.pushLine(line);
+        }
       }
+      await watcher.watchFile(sessionInfo.rolloutPath);
+    } else {
+      this.attachWatchWhenSessionAppears(sessionId, watcher, includeExisting);
     }
-    await watcher.watchFile(sessionInfo.rolloutPath);
     running.setStopHook(() => watcher.stop());
     if (prompt !== undefined && prompt.trim().length > 0) {
       this.pm.writeInput(proc.id, prompt + `
@@ -2567,6 +2923,25 @@ class SessionRunner {
       running.finish(exitCode);
     });
     return running;
+  }
+  async attachWatchWhenSessionAppears(sessionId, watcher, includeExisting) {
+    for (let attempt = 0;attempt < 20; attempt += 1) {
+      if (watcher.isClosed) {
+        return;
+      }
+      const discovered = await findSession(sessionId, this.options.codexHome);
+      if (discovered !== null) {
+        if (includeExisting) {
+          const existing = await readRollout(discovered.rolloutPath);
+          for (const line of existing) {
+            watcher.emit("line", discovered.rolloutPath, line);
+          }
+        }
+        await watcher.watchFile(discovered.rolloutPath);
+        return;
+      }
+      await sleep(100);
+    }
   }
   listActiveSessions() {
     return Array.from(this.active);
@@ -2585,6 +2960,7 @@ class SessionRunner {
       sandbox: config.sandbox,
       approvalMode: config.approvalMode,
       fullAuto: config.fullAuto,
+      additionalArgs: config.additionalArgs,
       images: config.images,
       streamGranularity: config.streamGranularity
     };
@@ -2666,8 +3042,8 @@ async function waitForExit2(pm, processId) {
   }
 }
 function sleep(ms) {
-  return new Promise((resolve2) => {
-    setTimeout(resolve2, ms);
+  return new Promise((resolve3) => {
+    setTimeout(resolve3, ms);
   });
 }
 // src/sdk/agent-runner.ts
@@ -2678,28 +3054,58 @@ import { randomUUID as randomUUID8 } from "crypto";
 async function* runAgent(request, options) {
   const runner = new SessionRunner(options);
   const normalized = await normalizeAttachments(request.attachments);
-  let currentSessionId = isResumeRequest(request) ? request.sessionId : undefined;
+  const resumed = isResumeRequest(request);
+  let currentSessionId = resumed ? request.sessionId : undefined;
   try {
     const session = await startFromRequest(runner, request, normalized.imagePaths);
     currentSessionId = session.sessionId;
-    yield {
-      type: "session.started",
-      sessionId: session.sessionId,
-      resumed: isResumeRequest(request)
-    };
-    for await (const chunk of session.messages()) {
-      const resolvedSessionId = resolveSessionId(session.sessionId, chunk);
+    const iterator = session.messages();
+    if (resumed) {
+      yield {
+        type: "session.started",
+        sessionId: session.sessionId,
+        resumed: true
+      };
+    } else {
+      const firstChunk = await iterator.next();
+      if (firstChunk.done) {
+        yield {
+          type: "session.started",
+          sessionId: session.sessionId,
+          resumed: false
+        };
+      } else {
+        const startedSessionId = resolveSessionId(session.sessionId, firstChunk.value);
+        currentSessionId = startedSessionId;
+        yield {
+          type: "session.started",
+          sessionId: startedSessionId,
+          resumed: false
+        };
+        yield {
+          type: "session.message",
+          sessionId: startedSessionId,
+          chunk: firstChunk.value
+        };
+      }
+    }
+    while (true) {
+      const nextChunk = await iterator.next();
+      if (nextChunk.done) {
+        break;
+      }
+      const resolvedSessionId = resolveSessionId(session.sessionId, nextChunk.value);
       currentSessionId = resolvedSessionId;
       yield {
         type: "session.message",
         sessionId: resolvedSessionId,
-        chunk
+        chunk: nextChunk.value
       };
     }
     const result = await session.waitForCompletion();
     yield {
       type: "session.completed",
-      sessionId: session.sessionId,
+      sessionId: currentSessionId ?? session.sessionId,
       result
     };
   } catch (error) {
@@ -2720,6 +3126,7 @@ async function startFromRequest(runner, request, imagePaths) {
       sandbox: request.sandbox,
       approvalMode: request.approvalMode,
       fullAuto: request.fullAuto,
+      additionalArgs: request.additionalArgs,
       images: imagePaths,
       streamGranularity: request.streamGranularity
     });
@@ -2732,6 +3139,7 @@ async function startFromRequest(runner, request, imagePaths) {
     sandbox: request.sandbox,
     approvalMode: request.approvalMode,
     fullAuto: request.fullAuto,
+    additionalArgs: request.additionalArgs,
     images: imagePaths,
     streamGranularity: request.streamGranularity
   };
@@ -3119,7 +3527,7 @@ class DefaultAppServerClient {
     if (this.ws !== null)
       return;
     this.ws = this.wsFactory(this.config.url);
-    await new Promise((resolve2, reject) => {
+    await new Promise((resolve3, reject) => {
       const ws = this.ws;
       if (ws === null) {
         reject(new Error("App-server WebSocket unavailable"));
@@ -3129,7 +3537,7 @@ class DefaultAppServerClient {
       ws.addEventListener("open", () => {
         if (!settled) {
           settled = true;
-          resolve2();
+          resolve3();
         }
       });
       ws.addEventListener("error", () => {
@@ -3172,12 +3580,12 @@ class DefaultAppServerClient {
       method,
       ...params !== undefined ? { params } : {}
     };
-    const responsePromise = new Promise((resolve2, reject) => {
+    const responsePromise = new Promise((resolve3, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`App-server request timeout (${method})`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve2, reject, timer });
+      this.pending.set(id, { resolve: resolve3, reject, timer });
     });
     this.ws.send(JSON.stringify(payload));
     const raw = await responsePromise;
@@ -3304,6 +3712,28 @@ function json2(data, status = 200) {
 function isSessionSource(s) {
   return s === "cli" || s === "vscode" || s === "exec" || s === "unknown";
 }
+function isSearchRole(role) {
+  return role === "user" || role === "assistant" || role === "both";
+}
+function parseOptionalNonNegativeInt(raw) {
+  if (raw === null) {
+    return;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+function parseOptionalBoolean(raw) {
+  if (raw === null) {
+    return;
+  }
+  if (raw === "true") {
+    return true;
+  }
+  if (raw === "false") {
+    return false;
+  }
+  return;
+}
 var handleListSessions = async (req, _params, config) => {
   const url = new URL(req.url);
   const sourceParam = url.searchParams.get("source");
@@ -3324,6 +3754,33 @@ var handleListSessions = async (req, _params, config) => {
   });
   return json2(result);
 };
+var handleSearchSessions = async (req, _params, config) => {
+  const url = new URL(req.url);
+  const query = url.searchParams.get("q");
+  if (query === null || query.trim() === "") {
+    return json2({ error: "Missing search query: q" }, 400);
+  }
+  const sourceParam = url.searchParams.get("source");
+  const source = sourceParam !== null && isSessionSource(sourceParam) ? sourceParam : undefined;
+  const roleParam = url.searchParams.get("role");
+  const role = roleParam !== null && isSearchRole(roleParam) ? roleParam : undefined;
+  const caseSensitive = parseOptionalBoolean(url.searchParams.get("caseSensitive"));
+  const result = await searchSessions(query, {
+    limit: parseOptionalNonNegativeInt(url.searchParams.get("limit")) ?? 50,
+    offset: parseOptionalNonNegativeInt(url.searchParams.get("offset")) ?? 0,
+    cwd: url.searchParams.get("cwd") ?? undefined,
+    branch: url.searchParams.get("branch") ?? undefined,
+    maxBytes: parseOptionalNonNegativeInt(url.searchParams.get("maxBytes")),
+    maxEvents: parseOptionalNonNegativeInt(url.searchParams.get("maxEvents")),
+    maxSessions: parseOptionalNonNegativeInt(url.searchParams.get("maxSessions")),
+    timeoutMs: parseOptionalNonNegativeInt(url.searchParams.get("timeoutMs")),
+    ...source !== undefined ? { source } : {},
+    ...role !== undefined ? { role } : {},
+    ...caseSensitive !== undefined ? { caseSensitive } : {},
+    ...config.codexHome !== undefined ? { codexHome: config.codexHome } : {}
+  });
+  return json2(result);
+};
 var handleGetSession = async (_req, params, config) => {
   const id = params["id"];
   if (id === undefined) {
@@ -3334,6 +3791,29 @@ var handleGetSession = async (_req, params, config) => {
     return json2({ error: "Session not found" }, 404);
   }
   return json2(session);
+};
+var handleSearchSessionTranscript = async (req, params, config) => {
+  const id = params["id"];
+  if (id === undefined) {
+    return json2({ error: "Missing session id" }, 400);
+  }
+  const url = new URL(req.url);
+  const query = url.searchParams.get("q");
+  if (query === null || query.trim() === "") {
+    return json2({ error: "Missing search query: q" }, 400);
+  }
+  const roleParam = url.searchParams.get("role");
+  const role = roleParam !== null && isSearchRole(roleParam) ? roleParam : undefined;
+  const caseSensitive = parseOptionalBoolean(url.searchParams.get("caseSensitive"));
+  const result = await searchSessionTranscript(id, query, {
+    maxBytes: parseOptionalNonNegativeInt(url.searchParams.get("maxBytes")),
+    maxEvents: parseOptionalNonNegativeInt(url.searchParams.get("maxEvents")),
+    timeoutMs: parseOptionalNonNegativeInt(url.searchParams.get("timeoutMs")),
+    ...role !== undefined ? { role } : {},
+    ...caseSensitive !== undefined ? { caseSensitive } : {},
+    ...config.codexHome !== undefined ? { codexHome: config.codexHome } : {}
+  });
+  return json2(result);
 };
 var handleSessionEvents = async (req, params, config) => {
   const id = params["id"];
@@ -3364,12 +3844,12 @@ async function* watchSession(rolloutPath) {
   }
   const watcher = new RolloutWatcher;
   const queue = [];
-  let resolve2 = null;
+  let resolve3 = null;
   watcher.on("line", (_path, line) => {
     queue.push(line);
-    if (resolve2 !== null) {
-      resolve2();
-      resolve2 = null;
+    if (resolve3 !== null) {
+      resolve3();
+      resolve3 = null;
     }
   });
   await watcher.watchFile(rolloutPath);
@@ -3379,7 +3859,7 @@ async function* watchSession(rolloutPath) {
         yield queue.shift();
       } else {
         await new Promise((r) => {
-          resolve2 = r;
+          resolve3 = r;
         });
       }
     }
@@ -3812,7 +4292,9 @@ function startServer(config) {
   router.add("GET", "/health", handleHealth);
   router.add("GET", "/status", handleStatus);
   router.add("GET", "/api/sessions", handleListSessions);
+  router.add("GET", "/api/sessions/search", handleSearchSessions);
   router.add("GET", "/api/sessions/:id", handleGetSession);
+  router.add("GET", "/api/sessions/:id/search", handleSearchSessionTranscript);
   router.add("GET", "/api/sessions/:id/events", handleSessionEvents);
   router.add("GET", "/api/groups", handleListGroups);
   router.add("POST", "/api/groups", handleCreateGroup);
@@ -4422,10 +4904,10 @@ Watching for updates... (Ctrl+C to stop)
     console.error(`Watch error: ${err.message}`);
   });
   await watcher.watchFile(session.rolloutPath);
-  await new Promise((resolve2) => {
+  await new Promise((resolve3) => {
     const handler = () => {
       watcher.stop();
-      resolve2();
+      resolve3();
     };
     process.on("SIGINT", handler);
     process.on("SIGTERM", handler);
@@ -5367,12 +5849,12 @@ async function handleServer(action, args) {
   }
   const handle = startServer(config);
   console.log(`Server listening on http://${handle.hostname}:${handle.port}`);
-  await new Promise((resolve2) => {
+  await new Promise((resolve3) => {
     const shutdown = () => {
       console.log(`
 Shutting down server...`);
       handle.stop();
-      resolve2();
+      resolve3();
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
@@ -5591,6 +6073,8 @@ export {
   startServer,
   startDaemon,
   sessionsWatchDir,
+  searchSessions,
+  searchSessionTranscript,
   searchBookmarks,
   saveTokenConfig,
   saveQueues,
