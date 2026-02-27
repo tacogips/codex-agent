@@ -3,12 +3,14 @@
  */
 
 import { listSessions, findSession } from "../../session/index";
+import { searchSessionTranscript, searchSessions } from "../../session/search";
 import { readRollout } from "../../rollout/reader";
 import { RolloutWatcher } from "../../rollout/watcher";
 import { sseResponse } from "../sse";
 import type { RouteHandler } from "../types";
 import type { SessionSource } from "../../types/rollout";
 import type { RolloutLine } from "../../types/rollout";
+import type { SessionSearchRole } from "../../types/session";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -21,7 +23,36 @@ function isSessionSource(s: string): s is SessionSource {
   return s === "cli" || s === "vscode" || s === "exec" || s === "unknown";
 }
 
-export const handleListSessions: RouteHandler = async (req, _params, config) => {
+function isSearchRole(role: string): role is SessionSearchRole {
+  return role === "user" || role === "assistant" || role === "both";
+}
+
+function parseOptionalNonNegativeInt(raw: string | null): number | undefined {
+  if (raw === null) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function parseOptionalBoolean(raw: string | null): boolean | undefined {
+  if (raw === null) {
+    return undefined;
+  }
+  if (raw === "true") {
+    return true;
+  }
+  if (raw === "false") {
+    return false;
+  }
+  return undefined;
+}
+
+export const handleListSessions: RouteHandler = async (
+  req,
+  _params,
+  config,
+) => {
   const url = new URL(req.url);
   const sourceParam = url.searchParams.get("source");
   const source =
@@ -47,6 +78,49 @@ export const handleListSessions: RouteHandler = async (req, _params, config) => 
   return json(result);
 };
 
+export const handleSearchSessions: RouteHandler = async (
+  req,
+  _params,
+  config,
+) => {
+  const url = new URL(req.url);
+  const query = url.searchParams.get("q");
+  if (query === null || query.trim() === "") {
+    return json({ error: "Missing search query: q" }, 400);
+  }
+
+  const sourceParam = url.searchParams.get("source");
+  const source =
+    sourceParam !== null && isSessionSource(sourceParam)
+      ? sourceParam
+      : undefined;
+  const roleParam = url.searchParams.get("role");
+  const role =
+    roleParam !== null && isSearchRole(roleParam) ? roleParam : undefined;
+  const caseSensitive = parseOptionalBoolean(
+    url.searchParams.get("caseSensitive"),
+  );
+
+  const result = await searchSessions(query, {
+    limit: parseOptionalNonNegativeInt(url.searchParams.get("limit")) ?? 50,
+    offset: parseOptionalNonNegativeInt(url.searchParams.get("offset")) ?? 0,
+    cwd: url.searchParams.get("cwd") ?? undefined,
+    branch: url.searchParams.get("branch") ?? undefined,
+    maxBytes: parseOptionalNonNegativeInt(url.searchParams.get("maxBytes")),
+    maxEvents: parseOptionalNonNegativeInt(url.searchParams.get("maxEvents")),
+    maxSessions: parseOptionalNonNegativeInt(
+      url.searchParams.get("maxSessions"),
+    ),
+    timeoutMs: parseOptionalNonNegativeInt(url.searchParams.get("timeoutMs")),
+    ...(source !== undefined ? { source } : {}),
+    ...(role !== undefined ? { role } : {}),
+    ...(caseSensitive !== undefined ? { caseSensitive } : {}),
+    ...(config.codexHome !== undefined ? { codexHome: config.codexHome } : {}),
+  });
+
+  return json(result);
+};
+
 export const handleGetSession: RouteHandler = async (_req, params, config) => {
   const id = params["id"];
   if (id === undefined) {
@@ -61,7 +135,46 @@ export const handleGetSession: RouteHandler = async (_req, params, config) => {
   return json(session);
 };
 
-export const handleSessionEvents: RouteHandler = async (req, params, config) => {
+export const handleSearchSessionTranscript: RouteHandler = async (
+  req,
+  params,
+  config,
+) => {
+  const id = params["id"];
+  if (id === undefined) {
+    return json({ error: "Missing session id" }, 400);
+  }
+
+  const url = new URL(req.url);
+  const query = url.searchParams.get("q");
+  if (query === null || query.trim() === "") {
+    return json({ error: "Missing search query: q" }, 400);
+  }
+
+  const roleParam = url.searchParams.get("role");
+  const role =
+    roleParam !== null && isSearchRole(roleParam) ? roleParam : undefined;
+  const caseSensitive = parseOptionalBoolean(
+    url.searchParams.get("caseSensitive"),
+  );
+
+  const result = await searchSessionTranscript(id, query, {
+    maxBytes: parseOptionalNonNegativeInt(url.searchParams.get("maxBytes")),
+    maxEvents: parseOptionalNonNegativeInt(url.searchParams.get("maxEvents")),
+    timeoutMs: parseOptionalNonNegativeInt(url.searchParams.get("timeoutMs")),
+    ...(role !== undefined ? { role } : {}),
+    ...(caseSensitive !== undefined ? { caseSensitive } : {}),
+    ...(config.codexHome !== undefined ? { codexHome: config.codexHome } : {}),
+  });
+
+  return json(result);
+};
+
+export const handleSessionEvents: RouteHandler = async (
+  req,
+  params,
+  config,
+) => {
   const id = params["id"];
   if (id === undefined) {
     return json({ error: "Missing session id" }, 400);

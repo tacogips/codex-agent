@@ -12,7 +12,9 @@ import { createAppServerClient } from "./app-server-client";
 import { handleHealth, handleStatus } from "./handlers/health";
 import {
   handleListSessions,
+  handleSearchSessions,
   handleGetSession,
+  handleSearchSessionTranscript,
   handleSessionEvents,
 } from "./handlers/sessions";
 import {
@@ -131,7 +133,9 @@ export function startServer(config: ServerConfig): ServerHandle {
 
   // Sessions
   router.add("GET", "/api/sessions", handleListSessions);
+  router.add("GET", "/api/sessions/search", handleSearchSessions);
   router.add("GET", "/api/sessions/:id", handleGetSession);
+  router.add("GET", "/api/sessions/:id/search", handleSearchSessionTranscript);
   router.add("GET", "/api/sessions/:id/events", handleSessionEvents);
 
   // Groups

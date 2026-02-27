@@ -45,3 +45,58 @@ export interface SessionListResult {
   readonly offset: number;
   readonly limit: number;
 }
+
+/**
+ * Role filter for transcript search.
+ */
+export type SessionSearchRole = "user" | "assistant" | "both";
+
+/**
+ * Shared options for transcript search.
+ */
+export interface SessionTranscriptSearchOptions {
+  readonly caseSensitive?: boolean | undefined;
+  readonly role?: SessionSearchRole | undefined;
+  readonly maxBytes?: number | undefined;
+  readonly maxEvents?: number | undefined;
+  readonly timeoutMs?: number | undefined;
+}
+
+/**
+ * Per-session transcript search result.
+ */
+export interface SessionTranscriptSearchResult {
+  readonly sessionId: string;
+  readonly matched: boolean;
+  readonly matchCount: number;
+  readonly scannedBytes: number;
+  readonly scannedEvents: number;
+  readonly truncated: boolean;
+  readonly timedOut: boolean;
+  readonly durationMs: number;
+}
+
+/**
+ * Options for cross-session transcript search.
+ */
+export interface SessionsSearchOptions
+  extends SessionListOptions,
+    SessionTranscriptSearchOptions {
+  readonly maxSessions?: number | undefined;
+}
+
+/**
+ * Cross-session transcript search result.
+ */
+export interface SessionsSearchResult {
+  readonly sessionIds: readonly string[];
+  readonly total: number;
+  readonly offset: number;
+  readonly limit: number;
+  readonly scannedSessions: number;
+  readonly scannedBytes: number;
+  readonly scannedEvents: number;
+  readonly truncated: boolean;
+  readonly timedOut: boolean;
+  readonly durationMs: number;
+}

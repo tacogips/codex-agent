@@ -90,6 +90,7 @@ Large features are split into multiple related plans with cross-references.
 | [phase3-sqlite-group-queue](completed/phase3-sqlite-group-queue.md) | 2026-02-20 | design-codex-session-management.md#4.3.2, #5.1, #4.6 |
 | [phase4-daemon-app-server](completed/phase4-daemon-app-server.md) | 2026-02-20 | design-codex-session-management.md#4.5, #4.6, #5.2, #6 |
 | [phase5-claude-parity-features](completed/phase5-claude-parity-features.md) | 2026-02-20 | design-claude-parity-gap.md |
+| [issue16-transcript-search](completed/issue16-transcript-search.md) | 2026-02-27 | github issue #16 |
 
 ## Phase Dependencies (for impl-exec-auto)
 
@@ -105,6 +106,8 @@ Only plans from eligible phases should be read to minimize context loading.
 | 3 | COMPLETED | Phase 2 |
 | 4 | COMPLETED | Phase 3 |
 | 5 | COMPLETED | Phase 4 |
+| 6 | COMPLETED | Phase 5 |
+| 7 | COMPLETED | Phase 6 |
 
 ### Phase to Plans Mapping
 
@@ -124,6 +127,12 @@ PHASE_TO_PLANS = {
   ],
   5: [
     "phase5-claude-parity-features.md"
+  ],
+  6: [
+    "issue6-stable-runner-api.md"
+  ],
+  7: [
+    "issue16-transcript-search.md"
   ]
 }
 ```

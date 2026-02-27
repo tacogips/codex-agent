@@ -446,6 +446,101 @@ describe("HTTP Server", () => {
   });
 });
 
+describe("HTTP Session Search API", () => {
+  let server: ServerHandle;
+  let baseUrl: string;
+  let codexHome: string;
+  let configDir: string;
+
+  beforeAll(async () => {
+    codexHome = await mkdtemp(join(tmpdir(), "codex-agent-search-home-"));
+    configDir = await mkdtemp(join(tmpdir(), "codex-agent-search-config-"));
+
+    const dayDir = join(codexHome, "sessions", "2026", "02", "27");
+    await mkdir(dayDir, { recursive: true });
+
+    const sessionId = "search-session-001";
+    const rolloutPath = join(dayDir, `rollout-${sessionId}.jsonl`);
+
+    const lines = [
+      JSON.stringify({
+        timestamp: "2026-02-27T10:00:00.000Z",
+        type: "session_meta",
+        payload: {
+          meta: {
+            id: sessionId,
+            timestamp: "2026-02-27T10:00:00.000Z",
+            cwd: "/tmp/search-project",
+            originator: "codex",
+            cli_version: "1.0.0",
+            source: "cli",
+          },
+          git: {
+            branch: "main",
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-27T10:00:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "UserMessage",
+          message: "Please tune performance",
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-27T10:00:02.000Z",
+        type: "event_msg",
+        payload: {
+          type: "AgentMessage",
+          message: "もう一度 試してください",
+        },
+      }),
+    ].join("\n");
+    await writeFile(rolloutPath, lines + "\n", "utf-8");
+
+    server = startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      codexHome,
+      configDir,
+      transport: "local-cli",
+    });
+    baseUrl = `http://127.0.0.1:${server.port}`;
+  });
+
+  afterAll(async () => {
+    server.stop();
+    await rm(codexHome, { recursive: true, force: true });
+    await rm(configDir, { recursive: true, force: true });
+  });
+
+  it("GET /api/sessions/search returns matching session IDs", async () => {
+    const resp = await fetch(`${baseUrl}/api/sessions/search?q=performance&role=user`);
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as Record<string, unknown>;
+    expect(body["sessionIds"]).toEqual(["search-session-001"]);
+    expect(body["total"]).toBe(1);
+  });
+
+  it("GET /api/sessions/:id/search finds multilingual transcript text", async () => {
+    const resp = await fetch(
+      `${baseUrl}/api/sessions/search-session-001/search?q=${encodeURIComponent("もう一度")}&role=assistant`,
+    );
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as Record<string, unknown>;
+    expect(body["matched"]).toBe(true);
+    expect(body["matchCount"]).toBeTypeOf("number");
+  });
+
+  it("returns 400 for empty query", async () => {
+    const resp = await fetch(`${baseUrl}/api/sessions/search?q=`);
+    expect(resp.status).toBe(400);
+    const body = (await resp.json()) as Record<string, unknown>;
+    expect(body["error"]).toBe("Missing search query: q");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // HTTP Server with auth enabled
 // ---------------------------------------------------------------------------

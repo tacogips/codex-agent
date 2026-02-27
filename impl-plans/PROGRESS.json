@@ -1,12 +1,13 @@
 {
-  "lastUpdated": "2026-02-25T00:05:00Z",
+  "lastUpdated": "2026-02-27T18:40:00Z",
   "phases": {
     "1": { "status": "COMPLETED" },
     "2": { "status": "COMPLETED" },
     "3": { "status": "COMPLETED" },
     "4": { "status": "COMPLETED" },
     "5": { "status": "COMPLETED" },
-    "6": { "status": "COMPLETED" }
+    "6": { "status": "COMPLETED" },
+    "7": { "status": "COMPLETED" }
   },
   "plans": {
     "phase1-core-types-rollout-reader": {
@@ -66,6 +67,15 @@
       "tasks": {
         "TASK-001": { "status": "Completed", "parallelizable": false, "deps": [] },
         "TASK-002": { "status": "Completed", "parallelizable": false, "deps": ["TASK-001"] }
+      }
+    },
+    "issue16-transcript-search": {
+      "phase": 7,
+      "status": "Completed",
+      "tasks": {
+        "TASK-001": { "status": "Completed", "parallelizable": false, "deps": [] },
+        "TASK-002": { "status": "Completed", "parallelizable": false, "deps": ["TASK-001"] },
+        "TASK-003": { "status": "Completed", "parallelizable": false, "deps": ["TASK-001", "TASK-002"] }
       }
     }
   }
