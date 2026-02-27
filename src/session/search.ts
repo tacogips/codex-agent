@@ -32,6 +32,13 @@ interface SessionCandidate {
   readonly rolloutPath: string;
 }
 
+interface ParsedSessionMeta {
+  readonly id: string;
+  readonly cwd: string | undefined;
+  readonly source: string | undefined;
+  readonly branch: string | undefined;
+}
+
 const DEFAULT_LIMIT = 50;
 
 /**
@@ -224,21 +231,21 @@ async function* iterCandidates(
       continue;
     }
 
-    const id = meta.meta.id;
-    if (id === "") {
+    const parsedMeta = parseCandidateSessionMeta(meta);
+    if (parsedMeta === null) {
       continue;
     }
+    const { id, cwd, source, branch } = parsedMeta;
 
-    if (options?.source !== undefined && meta.meta.source !== options.source) {
+    if (options?.source !== undefined && source !== options.source) {
       continue;
     }
-    if (
-      options?.cwd !== undefined &&
-      resolve(meta.meta.cwd) !== resolve(options.cwd)
-    ) {
-      continue;
+    if (options?.cwd !== undefined) {
+      if (cwd === undefined || resolve(cwd) !== resolve(options.cwd)) {
+        continue;
+      }
     }
-    if (options?.branch !== undefined && meta.git?.branch !== options.branch) {
+    if (options?.branch !== undefined && branch !== options.branch) {
       continue;
     }
 
@@ -499,4 +506,27 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function parseCandidateSessionMeta(meta: unknown): ParsedSessionMeta | null {
+  const payload = asRecord(meta);
+  const metaRecord = payload === null ? null : asRecord(payload["meta"]);
+  if (metaRecord === null) {
+    return null;
+  }
+
+  const id = asString(metaRecord["id"]);
+  if (id === undefined || id === "") {
+    return null;
+  }
+
+  const git = asRecord(payload["git"]);
+  const branch = git === null ? undefined : asString(git["branch"]);
+
+  return {
+    id,
+    cwd: asString(metaRecord["cwd"]),
+    source: asString(metaRecord["source"]),
+    branch,
+  };
 }

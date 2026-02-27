@@ -80,6 +80,23 @@ describe("session search", () => {
   beforeAll(async () => {
     await mkdir(codexHome, { recursive: true });
 
+    const malformedDir = join(codexHome, "sessions", "2026", "02", "28");
+    await mkdir(malformedDir, { recursive: true });
+    await writeFile(
+      join(malformedDir, "rollout-malformed.jsonl"),
+      [
+        JSON.stringify({
+          timestamp: "2026-02-28T10:00:00.000Z",
+          type: "session_meta",
+          payload: {
+            meta: {},
+          },
+        }),
+        userMessage("keyword from malformed session"),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
     await writeRollout(
       codexHome,
       ["2026", "02", "27"],
@@ -215,5 +232,15 @@ describe("session search", () => {
     await expect(searchSessions("   ", { codexHome })).rejects.toThrow(
       "query must not be empty",
     );
+  });
+
+  test("skips malformed session metadata during filesystem fallback", async () => {
+    const result = await searchSessions("performance", {
+      codexHome,
+      role: "user",
+    });
+
+    expect(result.sessionIds).toEqual(["session-a"]);
+    expect(result.total).toBe(1);
   });
 });
