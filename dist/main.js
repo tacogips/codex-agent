@@ -955,17 +955,20 @@ async function* iterCandidates(options) {
     if (meta === null) {
       continue;
     }
-    const id = meta.meta.id;
-    if (id === "") {
+    const parsedMeta = parseCandidateSessionMeta(meta);
+    if (parsedMeta === null) {
       continue;
     }
-    if (options?.source !== undefined && meta.meta.source !== options.source) {
+    const { id, cwd, source, branch } = parsedMeta;
+    if (options?.source !== undefined && source !== options.source) {
       continue;
     }
-    if (options?.cwd !== undefined && resolve2(meta.meta.cwd) !== resolve2(options.cwd)) {
-      continue;
+    if (options?.cwd !== undefined) {
+      if (cwd === undefined || resolve2(cwd) !== resolve2(options.cwd)) {
+        continue;
+      }
     }
-    if (options?.branch !== undefined && meta.git?.branch !== options.branch) {
+    if (options?.branch !== undefined && branch !== options.branch) {
       continue;
     }
     yield { id, rolloutPath };
@@ -1166,6 +1169,25 @@ function asRecord(value) {
 }
 function asString(value) {
   return typeof value === "string" ? value : undefined;
+}
+function parseCandidateSessionMeta(meta) {
+  const payload = asRecord(meta);
+  const metaRecord = payload === null ? null : asRecord(payload["meta"]);
+  if (metaRecord === null) {
+    return null;
+  }
+  const id = asString(metaRecord["id"]);
+  if (id === undefined || id === "") {
+    return null;
+  }
+  const git = asRecord(payload["git"]);
+  const branch = git === null ? undefined : asString(git["branch"]);
+  return {
+    id,
+    cwd: asString(metaRecord["cwd"]),
+    source: asString(metaRecord["source"]),
+    branch
+  };
 }
 // src/process/manager.ts
 import { spawn } from "child_process";
@@ -3253,6 +3275,84 @@ function toError(value) {
 function isResumeRequest(request) {
   return typeof request.sessionId === "string";
 }
+// src/sdk/tool-versions.ts
+import { spawn as spawn2 } from "child_process";
+var DEFAULT_TIMEOUT_MS = 5000;
+async function getCodexCliVersion(options) {
+  return await readToolVersion(options?.codexBinary ?? "codex", options?.timeoutMs);
+}
+async function getToolVersions(options) {
+  const codex = await getCodexCliVersion(options);
+  if (options?.includeGit !== true) {
+    return { codex };
+  }
+  const git = await readToolVersion(options.gitBinary ?? "git", options.timeoutMs);
+  return { codex, git };
+}
+async function readToolVersion(binary, timeoutMs) {
+  const effectiveTimeout = timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  return await new Promise((resolve3) => {
+    const child = spawn2(binary, ["--version"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env }
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const settle = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve3(result);
+    };
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      settle({ version: null, error: message });
+    });
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        const line = firstLine(stdout);
+        if (line !== null) {
+          settle({ version: line, error: null });
+          return;
+        }
+        settle({
+          version: null,
+          error: "version command succeeded but produced no output"
+        });
+        return;
+      }
+      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+      const details = firstLine(stderr);
+      const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
+      settle({ version: null, error: message });
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      settle({
+        version: null,
+        error: `version command timed out after ${effectiveTimeout}ms`
+      });
+    }, effectiveTimeout);
+  });
+}
+function firstLine(value) {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return trimmed.split(/\r?\n/u)[0] ?? null;
+}
 // src/server/router.ts
 class Router {
   routes = [];
@@ -3492,7 +3592,7 @@ class WebSocketManager {
 }
 
 // src/server/app-server-client.ts
-var DEFAULT_TIMEOUT_MS = 1e4;
+var DEFAULT_TIMEOUT_MS2 = 1e4;
 function randomId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -3574,7 +3674,7 @@ class DefaultAppServerClient {
       throw new Error("App-server is not connected");
     }
     const id = randomId();
-    const timeoutMs = this.config.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timeoutMs = this.config.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS2;
     const payload = {
       id,
       method,
@@ -4425,7 +4525,7 @@ function resolveServerConfig(overrides) {
   };
 }
 // src/daemon/manager.ts
-import { spawn as spawn2 } from "child_process";
+import { spawn as spawn3 } from "child_process";
 import { readFile as readFile7, writeFile as writeFile7, rename as rename6, unlink, mkdir as mkdir6 } from "fs/promises";
 import { join as join10 } from "path";
 import { homedir as homedir7 } from "os";
@@ -4515,7 +4615,7 @@ async function startDaemon(config = {}) {
       daemonArgs.push("--app-server-url", config.appServerUrl);
     }
   }
-  const child = spawn2("bun", daemonArgs, { detached: true, stdio: "ignore" });
+  const child = spawn3("bun", daemonArgs, { detached: true, stdio: "ignore" });
   child.unref();
   if (child.pid === undefined) {
     throw new Error("Failed to spawn daemon process");
@@ -4701,6 +4801,7 @@ Usage:
   codex-agent session list [options]
   codex-agent session show <id> [--tasks]
   codex-agent session watch <id>
+  codex-agent session run --prompt <P> [options]
   codex-agent session resume <id> [options]
   codex-agent session fork <id> [--nth-message N] [options]
 
@@ -4748,6 +4849,8 @@ Usage:
   codex-agent daemon stop
   codex-agent daemon status
 
+  codex-agent version [--json] [--include-git]
+
 Session list options:
   --source <cli|vscode|exec>  Filter by session source
   --cwd <path>                Filter by working directory
@@ -4759,6 +4862,8 @@ Common process options:
   --model <model>             Model to use
   --sandbox <full|network-only|none>  Sandbox mode
   --full-auto                 Enable full-auto mode
+  --stream-granularity <event|char>  Stream by rollout event or character
+  --char-delay-ms <n>         Delay per rendered char in ms (session run only, default: 8)
   --image <path>              Attach image(s) to prompt (repeatable)
 
 Server options:
@@ -4802,11 +4907,39 @@ async function run(argv) {
     case "daemon":
       await handleDaemon(action, rest);
       break;
+    case "version":
+      await handleVersion(args.slice(1));
+      break;
     default:
       console.error(`Unknown command: ${subcommand}`);
       console.log(USAGE);
       process.exitCode = 1;
   }
+}
+async function handleVersion(args) {
+  const { asJson, includeGit } = parseVersionArgs(args);
+  const versions = await getToolVersions({ includeGit });
+  if (asJson) {
+    console.log(JSON.stringify(versions, null, 2));
+    return;
+  }
+  printToolVersion("codex", versions.codex);
+  if (versions.git !== undefined) {
+    printToolVersion("git", versions.git);
+  }
+}
+function parseVersionArgs(args) {
+  return {
+    asJson: args.includes("--json"),
+    includeGit: args.includes("--include-git")
+  };
+}
+function printToolVersion(name, info) {
+  if (info.error === null) {
+    console.log(`${name}: ${info.version}`);
+    return;
+  }
+  console.log(`${name}: unavailable (${info.error})`);
 }
 async function handleSession(action, args) {
   switch (action) {
@@ -4818,6 +4951,9 @@ async function handleSession(action, args) {
       break;
     case "watch":
       await handleSessionWatch(args);
+      break;
+    case "run":
+      await handleSessionRun(args);
       break;
     case "resume":
       await handleSessionResume(args);
@@ -4912,6 +5048,45 @@ Watching for updates... (Ctrl+C to stop)
     process.on("SIGINT", handler);
     process.on("SIGTERM", handler);
   });
+}
+async function handleSessionRun(args) {
+  const prompt = getArgValue(args, "--prompt");
+  if (prompt === undefined || prompt.trim().length === 0) {
+    console.error("Usage: codex-agent session run --prompt <P> [options]");
+    process.exitCode = 1;
+    return;
+  }
+  const opts = parseProcessOptions(args);
+  const charDelayMs = parseCharDelayMs(args);
+  const runner = new SessionRunner;
+  const session = await runner.startSession({
+    prompt,
+    cwd: opts.cwd,
+    model: opts.model,
+    sandbox: opts.sandbox,
+    approvalMode: opts.approvalMode,
+    fullAuto: opts.fullAuto,
+    additionalArgs: opts.additionalArgs,
+    images: opts.images,
+    streamGranularity: opts.streamGranularity
+  });
+  console.log(`Started session ${session.sessionId} with ${opts.streamGranularity ?? "event"} streaming`);
+  for await (const chunk of session.messages()) {
+    if (isCharChunk2(chunk)) {
+      process.stdout.write(chunk.char);
+      if (charDelayMs > 0) {
+        await sleep2(charDelayMs);
+      }
+      continue;
+    }
+    console.log(formatRolloutLine(chunk));
+  }
+  if (opts.streamGranularity === "char") {
+    process.stdout.write(`
+`);
+  }
+  const result = await session.waitForCompletion();
+  console.log(`Session ${session.sessionId} exited with code ${result.exitCode}`);
 }
 async function handleSessionResume(args) {
   const id = args[0];
@@ -6014,7 +6189,34 @@ function parseProcessOptions(args) {
   if (images.length > 0) {
     opts.images = images;
   }
+  const streamGranularity = getArgValue(args, "--stream-granularity");
+  if (streamGranularity === "event" || streamGranularity === "char") {
+    opts.streamGranularity = streamGranularity;
+  }
   return opts;
+}
+function parseCharDelayMs(args) {
+  const raw = getArgValue(args, "--char-delay-ms");
+  if (raw === undefined) {
+    return 8;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 8;
+  }
+  return parsed;
+}
+function isCharChunk2(chunk) {
+  if (typeof chunk !== "object" || chunk === null) {
+    return false;
+  }
+  const record = chunk;
+  return record["kind"] === "char" && typeof record["char"] === "string";
+}
+function sleep2(ms) {
+  return new Promise((resolve3) => {
+    setTimeout(resolve3, ms);
+  });
 }
 function renderMarkdownTasks(lines) {
   const tasks = [];
@@ -6123,8 +6325,10 @@ export {
   isCompacted,
   isBookmarkType,
   hasPermission,
+  getToolVersions,
   getSessionActivity,
   getDaemonStatus,
+  getCodexCliVersion,
   getChangedFiles,
   getBookmark,
   findSessionsByFile,
