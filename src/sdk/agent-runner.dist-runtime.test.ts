@@ -20,6 +20,8 @@ describe("dist runtime runAgent", () => {
     const distModule = await import("../../dist/main.js");
     expect(typeof distModule.searchSessions).toBe("function");
     expect(typeof distModule.searchSessionTranscript).toBe("function");
+    expect(typeof distModule.getCodexCliVersion).toBe("function");
+    expect(typeof distModule.getToolVersions).toBe("function");
   });
 
   test("emits session.message for exec-stream item.completed agent_message", async () => {

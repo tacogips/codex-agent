@@ -172,6 +172,15 @@ This is codex-agent - a TypeScript project with Bun runtime and Nix flake develo
 
 **TypeScript Configuration**: This project uses maximum TypeScript strictness. See `tsconfig.json` for the complete strict configuration.
 
+## Package Export and dist Sync Requirements
+
+To prevent runtime export mismatches between `src/` and published artifacts:
+
+1. When changing public exports in `src/main.ts`, `src/sdk/index.ts`, or any file that affects package root exports, always run `bun run build`.
+2. Always run `bun run check:dist-sync` before commit/push and include updated `dist/*` files in the same commit.
+3. Keep and update runtime export tests that import `dist/main.js` (for example `src/sdk/agent-runner.dist-runtime.test.ts`) whenever new root exports are added.
+4. Do not merge or publish changes when runtime export tests or `check:dist-sync` fail.
+
 ## Design Documentation
 
 **IMPORTANT**: When creating design documents, you (the LLM model) MUST follow the design-doc skill.
