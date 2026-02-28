@@ -5,6 +5,7 @@
  *   session list [--source S] [--cwd P] [--branch B] [--format json|table]
  *   session show <id> [--tasks]
  *   session watch <id>
+ *   session run --prompt <P> [--model M] [--sandbox S] [--full-auto] [--stream-granularity event|char]
  *   session resume <id> [--model M] [--sandbox S] [--full-auto]
  *   session fork <id> [--nth-message N] [--model M] [--sandbox S] [--full-auto]
  *
@@ -119,11 +120,17 @@ import {
 } from "./format";
 import { extractMarkdownTasks } from "../markdown/parser";
 import type { SessionSource } from "../types/rollout";
-import type { CodexProcessOptions, SandboxMode, ApprovalMode } from "../process/types";
+import type {
+  CodexProcessOptions,
+  SandboxMode,
+  ApprovalMode,
+  StreamGranularity,
+} from "../process/types";
 import type { DaemonConfig } from "../daemon/types";
 import type { ServerConfig } from "../server/types";
 import type { BookmarkType } from "../bookmark/types";
 import { getToolVersions } from "../sdk/tool-versions";
+import { SessionRunner } from "../sdk/session-runner";
 
 const USAGE = `codex-agent - Codex session manager
 
@@ -131,6 +138,7 @@ Usage:
   codex-agent session list [options]
   codex-agent session show <id> [--tasks]
   codex-agent session watch <id>
+  codex-agent session run --prompt <P> [options]
   codex-agent session resume <id> [options]
   codex-agent session fork <id> [--nth-message N] [options]
 
@@ -191,6 +199,8 @@ Common process options:
   --model <model>             Model to use
   --sandbox <full|network-only|none>  Sandbox mode
   --full-auto                 Enable full-auto mode
+  --stream-granularity <event|char>  Stream by rollout event or character
+  --char-delay-ms <n>         Delay per rendered char in ms (session run only, default: 8)
   --image <path>              Attach image(s) to prompt (repeatable)
 
 Server options:
@@ -302,6 +312,9 @@ async function handleSession(
     case "watch":
       await handleSessionWatch(args);
       break;
+    case "run":
+      await handleSessionRun(args);
+      break;
     case "resume":
       await handleSessionResume(args);
       break;
@@ -409,6 +422,52 @@ async function handleSessionWatch(args: readonly string[]): Promise<void> {
     process.on("SIGINT", handler);
     process.on("SIGTERM", handler);
   });
+}
+
+async function handleSessionRun(args: readonly string[]): Promise<void> {
+  const prompt = getArgValue(args, "--prompt");
+  if (prompt === undefined || prompt.trim().length === 0) {
+    console.error("Usage: codex-agent session run --prompt <P> [options]");
+    process.exitCode = 1;
+    return;
+  }
+
+  const opts = parseProcessOptions(args);
+  const charDelayMs = parseCharDelayMs(args);
+  const runner = new SessionRunner();
+  const session = await runner.startSession({
+    prompt,
+    cwd: opts.cwd,
+    model: opts.model,
+    sandbox: opts.sandbox,
+    approvalMode: opts.approvalMode,
+    fullAuto: opts.fullAuto,
+    additionalArgs: opts.additionalArgs,
+    images: opts.images,
+    streamGranularity: opts.streamGranularity,
+  });
+
+  console.log(
+    `Started session ${session.sessionId} with ${opts.streamGranularity ?? "event"} streaming`,
+  );
+
+  for await (const chunk of session.messages()) {
+    if (isCharChunk(chunk)) {
+      process.stdout.write(chunk.char);
+      if (charDelayMs > 0) {
+        await sleep(charDelayMs);
+      }
+      continue;
+    }
+    console.log(formatRolloutLine(chunk));
+  }
+
+  if (opts.streamGranularity === "char") {
+    process.stdout.write("\n");
+  }
+
+  const result = await session.waitForCompletion();
+  console.log(`Session ${session.sessionId} exited with code ${result.exitCode}`);
 }
 
 async function handleSessionResume(args: readonly string[]): Promise<void> {
@@ -1712,13 +1771,14 @@ function getArgValues(args: readonly string[], flag: string): readonly string[] 
   return values;
 }
 
-function parseProcessOptions(args: readonly string[]): CodexProcessOptions {
+export function parseProcessOptions(args: readonly string[]): CodexProcessOptions {
   const opts: {
     model?: string;
     sandbox?: SandboxMode;
     approvalMode?: ApprovalMode;
     fullAuto?: boolean;
     images?: readonly string[];
+    streamGranularity?: StreamGranularity;
   } = {};
 
   const model = getArgValue(args, "--model");
@@ -1738,7 +1798,40 @@ function parseProcessOptions(args: readonly string[]): CodexProcessOptions {
     opts.images = images;
   }
 
+  const streamGranularity = getArgValue(args, "--stream-granularity");
+  if (streamGranularity === "event" || streamGranularity === "char") {
+    opts.streamGranularity = streamGranularity;
+  }
+
   return opts;
+}
+
+function parseCharDelayMs(args: readonly string[]): number {
+  const raw = getArgValue(args, "--char-delay-ms");
+  if (raw === undefined) {
+    return 8;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 8;
+  }
+  return parsed;
+}
+
+function isCharChunk(
+  chunk: unknown,
+): chunk is { readonly kind: "char"; readonly char: string } {
+  if (typeof chunk !== "object" || chunk === null) {
+    return false;
+  }
+  const record = chunk as Record<string, unknown>;
+  return record["kind"] === "char" && typeof record["char"] === "string";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function renderMarkdownTasks(lines: readonly { readonly type: string; readonly payload: unknown }[]): void {
