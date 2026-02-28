@@ -3,6 +3,7 @@
 `codex-agent` is a Bun + TypeScript CLI/library for managing Codex session data and automation workflows.
 
 It provides:
+
 - Session discovery, inspection, streaming, resume, and fork operations
 - Group orchestration for running prompts across multiple sessions
 - Queue management for ordered prompt execution
@@ -62,6 +63,7 @@ task ci
 Binary entrypoint: `src/bin.ts`
 
 Top-level command groups:
+
 - `session`: list/show/watch/resume/fork
 - `group`: create/list/show/add/remove/pause/resume/delete/run
 - `queue`: create/add/show/list/pause/resume/delete/update/remove/move/mode/run
@@ -70,6 +72,7 @@ Top-level command groups:
 - `files`: list/find/rebuild
 - `server`: start
 - `daemon`: start/stop/status
+- `version`: inspect installed tool versions as human-readable text or JSON
 
 Examples:
 
@@ -87,6 +90,9 @@ bun run src/bin.ts queue run nightly --model gpt-5
 
 # Start API server
 bun run src/bin.ts server start --host 127.0.0.1 --port 3100
+
+# Tool versions for system status UI
+bun run src/bin.ts version --json
 ```
 
 ## Project Structure
@@ -132,6 +138,18 @@ for await (const event of runAgent({
 
 Request routing (`exec` vs `resume`) and attachment normalization are handled
 inside `codex-agent` internals.
+
+Tool-version introspection is available for health/system status screens:
+
+```ts
+import { getToolVersions } from "codex-agent";
+
+const versions = await getToolVersions({ includeGit: true });
+// {
+//   codex: { version: "codex 0.x.y", error: null },
+//   git: { version: "git version 2.x.y", error: null }
+// }
+```
 
 ## Testing
 

@@ -60,10 +60,7 @@ export {
 } from "./session/index";
 
 // Session transcript search
-export {
-  searchSessionTranscript,
-  searchSessions,
-} from "./session/search";
+export { searchSessionTranscript, searchSessions } from "./session/search";
 
 // Process manager
 export { ProcessManager } from "./process/index";
@@ -243,6 +240,10 @@ export type {
   AgentSessionMessageEvent,
   AgentSessionCompletedEvent,
   AgentSessionErrorEvent,
+  ToolVersionInfo,
+  AgentToolVersions,
+  GetCodexCliVersionOptions,
+  GetToolVersionsOptions,
 } from "./sdk/index";
 export {
   BasicSdkEventEmitter,
@@ -251,6 +252,8 @@ export {
   SessionRunner,
   RunningSession,
   runAgent,
+  getCodexCliVersion,
+  getToolVersions,
 } from "./sdk/index";
 
 // Server

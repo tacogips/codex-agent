@@ -51,6 +51,8 @@
  *   daemon start [--port N] [--host H] [--token T] [--mode http|app-server] [--app-server-url ws://...]
  *   daemon stop
  *   daemon status
+ *
+ *   version [--json] [--include-git]
  */
 
 import {
@@ -121,6 +123,7 @@ import type { CodexProcessOptions, SandboxMode, ApprovalMode } from "../process/
 import type { DaemonConfig } from "../daemon/types";
 import type { ServerConfig } from "../server/types";
 import type { BookmarkType } from "../bookmark/types";
+import { getToolVersions } from "../sdk/tool-versions";
 
 const USAGE = `codex-agent - Codex session manager
 
@@ -174,6 +177,8 @@ Usage:
   codex-agent daemon start [--port N] [--host H] [--token T] [--mode http|app-server] [--app-server-url ws://...]
   codex-agent daemon stop
   codex-agent daemon status
+
+  codex-agent version [--json] [--include-git]
 
 Session list options:
   --source <cli|vscode|exec>  Filter by session source
@@ -233,11 +238,50 @@ export async function run(argv: readonly string[]): Promise<void> {
     case "daemon":
       await handleDaemon(action, rest);
       break;
+    case "version":
+      await handleVersion(args.slice(1));
+      break;
     default:
       console.error(`Unknown command: ${subcommand}`);
       console.log(USAGE);
       process.exitCode = 1;
   }
+}
+
+async function handleVersion(args: readonly string[]): Promise<void> {
+  const { asJson, includeGit } = parseVersionArgs(args);
+  const versions = await getToolVersions({ includeGit });
+
+  if (asJson) {
+    console.log(JSON.stringify(versions, null, 2));
+    return;
+  }
+
+  printToolVersion("codex", versions.codex);
+  if (versions.git !== undefined) {
+    printToolVersion("git", versions.git);
+  }
+}
+
+export function parseVersionArgs(args: readonly string[]): {
+  readonly asJson: boolean;
+  readonly includeGit: boolean;
+} {
+  return {
+    asJson: args.includes("--json"),
+    includeGit: args.includes("--include-git"),
+  };
+}
+
+function printToolVersion(
+  name: string,
+  info: { readonly version: string | null; readonly error: string | null },
+): void {
+  if (info.error === null) {
+    console.log(`${name}: ${info.version}`);
+    return;
+  }
+  console.log(`${name}: unavailable (${info.error})`);
 }
 
 // ---------------------------------------------------------------------------

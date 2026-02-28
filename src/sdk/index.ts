@@ -7,11 +7,7 @@ export type {
 } from "./events";
 export { BasicSdkEventEmitter } from "./events";
 
-export type {
-  ToolContext,
-  ToolConfig,
-  RegisteredTool,
-} from "./tool-registry";
+export type { ToolContext, ToolConfig, RegisteredTool } from "./tool-registry";
 export { tool, ToolRegistry } from "./tool-registry";
 
 export type {
@@ -36,3 +32,11 @@ export type {
   AgentSessionErrorEvent,
 } from "./agent-runner";
 export { runAgent } from "./agent-runner";
+
+export type {
+  ToolVersionInfo,
+  AgentToolVersions,
+  GetCodexCliVersionOptions,
+  GetToolVersionsOptions,
+} from "./tool-versions";
+export { getCodexCliVersion, getToolVersions } from "./tool-versions";
