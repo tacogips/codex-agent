@@ -199,8 +199,11 @@ describe("runAgent", () => {
     }
 
     const args = await readFile(argsLogPath, "utf-8");
+    expect(args).toContain("exec");
     expect(args).toContain("resume");
+    expect(args).toContain("--json");
     expect(args).toContain(sessionId);
+    expect(args).toContain("continue");
 
     const hasExistingRolloutLine = events.some(
       (event) =>
@@ -279,7 +282,9 @@ describe("runAgent", () => {
     }
 
     const args = await readFile(argsLogPath, "utf-8");
+    expect(args).toContain("exec");
     expect(args).toContain("resume");
+    expect(args).toContain("--json");
     expect(args).toContain(sessionId);
     expect(args).toContain("--skip-git-repo-check");
     expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
@@ -295,12 +300,12 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        "if [ \"$1\" = \"exec\" ]; then",
+        "if [ \"$1\" = \"exec\" ] && [ \"$2\" = \"--json\" ]; then",
         "  printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"missing-index-session-001\"}'",
         "  printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"hello\"}}'",
         "  exit 0",
         "fi",
-        "if [ \"$1\" = \"resume\" ]; then",
+        "if [ \"$1\" = \"exec\" ] && [ \"$2\" = \"resume\" ] && [ \"$3\" = \"--json\" ] && [ \"$4\" = \"missing-index-session-001\" ] && [ \"$5\" = \"say hello again\" ]; then",
         "  sleep 0.05",
         "  exit 0",
         "fi",

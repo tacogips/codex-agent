@@ -90,14 +90,19 @@ export class ProcessManager {
   }
 
   /**
-   * Spawn `codex resume <sessionId>` as an interactive process.
+   * Spawn `codex exec resume --json <sessionId> [prompt]` as a non-interactive process.
    * Returns the process handle for monitoring.
    */
   spawnResume(
     sessionId: string,
     options?: CodexProcessOptions,
+    prompt?: string,
   ): CodexProcess {
-    const args = ["resume", sessionId, ...buildCommonArgs(options)];
+    const args = ["exec", "resume", "--json", sessionId];
+    if (prompt !== undefined && prompt.trim().length > 0) {
+      args.push(prompt);
+    }
+    args.push(...buildCommonArgs(options));
     return this.spawnTracked(args, options, `resume ${sessionId}`);
   }
 

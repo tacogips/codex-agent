@@ -251,7 +251,7 @@ export class SessionRunner {
     const proc = this.pm.spawnResume(sessionId, {
       ...options,
       codexBinary: this.options.codexBinary,
-    });
+    }, prompt);
     const running = new RunningSession(
       sessionId,
       this.pm,
@@ -280,10 +280,6 @@ export class SessionRunner {
       void this.attachWatchWhenSessionAppears(sessionId, watcher, includeExisting);
     }
     running.setStopHook(() => watcher.stop());
-
-    if (prompt !== undefined && prompt.trim().length > 0) {
-      this.pm.writeInput(proc.id, prompt + "\n");
-    }
 
     void waitForExit(this.pm, proc.id).then((exitCode) => {
       watcher.stop();
