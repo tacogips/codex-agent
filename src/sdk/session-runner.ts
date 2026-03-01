@@ -256,30 +256,39 @@ export class SessionRunner {
         : undefined;
 
     const startedAt = new Date();
-    const proc = this.pm.spawnResume(sessionId, {
+    const resumeStream = this.pm.spawnResumeStream(sessionId, {
       ...options,
       codexBinary: this.options.codexBinary,
     }, prompt);
     const running = new RunningSession(
       sessionId,
       this.pm,
-      proc.id,
+      resumeStream.process.id,
       startedAt,
       options?.streamGranularity ?? "event",
       false,
     );
     this.trackSession(running);
+    const seenLineKeys = new Set<string>();
+    const pushLineIfNew = (line: RolloutLine): void => {
+      const key = stableLineKey(line);
+      if (seenLineKeys.has(key)) {
+        return;
+      }
+      seenLineKeys.add(key);
+      running.pushLine(line);
+    };
 
     const watcher = new RolloutWatcher();
     watcher.on("line", (_path, line) => {
-      running.pushLine(line);
+      pushLineIfNew(line);
     });
 
     let attachPromise: Promise<void> | null = null;
     if (sessionInfo !== null) {
       if (includeExisting) {
         for (const line of existingRolloutLines ?? []) {
-          running.pushLine(line);
+          pushLineIfNew(line);
         }
       }
       await watcher.watchFile(sessionInfo.rolloutPath, {
@@ -294,7 +303,14 @@ export class SessionRunner {
     }
     running.setStopHook(() => watcher.stop());
 
-    void waitForExit(this.pm, proc.id).then(async (exitCode) => {
+    const streamForwardPromise = (async () => {
+      for await (const line of resumeStream.lines) {
+        pushLineIfNew(line);
+      }
+    })();
+
+    void resumeStream.completion.then(async (exitCode) => {
+      await streamForwardPromise;
       if (attachPromise !== null) {
         await attachPromise;
       }
@@ -448,23 +464,29 @@ function toRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-async function waitForExit(pm: ProcessManager, processId: string): Promise<number> {
-  while (true) {
-    const process = pm.get(processId);
-    if (process === null) {
-      return 1;
-    }
-    if (process.status !== "running") {
-      return process.exitCode ?? 1;
-    }
-    await sleep(50);
-  }
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function stableLineKey(line: RolloutLine): string {
+  return JSON.stringify(toCanonicalJsonValue(line));
+}
+
+function toCanonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => toCanonicalJsonValue(item));
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const canonical: Record<string, unknown> = {};
+  for (const key of Object.keys(record).sort()) {
+    canonical[key] = toCanonicalJsonValue(record[key]);
+  }
+  return canonical;
 }
 
 async function getRolloutSize(path: string): Promise<number> {

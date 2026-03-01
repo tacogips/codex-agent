@@ -361,7 +361,7 @@ class RolloutWatcher extends EventEmitter {
   fileWatchers = new Map;
   dirWatchers = new Map;
   closed = false;
-  async watchFile(path) {
+  async watchFile(path, options) {
     if (this.closed) {
       return;
     }
@@ -369,11 +369,15 @@ class RolloutWatcher extends EventEmitter {
       return;
     }
     const fileSize = await getFileSize(path);
+    const requestedOffset = options?.startOffset;
+    const startOffset = requestedOffset !== undefined && Number.isFinite(requestedOffset) ? Math.max(0, Math.floor(requestedOffset)) : fileSize;
     const state = {
       path,
-      offset: fileSize,
+      offset: startOffset,
       watcher: null,
-      debounceTimer: null
+      debounceTimer: null,
+      inFlightRead: null,
+      pendingRead: false
     };
     const watcher = watch(path, () => {
       this.debouncedReadAppended(state);
@@ -383,6 +387,7 @@ class RolloutWatcher extends EventEmitter {
     });
     state.watcher = watcher;
     this.fileWatchers.set(path, state);
+    this.enqueueRead(state);
   }
   watchDirectory(dir) {
     if (this.closed) {
@@ -421,6 +426,14 @@ class RolloutWatcher extends EventEmitter {
     this.dirWatchers.clear();
     this.removeAllListeners();
   }
+  async flush() {
+    if (this.closed) {
+      return;
+    }
+    for (const state of this.fileWatchers.values()) {
+      await this.enqueueRead(state);
+    }
+  }
   get isClosed() {
     return this.closed;
   }
@@ -430,8 +443,27 @@ class RolloutWatcher extends EventEmitter {
     }
     state.debounceTimer = setTimeout(() => {
       state.debounceTimer = null;
-      this.readAppendedLines(state);
+      this.enqueueRead(state);
     }, DEBOUNCE_MS);
+  }
+  async enqueueRead(state) {
+    if (state.inFlightRead !== null) {
+      state.pendingRead = true;
+      await state.inFlightRead;
+      return;
+    }
+    const run = (async () => {
+      do {
+        state.pendingRead = false;
+        await this.readAppendedLines(state);
+      } while (state.pendingRead && !this.closed);
+    })();
+    state.inFlightRead = run;
+    try {
+      await run;
+    } finally {
+      state.inFlightRead = null;
+    }
   }
   async readAppendedLines(state) {
     if (this.closed) {
@@ -1235,12 +1267,33 @@ class ProcessManager {
     };
   }
   spawnResume(sessionId, options, prompt) {
-    const args = ["exec", "resume", "--json", sessionId];
-    if (prompt !== undefined && prompt.trim().length > 0) {
-      args.push(prompt);
-    }
-    args.push(...buildCommonArgs(options));
-    return this.spawnTracked(args, options, `resume ${sessionId}`);
+    const stream = this.spawnResumeStream(sessionId, options, prompt);
+    drainAsyncIterable(stream.lines);
+    return stream.process;
+  }
+  spawnResumeStream(sessionId, options, prompt) {
+    const args = buildResumeArgs(sessionId, options, prompt);
+    const binary = options?.codexBinary ?? this.binary;
+    const cwd = options?.cwd;
+    const child = spawn(binary, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env }
+    });
+    drainPipe(child.stderr);
+    const id = randomUUID();
+    const managed = createManagedProcess(id, child, binary + " " + args.join(" "), `resume ${sessionId}`);
+    this.processes.set(id, managed);
+    const completion = waitForExit(child).then((exitCode) => {
+      managed.status = "exited";
+      managed.exitCode = exitCode;
+      return exitCode;
+    });
+    return {
+      process: toCodexProcess(managed),
+      lines: streamJsonlOutput(child),
+      completion
+    };
   }
   spawnFork(sessionId, nthMessage, options) {
     const args = ["fork", sessionId];
@@ -1331,6 +1384,14 @@ function buildExecArgs(prompt, options) {
   args.push(...buildCommonArgs(options));
   return args;
 }
+function buildResumeArgs(sessionId, options, prompt) {
+  const args = ["exec", "resume", "--json", sessionId];
+  if (prompt !== undefined && prompt.trim().length > 0) {
+    args.push(prompt);
+  }
+  args.push(...buildCommonArgs(options));
+  return args;
+}
 function buildCommonArgs(options) {
   const args = [];
   if (options?.model !== undefined) {
@@ -1408,6 +1469,11 @@ function drainPipe(stream) {
     return;
   }
   stream.resume();
+}
+function drainAsyncIterable(lines) {
+  (async () => {
+    for await (const _ of lines) {}
+  })();
 }
 // src/group/repository.ts
 import { readFile as readFile2, writeFile, mkdir, rename } from "fs/promises";
@@ -2785,6 +2851,7 @@ class ToolRegistry {
 }
 // src/sdk/session-runner.ts
 import { EventEmitter as EventEmitter2 } from "events";
+import { stat as stat3 } from "fs/promises";
 class RunningSession extends EventEmitter2 {
   _sessionId;
   allowSessionIdUpdate;
@@ -2925,31 +2992,54 @@ class SessionRunner {
   }
   async resumeSession(sessionId, prompt, options) {
     const sessionInfo = await findSession(sessionId, this.options.codexHome);
+    const includeExisting = this.options.includeExistingOnResume === true;
+    const preResumeRolloutOffset = sessionInfo !== null ? await getRolloutSize(sessionInfo.rolloutPath) : undefined;
+    const existingRolloutLines = includeExisting && sessionInfo !== null ? await readRollout(sessionInfo.rolloutPath) : undefined;
     const startedAt = new Date;
-    const proc = this.pm.spawnResume(sessionId, {
+    const resumeStream = this.pm.spawnResumeStream(sessionId, {
       ...options,
       codexBinary: this.options.codexBinary
     }, prompt);
-    const running = new RunningSession(sessionId, this.pm, proc.id, startedAt, options?.streamGranularity ?? "event", false);
+    const running = new RunningSession(sessionId, this.pm, resumeStream.process.id, startedAt, options?.streamGranularity ?? "event", false);
     this.trackSession(running);
+    const seenLineKeys = new Set;
+    const pushLineIfNew = (line) => {
+      const key = stableLineKey(line);
+      if (seenLineKeys.has(key)) {
+        return;
+      }
+      seenLineKeys.add(key);
+      running.pushLine(line);
+    };
     const watcher = new RolloutWatcher;
     watcher.on("line", (_path, line) => {
-      running.pushLine(line);
+      pushLineIfNew(line);
     });
-    const includeExisting = this.options.includeExistingOnResume === true;
+    let attachPromise = null;
     if (sessionInfo !== null) {
       if (includeExisting) {
-        const existing = await readRollout(sessionInfo.rolloutPath);
-        for (const line of existing) {
-          running.pushLine(line);
+        for (const line of existingRolloutLines ?? []) {
+          pushLineIfNew(line);
         }
       }
-      await watcher.watchFile(sessionInfo.rolloutPath);
+      await watcher.watchFile(sessionInfo.rolloutPath, {
+        startOffset: preResumeRolloutOffset
+      });
     } else {
-      this.attachWatchWhenSessionAppears(sessionId, watcher, includeExisting);
+      attachPromise = this.attachWatchWhenSessionAppears(sessionId, watcher, includeExisting);
     }
     running.setStopHook(() => watcher.stop());
-    waitForExit2(this.pm, proc.id).then((exitCode) => {
+    const streamForwardPromise = (async () => {
+      for await (const line of resumeStream.lines) {
+        pushLineIfNew(line);
+      }
+    })();
+    resumeStream.completion.then(async (exitCode) => {
+      await streamForwardPromise;
+      if (attachPromise !== null) {
+        await attachPromise;
+      }
+      await watcher.flush();
       watcher.stop();
       running.finish(exitCode);
     });
@@ -2967,8 +3057,10 @@ class SessionRunner {
           for (const line of existing) {
             watcher.emit("line", discovered.rolloutPath, line);
           }
+          await watcher.watchFile(discovered.rolloutPath);
+        } else {
+          await watcher.watchFile(discovered.rolloutPath, { startOffset: 0 });
         }
-        await watcher.watchFile(discovered.rolloutPath);
         return;
       }
       await sleep(100);
@@ -3060,22 +3152,35 @@ function toRecord3(value) {
   }
   return value;
 }
-async function waitForExit2(pm, processId) {
-  while (true) {
-    const process2 = pm.get(processId);
-    if (process2 === null) {
-      return 1;
-    }
-    if (process2.status !== "running") {
-      return process2.exitCode ?? 1;
-    }
-    await sleep(50);
-  }
-}
 function sleep(ms) {
   return new Promise((resolve3) => {
     setTimeout(resolve3, ms);
   });
+}
+function stableLineKey(line) {
+  return JSON.stringify(toCanonicalJsonValue(line));
+}
+function toCanonicalJsonValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => toCanonicalJsonValue(item));
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+  const record = value;
+  const canonical = {};
+  for (const key of Object.keys(record).sort()) {
+    canonical[key] = toCanonicalJsonValue(record[key]);
+  }
+  return canonical;
+}
+async function getRolloutSize(path) {
+  try {
+    const info = await stat3(path);
+    return info.size;
+  } catch {
+    return 0;
+  }
 }
 // src/sdk/agent-runner.ts
 import { mkdtemp, rm, writeFile as writeFile6 } from "fs/promises";
@@ -3871,6 +3976,7 @@ function extractUsageEvent(line) {
   let source = null;
   let isCumulative = false;
   let aggregationKey;
+  let model;
   if (eventType === "TurnComplete") {
     source = "turn_complete";
     usage = toRecord5(payload["usage"]);
@@ -3893,7 +3999,8 @@ function extractUsageEvent(line) {
       usage = toRecord5(info["usage"]) ?? toRecord5(payload["usage"]) ?? payload;
       isCumulative = false;
     }
-    aggregationKey = extractTokenCountAggregationKey(payload, info, modelFromInfo);
+    model = resolveTokenCountModel(payload, usage, info, modelFromInfo);
+    aggregationKey = extractTokenCountAggregationKey(payload, info, model);
   }
   if (source === null || usage === null) {
     return null;
@@ -3904,7 +4011,7 @@ function extractUsageEvent(line) {
   const cacheCreationInputTokens = readNumber2(usage, "cache_creation_input_tokens") ?? readNumber2(usage, "cacheCreationInputTokens") ?? 0;
   const computedTotal = inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
   const totalTokens = readNumber2(usage, "total_tokens") ?? readNumber2(usage, "totalTokens") ?? computedTotal;
-  const model = modelFromInfo ?? readString3(usage, "model") ?? readString3(usage, "model_id") ?? readString3(payload, "model") ?? "unknown";
+  model = model ?? modelFromInfo ?? readString3(usage, "model") ?? readString3(usage, "model_id") ?? readString3(payload, "model") ?? "unknown";
   return {
     source,
     model,
@@ -3988,7 +4095,7 @@ function maxDefined(previous, current) {
   }
   return current > previous ? current : previous;
 }
-function extractTokenCountAggregationKey(payload, info, modelFromInfo) {
+function extractTokenCountAggregationKey(payload, info, model) {
   const parts = [];
   const infoStreamId = readString3(info, "stream_id");
   if (infoStreamId !== undefined) {
@@ -4010,9 +4117,39 @@ function extractTokenCountAggregationKey(payload, info, modelFromInfo) {
   if (messageId !== undefined) {
     parts.push(`message:${messageId}`);
   }
-  const model = modelFromInfo ?? readString3(payload, "model") ?? "unknown";
   parts.push(`model:${model}`);
   return parts.join("|");
+}
+function resolveTokenCountModel(payload, usage, info, modelFromInfo) {
+  const explicitModel = modelFromInfo ?? readString3(usage, "model") ?? readString3(usage, "model_id") ?? readString3(payload, "model");
+  if (explicitModel !== undefined) {
+    return explicitModel;
+  }
+  const payloadRateLimitsModel = extractModelFromRateLimits(toRecord5(payload["rate_limits"]));
+  if (payloadRateLimitsModel !== undefined) {
+    return payloadRateLimitsModel;
+  }
+  const infoRateLimitsModel = extractModelFromRateLimits(toRecord5(info["rate_limits"]));
+  if (infoRateLimitsModel !== undefined) {
+    return infoRateLimitsModel;
+  }
+  return "unknown";
+}
+function extractModelFromRateLimits(rateLimits) {
+  const limitName = readString3(rateLimits, "limit_name");
+  const normalizedLimitName = normalizeRateLimitModel(limitName);
+  if (normalizedLimitName !== undefined) {
+    return normalizedLimitName;
+  }
+  const limitId = readString3(rateLimits, "limit_id");
+  return normalizeRateLimitModel(limitId);
+}
+function normalizeRateLimitModel(modelName) {
+  if (modelName === undefined) {
+    return;
+  }
+  const normalized = modelName.trim().toLowerCase().replace(/[\s_]+/g, "-").replace(/[^a-z0-9.-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return normalized.length > 0 ? normalized : undefined;
 }
 function extractSessionMetaTimestamp(payloadValue) {
   const payload = toRecord5(payloadValue);

@@ -760,6 +760,176 @@ describe("runAgent", () => {
     expect(deltas).toBe("LATE");
   });
 
+  test("streamMode normalized with char granularity emits deltas from resume stdout", async () => {
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-normalized-resume-char-stdout-"),
+    );
+    createdDirs.push(fixtureDir);
+
+    const codexHome = join(fixtureDir, "codex-home");
+    const now = new Date();
+    const dayDir = join(
+      codexHome,
+      "sessions",
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    );
+    await mkdir(dayDir, { recursive: true });
+
+    const sessionId = "normalized-resume-char-stdout-001";
+    const rolloutPath = join(dayDir, `rollout-${sessionId}.jsonl`);
+    await writeFile(
+      rolloutPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-01-01T00:00:00Z",
+          type: "session_meta",
+          payload: {
+            meta: {
+              id: sessionId,
+              timestamp: "2026-01-01T00:00:00Z",
+              cwd: "/tmp/project",
+              originator: "codex",
+              cli_version: "1.0.0",
+              source: "cli",
+            },
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const fakeCodexPath = join(
+      fixtureDir,
+      "fake-codex-normalized-resume-char-stdout.sh",
+    );
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"HELLO\"}}'",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const events: Array<Record<string, unknown>> = [];
+      for await (const event of runAgent(
+        {
+          sessionId,
+          prompt: "continue",
+          streamGranularity: "char",
+          streamMode: "normalized",
+        },
+        {
+          codexBinary: fakeCodexPath,
+          codexHome,
+        },
+      )) {
+        events.push(event as unknown as Record<string, unknown>);
+      }
+
+      const deltas = events
+        .filter((event) => event["type"] === "assistant.delta")
+        .map((event) => String(event["text"] ?? ""))
+        .join("");
+      expect(deltas).toBe("HELLO");
+    }
+  });
+
+  test("streamMode normalized deduplicates resumed lines from stdout and rollout watcher", async () => {
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-normalized-resume-char-dedupe-"),
+    );
+    createdDirs.push(fixtureDir);
+
+    const codexHome = join(fixtureDir, "codex-home");
+    const now = new Date();
+    const dayDir = join(
+      codexHome,
+      "sessions",
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    );
+    await mkdir(dayDir, { recursive: true });
+
+    const sessionId = "normalized-resume-char-dedupe-001";
+    const rolloutPath = join(dayDir, `rollout-${sessionId}.jsonl`);
+    await writeFile(
+      rolloutPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-01-01T00:00:00Z",
+          type: "session_meta",
+          payload: {
+            meta: {
+              id: sessionId,
+              timestamp: "2026-01-01T00:00:00Z",
+              cwd: "/tmp/project",
+              originator: "codex",
+              cli_version: "1.0.0",
+              source: "cli",
+            },
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const stdoutLine =
+      '{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"AgentMessage","message":"HELLO"}}';
+    const rolloutLine =
+      '{"type":"event_msg","payload":{"message":"HELLO","type":"AgentMessage"},"timestamp":"2026-01-01T00:00:01Z"}';
+
+    const fakeCodexPath = join(
+      fixtureDir,
+      "fake-codex-normalized-resume-char-dedupe.sh",
+    );
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        `rollout='${rolloutPath}'`,
+        `stdout_line='${stdoutLine}'`,
+        `rollout_line='${rolloutLine}'`,
+        "printf '%s\\n' \"$stdout_line\"",
+        "sleep 0.05",
+        "printf '%s\\n' \"$rollout_line\" >> \"$rollout\"",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    const events: Array<Record<string, unknown>> = [];
+    for await (const event of runAgent(
+      {
+        sessionId,
+        prompt: "continue",
+        streamGranularity: "char",
+        streamMode: "normalized",
+      },
+      {
+        codexBinary: fakeCodexPath,
+        codexHome,
+      },
+    )) {
+      events.push(event as unknown as Record<string, unknown>);
+    }
+
+    const deltas = events
+      .filter((event) => event["type"] === "assistant.delta")
+      .map((event) => String(event["text"] ?? ""))
+      .join("");
+    expect(deltas).toBe("HELLO");
+  });
+
   test("streamMode normalized maps char stream to assistant.delta events", async () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-normalized-char-"));
     createdDirs.push(fixtureDir);

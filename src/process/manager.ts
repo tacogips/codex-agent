@@ -99,12 +99,51 @@ export class ProcessManager {
     options?: CodexProcessOptions,
     prompt?: string,
   ): CodexProcess {
-    const args = ["exec", "resume", "--json", sessionId];
-    if (prompt !== undefined && prompt.trim().length > 0) {
-      args.push(prompt);
-    }
-    args.push(...buildCommonArgs(options));
-    return this.spawnTracked(args, options, `resume ${sessionId}`);
+    const stream = this.spawnResumeStream(sessionId, options, prompt);
+    drainAsyncIterable(stream.lines);
+    return stream.process;
+  }
+
+  /**
+   * Spawn `codex exec resume --json <sessionId> [prompt]` and stream parsed JSONL lines.
+   * This is used by higher-level session orchestration to combine stdout with rollout watch.
+   */
+  spawnResumeStream(
+    sessionId: string,
+    options?: CodexProcessOptions,
+    prompt?: string,
+  ): ExecStreamResult {
+    const args = buildResumeArgs(sessionId, options, prompt);
+    const binary = options?.codexBinary ?? this.binary;
+    const cwd = options?.cwd;
+
+    const child = spawn(binary, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env },
+    });
+    drainPipe(child.stderr);
+
+    const id = randomUUID();
+    const managed = createManagedProcess(
+      id,
+      child,
+      binary + " " + args.join(" "),
+      `resume ${sessionId}`,
+    );
+    this.processes.set(id, managed);
+
+    const completion = waitForExit(child).then((exitCode) => {
+      managed.status = "exited";
+      managed.exitCode = exitCode;
+      return exitCode;
+    });
+
+    return {
+      process: toCodexProcess(managed),
+      lines: streamJsonlOutput(child),
+      completion,
+    };
   }
 
   /**
@@ -250,6 +289,19 @@ function buildExecArgs(
   return args;
 }
 
+function buildResumeArgs(
+  sessionId: string,
+  options?: CodexProcessOptions,
+  prompt?: string,
+): string[] {
+  const args = ["exec", "resume", "--json", sessionId];
+  if (prompt !== undefined && prompt.trim().length > 0) {
+    args.push(prompt);
+  }
+  args.push(...buildCommonArgs(options));
+  return args;
+}
+
 function buildCommonArgs(options?: CodexProcessOptions): string[] {
   const args: string[] = [];
   if (options?.model !== undefined) {
@@ -355,4 +407,14 @@ function drainPipe(stream: NodeJS.ReadableStream | null): void {
   }
   // Drop unconsumed child output to avoid pipe backpressure deadlocks.
   stream.resume();
+}
+
+function drainAsyncIterable(
+  lines: AsyncIterable<RolloutLine>,
+): void {
+  void (async () => {
+    for await (const _ of lines) {
+      // Intentionally discard parsed lines while still draining stdout.
+    }
+  })();
 }
