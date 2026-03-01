@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseServerStartArgs } from "./index";
+import { parseProcessOptions, parseServerStartArgs, parseVersionArgs } from "./index";
 
 describe("parseServerStartArgs", () => {
   it("parses core server flags", () => {
@@ -29,5 +29,37 @@ describe("parseServerStartArgs", () => {
       transport: "app-server",
       appServerUrl: "ws://127.0.0.1:12345/ws",
     });
+  });
+});
+
+describe("parseVersionArgs", () => {
+  it("parses --json and --include-git", () => {
+    const parsed = parseVersionArgs(["--json", "--include-git"]);
+    expect(parsed).toEqual({
+      asJson: true,
+      includeGit: true,
+    });
+  });
+
+  it("defaults flags to false", () => {
+    const parsed = parseVersionArgs([]);
+    expect(parsed).toEqual({
+      asJson: false,
+      includeGit: false,
+    });
+  });
+});
+
+describe("parseProcessOptions", () => {
+  it("parses stream granularity char", () => {
+    const parsed = parseProcessOptions(["--stream-granularity", "char"]);
+    expect(parsed).toEqual({
+      streamGranularity: "char",
+    });
+  });
+
+  it("ignores invalid stream granularity", () => {
+    const parsed = parseProcessOptions(["--stream-granularity", "invalid"]);
+    expect(parsed).toEqual({});
   });
 });

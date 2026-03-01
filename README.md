@@ -3,6 +3,7 @@
 `codex-agent` is a Bun + TypeScript CLI/library for managing Codex session data and automation workflows.
 
 It provides:
+
 - Session discovery, inspection, streaming, resume, and fork operations
 - Group orchestration for running prompts across multiple sessions
 - Queue management for ordered prompt execution
@@ -62,7 +63,8 @@ task ci
 Binary entrypoint: `src/bin.ts`
 
 Top-level command groups:
-- `session`: list/show/watch/resume/fork
+
+- `session`: list/show/watch/run/resume/fork
 - `group`: create/list/show/add/remove/pause/resume/delete/run
 - `queue`: create/add/show/list/pause/resume/delete/update/remove/move/mode/run
 - `bookmark`: add/list/get/delete/search
@@ -70,6 +72,7 @@ Top-level command groups:
 - `files`: list/find/rebuild
 - `server`: start
 - `daemon`: start/stop/status
+- `version`: inspect installed tool versions as human-readable text or JSON
 
 Examples:
 
@@ -80,6 +83,9 @@ bun run src/bin.ts session list --limit 20
 # Show one session and extract markdown tasks
 bun run src/bin.ts session show <session-id> --tasks
 
+# Start a new session, send one prompt, and stream output
+bun run src/bin.ts session run --prompt "say hello" --stream-granularity char
+
 # Create and run a queue
 bun run src/bin.ts queue create nightly --project /path/to/repo
 bun run src/bin.ts queue add nightly --prompt "Run checks and summarize failures"
@@ -87,6 +93,9 @@ bun run src/bin.ts queue run nightly --model gpt-5
 
 # Start API server
 bun run src/bin.ts server start --host 127.0.0.1 --port 3100
+
+# Tool versions for system status UI
+bun run src/bin.ts version --json
 ```
 
 ## Project Structure
@@ -132,6 +141,70 @@ for await (const event of runAgent({
 
 Request routing (`exec` vs `resume`) and attachment normalization are handled
 inside `codex-agent` internals.
+
+### Streaming Options (CLI + SDK)
+
+`codex-agent` supports two stream granularities:
+
+- `event`: emit rollout events (`session_meta`, `event_msg`, `response_item`, ...)
+- `char`: emit assistant text as character chunks
+
+#### CLI: one command to start a new session and stream response
+
+```bash
+# Event-level stream (default)
+bun run src/bin.ts session run --prompt "say hello"
+
+# Character stream
+bun run src/bin.ts session run --prompt "say hello" --stream-granularity char
+
+# Slower "typing" effect in terminal
+bun run src/bin.ts session run --prompt "say hello" --stream-granularity char --char-delay-ms 30
+```
+
+Relevant flags:
+
+- `--prompt <P>`: required for `session run`
+- `--stream-granularity <event|char>`: output mode
+- `--char-delay-ms <n>`: delay per rendered character in `session run` char mode (default: `8`)
+
+#### SDK: character chunks in library integrations
+
+```ts
+import { runAgent } from "codex-agent";
+
+for await (const event of runAgent({
+  prompt: "say hello",
+  streamGranularity: "char",
+})) {
+  if (event.type === "session.message") {
+    const chunk = event.chunk;
+    if (typeof chunk === "object" && chunk !== null && "kind" in chunk && chunk.kind === "char") {
+      process.stdout.write(chunk.char);
+    }
+  }
+}
+process.stdout.write("\n");
+```
+
+If you want a visible typing effect in your app, apply delay in your render loop (the SDK returns chunks, but display pacing is caller-controlled).
+
+#### Important behavior note
+
+Depending on the upstream `codex exec --json` event shape, assistant text may arrive as completed message items (not token deltas).  
+In that case, `char` mode still emits per-character chunks from the completed text, and CLI `session run` can pace rendering with `--char-delay-ms`.
+
+Tool-version introspection is available for health/system status screens:
+
+```ts
+import { getToolVersions } from "codex-agent";
+
+const versions = await getToolVersions({ includeGit: true });
+// {
+//   codex: { version: "codex 0.x.y", error: null },
+//   git: { version: "git version 2.x.y", error: null }
+// }
+```
 
 ## Testing
 
