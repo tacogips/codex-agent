@@ -92,6 +92,30 @@ describe("RolloutWatcher", () => {
     expect(received).toHaveLength(0);
   });
 
+  test("replays appended lines after a provided startOffset even when watch starts later", async () => {
+    const path3 = join(TEST_DIR, "rollout-start-offset.jsonl");
+    await writeFile(path3, SESSION_META + "\n", "utf-8");
+    const startOffset = Buffer.byteLength(SESSION_META + "\n", "utf-8");
+
+    await appendFile(
+      path3,
+      makeJsonlLine("event_msg", { type: "AgentMessage", message: "late write" }) + "\n",
+      "utf-8",
+    );
+
+    watcher = new RolloutWatcher();
+    const received: RolloutLine[] = [];
+    watcher.on("line", (_path, line) => {
+      received.push(line);
+    });
+
+    await watcher.watchFile(path3, { startOffset });
+    await sleep(200);
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.type).toBe("event_msg");
+  });
+
   test("stops cleanly", async () => {
     watcher = new RolloutWatcher();
     await watcher.watchFile(rolloutPath);

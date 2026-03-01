@@ -22,6 +22,10 @@ export interface RolloutWatcherEvents {
   error: [error: Error];
 }
 
+export interface WatchFileOptions {
+  readonly startOffset?: number | undefined;
+}
+
 /**
  * Watches rollout files and directories for real-time updates.
  */
@@ -34,7 +38,7 @@ export class RolloutWatcher extends EventEmitter<RolloutWatcherEvents> {
    * Watch a single rollout file for appended lines.
    * Emits 'line' events for each new RolloutLine parsed.
    */
-  async watchFile(path: string): Promise<void> {
+  async watchFile(path: string, options?: WatchFileOptions): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -43,11 +47,18 @@ export class RolloutWatcher extends EventEmitter<RolloutWatcherEvents> {
     }
 
     const fileSize = await getFileSize(path);
+    const requestedOffset = options?.startOffset;
+    const startOffset =
+      requestedOffset !== undefined && Number.isFinite(requestedOffset)
+        ? Math.max(0, Math.floor(requestedOffset))
+        : fileSize;
     const state: FileWatchState = {
       path,
-      offset: fileSize,
+      offset: startOffset,
       watcher: null,
       debounceTimer: null,
+      inFlightRead: null,
+      pendingRead: false,
     };
 
     const watcher = watch(path, () => {
@@ -60,6 +71,7 @@ export class RolloutWatcher extends EventEmitter<RolloutWatcherEvents> {
 
     state.watcher = watcher;
     this.fileWatchers.set(path, state);
+    void this.enqueueRead(state);
   }
 
   /**
@@ -116,6 +128,18 @@ export class RolloutWatcher extends EventEmitter<RolloutWatcherEvents> {
   }
 
   /**
+   * Flush unread appended data from all watched files.
+   */
+  async flush(): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    for (const state of this.fileWatchers.values()) {
+      await this.enqueueRead(state);
+    }
+  }
+
+  /**
    * Check if the watcher has been stopped.
    */
   get isClosed(): boolean {
@@ -132,8 +156,30 @@ export class RolloutWatcher extends EventEmitter<RolloutWatcherEvents> {
     }
     state.debounceTimer = setTimeout(() => {
       state.debounceTimer = null;
-      void this.readAppendedLines(state);
+      void this.enqueueRead(state);
     }, DEBOUNCE_MS);
+  }
+
+  private async enqueueRead(state: FileWatchState): Promise<void> {
+    if (state.inFlightRead !== null) {
+      state.pendingRead = true;
+      await state.inFlightRead;
+      return;
+    }
+
+    const run = (async () => {
+      do {
+        state.pendingRead = false;
+        await this.readAppendedLines(state);
+      } while (state.pendingRead && !this.closed);
+    })();
+
+    state.inFlightRead = run;
+    try {
+      await run;
+    } finally {
+      state.inFlightRead = null;
+    }
   }
 
   private async readAppendedLines(state: FileWatchState): Promise<void> {
@@ -176,6 +222,8 @@ interface FileWatchState {
   offset: number;
   watcher: FSWatcher | null;
   debounceTimer: ReturnType<typeof setTimeout> | null;
+  inFlightRead: Promise<void> | null;
+  pendingRead: boolean;
 }
 
 async function getFileSize(path: string): Promise<number> {

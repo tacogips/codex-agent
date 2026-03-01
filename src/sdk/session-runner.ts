@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { stat } from "node:fs/promises";
 import { ProcessManager } from "../process/manager";
 import type {
   ApprovalMode,
@@ -246,6 +247,13 @@ export class SessionRunner {
     options?: Omit<CodexProcessOptions, "codexBinary">,
   ): Promise<RunningSession> {
     const sessionInfo = await findSession(sessionId, this.options.codexHome);
+    const includeExisting = this.options.includeExistingOnResume === true;
+    const preResumeRolloutOffset =
+      sessionInfo !== null ? await getRolloutSize(sessionInfo.rolloutPath) : undefined;
+    const existingRolloutLines =
+      includeExisting && sessionInfo !== null
+        ? await readRollout(sessionInfo.rolloutPath)
+        : undefined;
 
     const startedAt = new Date();
     const proc = this.pm.spawnResume(sessionId, {
@@ -267,21 +275,30 @@ export class SessionRunner {
       running.pushLine(line);
     });
 
-    const includeExisting = this.options.includeExistingOnResume === true;
+    let attachPromise: Promise<void> | null = null;
     if (sessionInfo !== null) {
       if (includeExisting) {
-        const existing = await readRollout(sessionInfo.rolloutPath);
-        for (const line of existing) {
+        for (const line of existingRolloutLines ?? []) {
           running.pushLine(line);
         }
       }
-      await watcher.watchFile(sessionInfo.rolloutPath);
+      await watcher.watchFile(sessionInfo.rolloutPath, {
+        startOffset: preResumeRolloutOffset,
+      });
     } else {
-      void this.attachWatchWhenSessionAppears(sessionId, watcher, includeExisting);
+      attachPromise = this.attachWatchWhenSessionAppears(
+        sessionId,
+        watcher,
+        includeExisting,
+      );
     }
     running.setStopHook(() => watcher.stop());
 
-    void waitForExit(this.pm, proc.id).then((exitCode) => {
+    void waitForExit(this.pm, proc.id).then(async (exitCode) => {
+      if (attachPromise !== null) {
+        await attachPromise;
+      }
+      await watcher.flush();
       watcher.stop();
       running.finish(exitCode);
     });
@@ -308,8 +325,11 @@ export class SessionRunner {
             // In that case, we backfill once the rollout path appears.
             watcher.emit("line", discovered.rolloutPath, line);
           }
+          await watcher.watchFile(discovered.rolloutPath);
+        } else {
+          // Backfill from start so resumed output written before watcher attach is not lost.
+          await watcher.watchFile(discovered.rolloutPath, { startOffset: 0 });
         }
-        await watcher.watchFile(discovered.rolloutPath);
         return;
       }
       await sleep(100);
@@ -445,4 +465,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+async function getRolloutSize(path: string): Promise<number> {
+  try {
+    const info = await stat(path);
+    return info.size;
+  } catch {
+    return 0;
+  }
 }
