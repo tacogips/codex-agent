@@ -1173,7 +1173,7 @@ function asString(value) {
 function parseCandidateSessionMeta(meta) {
   const payload = asRecord(meta);
   const metaRecord = payload === null ? null : asRecord(payload["meta"]);
-  if (metaRecord === null) {
+  if (metaRecord === null || payload === null) {
     return null;
   }
   const id = asString(metaRecord["id"]);
@@ -3077,38 +3077,49 @@ async function* runAgent(request, options) {
   const runner = new SessionRunner(options);
   const normalized = await normalizeAttachments(request.attachments);
   const resumed = isResumeRequest(request);
+  const normalizedMode = request.streamMode === "normalized";
   let currentSessionId = resumed ? request.sessionId : undefined;
   try {
     const session = await startFromRequest(runner, request, normalized.imagePaths);
     currentSessionId = session.sessionId;
     const iterator = session.messages();
+    const normalizerState = createNormalizerState();
     if (resumed) {
-      yield {
+      const startedEvent = {
         type: "session.started",
         sessionId: session.sessionId,
         resumed: true
       };
+      yield startedEvent;
     } else {
       const firstChunk = await iterator.next();
       if (firstChunk.done) {
-        yield {
+        const startedEvent = {
           type: "session.started",
           sessionId: session.sessionId,
           resumed: false
         };
+        yield startedEvent;
       } else {
         const startedSessionId = resolveSessionId(session.sessionId, firstChunk.value);
         currentSessionId = startedSessionId;
-        yield {
+        const startedEvent = {
           type: "session.started",
           sessionId: startedSessionId,
           resumed: false
         };
-        yield {
-          type: "session.message",
-          sessionId: startedSessionId,
-          chunk: firstChunk.value
-        };
+        yield startedEvent;
+        if (normalizedMode) {
+          for (const event of normalizeChunkToEvents(firstChunk.value, startedSessionId, normalizerState, false)) {
+            yield event;
+          }
+        } else {
+          yield {
+            type: "session.message",
+            sessionId: startedSessionId,
+            chunk: firstChunk.value
+          };
+        }
       }
     }
     while (true) {
@@ -3116,20 +3127,36 @@ async function* runAgent(request, options) {
       if (nextChunk.done) {
         break;
       }
-      const resolvedSessionId = resolveSessionId(session.sessionId, nextChunk.value);
-      currentSessionId = resolvedSessionId;
-      yield {
-        type: "session.message",
-        sessionId: resolvedSessionId,
-        chunk: nextChunk.value
-      };
+      const resolvedSessionId2 = resolveSessionId(session.sessionId, nextChunk.value);
+      currentSessionId = resolvedSessionId2;
+      if (normalizedMode) {
+        for (const event of normalizeChunkToEvents(nextChunk.value, resolvedSessionId2, normalizerState, false)) {
+          yield event;
+        }
+      } else {
+        yield {
+          type: "session.message",
+          sessionId: resolvedSessionId2,
+          chunk: nextChunk.value
+        };
+      }
     }
     const result = await session.waitForCompletion();
-    yield {
-      type: "session.completed",
-      sessionId: currentSessionId ?? session.sessionId,
-      result
-    };
+    const resolvedSessionId = currentSessionId ?? session.sessionId;
+    if (normalizedMode) {
+      yield {
+        type: "session.completed",
+        sessionId: resolvedSessionId,
+        success: result.success,
+        exitCode: result.exitCode
+      };
+    } else {
+      yield {
+        type: "session.completed",
+        sessionId: resolvedSessionId,
+        result
+      };
+    }
   } catch (error) {
     yield {
       type: "session.error",
@@ -3138,6 +3165,16 @@ async function* runAgent(request, options) {
     };
   } finally {
     await normalized.cleanup();
+  }
+}
+async function* toNormalizedEvents(chunks) {
+  const state = createNormalizerState();
+  let fallbackSessionId = "unknown-session";
+  for await (const chunk of chunks) {
+    fallbackSessionId = resolveSessionId(fallbackSessionId, chunk);
+    for (const event of normalizeChunkToEvents(chunk, fallbackSessionId, state, true)) {
+      yield event;
+    }
   }
 }
 async function startFromRequest(runner, request, imagePaths) {
@@ -3274,6 +3311,239 @@ function toError(value) {
 }
 function isResumeRequest(request) {
   return typeof request.sessionId === "string";
+}
+function createNormalizerState() {
+  return {
+    startedSessionIds: new Set,
+    assistantSnapshots: new Map,
+    toolNamesByCallId: new Map
+  };
+}
+function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionStarted) {
+  const sessionId = resolveSessionId(fallbackSessionId, chunk);
+  const events = [];
+  if (isCharChunk(chunk)) {
+    events.push(...toAssistantTextEvents(sessionId, chunk.char, state));
+    return events;
+  }
+  if (chunk.type === "session_meta") {
+    if (includeSessionStarted && !state.startedSessionIds.has(sessionId)) {
+      state.startedSessionIds.add(sessionId);
+      events.push({
+        type: "session.started",
+        sessionId,
+        resumed: false
+      });
+    }
+    return events;
+  }
+  if (chunk.type === "event_msg") {
+    const payload2 = toRecord4(chunk.payload);
+    if (payload2 === null) {
+      return events;
+    }
+    const payloadType = readString2(payload2["type"]);
+    if (payloadType === "AgentMessage") {
+      const message = readString2(payload2["message"]);
+      if (message !== undefined) {
+        events.push(...toAssistantTextEvents(sessionId, message, state));
+      }
+      return events;
+    }
+    if (payloadType === "AgentReasoning") {
+      const message = readString2(payload2["text"]);
+      events.push({
+        type: "activity",
+        sessionId,
+        ...message !== undefined ? { message } : {}
+      });
+      return events;
+    }
+    if (payloadType === "ExecCommandBegin") {
+      const callId = readString2(payload2["call_id"]);
+      const command = readStringArray(payload2["command"]);
+      const input = {
+        callId,
+        turnId: readString2(payload2["turn_id"]),
+        cwd: readString2(payload2["cwd"]),
+        command
+      };
+      events.push({
+        type: "tool.call",
+        sessionId,
+        name: "local_shell",
+        input
+      });
+      return events;
+    }
+    if (payloadType === "ExecCommandEnd") {
+      const callId = readString2(payload2["call_id"]);
+      const exitCode = readNumber(payload2["exit_code"]);
+      const output = {
+        callId,
+        turnId: readString2(payload2["turn_id"]),
+        cwd: readString2(payload2["cwd"]),
+        command: readStringArray(payload2["command"]),
+        exitCode,
+        aggregatedOutput: payload2["aggregated_output"]
+      };
+      events.push({
+        type: "tool.result",
+        sessionId,
+        name: "local_shell",
+        isError: exitCode !== undefined ? exitCode !== 0 : false,
+        output
+      });
+      return events;
+    }
+    if (payloadType === "Error") {
+      events.push({
+        type: "session.error",
+        sessionId,
+        error: new Error(readString2(payload2["message"]) ?? "Unknown rollout error")
+      });
+      return events;
+    }
+    events.push({
+      type: "activity",
+      sessionId,
+      message: payloadType ?? "event_msg"
+    });
+    return events;
+  }
+  if (chunk.type !== "response_item") {
+    return events;
+  }
+  const payload = toRecord4(chunk.payload);
+  if (payload === null) {
+    return events;
+  }
+  const itemType = readString2(payload["type"]);
+  if (itemType === "function_call") {
+    const name = readString2(payload["name"]) ?? "unknown-tool";
+    const callId = readString2(payload["call_id"]);
+    if (callId !== undefined) {
+      state.toolNamesByCallId.set(callId, name);
+    }
+    events.push({
+      type: "tool.call",
+      sessionId,
+      name,
+      input: parseMaybeJson(readString2(payload["arguments"]))
+    });
+    return events;
+  }
+  if (itemType === "function_call_output") {
+    const callId = readString2(payload["call_id"]);
+    const output = payload["output"];
+    const outputRecord = toRecord4(output);
+    const isError = outputRecord?.["is_error"] === true || readString2(outputRecord?.["status"]) === "error";
+    events.push({
+      type: "tool.result",
+      sessionId,
+      name: (callId !== undefined ? state.toolNamesByCallId.get(callId) : undefined) ?? "unknown-tool",
+      isError,
+      output
+    });
+    return events;
+  }
+  if (itemType === "local_shell_call") {
+    const status = readString2(payload["status"]);
+    const action = payload["action"];
+    const output = payload["output"];
+    const callId = readString2(payload["call_id"]);
+    const isTerminalStatus = status === "completed" || status === "failed" || status === "error";
+    if (isTerminalStatus) {
+      events.push({
+        type: "tool.result",
+        sessionId,
+        name: "local_shell",
+        isError: status !== "completed",
+        output: {
+          callId,
+          status,
+          action,
+          output
+        }
+      });
+      return events;
+    }
+    events.push({
+      type: "tool.call",
+      sessionId,
+      name: "local_shell",
+      input: {
+        callId,
+        status,
+        action
+      }
+    });
+    return events;
+  }
+  if (itemType === "message" && readString2(payload["role"]) === "assistant" && Array.isArray(payload["content"])) {
+    for (const item of payload["content"]) {
+      const content = toRecord4(item);
+      if (content === null) {
+        continue;
+      }
+      const contentType = readString2(content["type"]);
+      if (contentType !== "output_text" && contentType !== "input_text") {
+        continue;
+      }
+      const text = readString2(content["text"]);
+      if (text !== undefined && text.length > 0) {
+        events.push(...toAssistantTextEvents(sessionId, text, state));
+      }
+    }
+    return events;
+  }
+  return events;
+}
+function toAssistantTextEvents(sessionId, text, state) {
+  const previous = state.assistantSnapshots.get(sessionId) ?? "";
+  const content = `${previous}${text}`;
+  state.assistantSnapshots.set(sessionId, content);
+  return [
+    {
+      type: "assistant.delta",
+      sessionId,
+      text
+    },
+    {
+      type: "assistant.snapshot",
+      sessionId,
+      content
+    }
+  ];
+}
+function toRecord4(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+function readString2(value) {
+  return typeof value === "string" ? value : undefined;
+}
+function readNumber(value) {
+  return typeof value === "number" ? value : undefined;
+}
+function readStringArray(value) {
+  if (!Array.isArray(value)) {
+    return;
+  }
+  const strings = value.filter((item) => typeof item === "string");
+  return strings.length > 0 ? strings : undefined;
+}
+function parseMaybeJson(value) {
+  if (value === undefined) {
+    return;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 // src/sdk/tool-versions.ts
 import { spawn as spawn2 } from "child_process";
@@ -6270,6 +6540,7 @@ export {
   updateQueueCommand,
   tool,
   toggleQueueCommandMode,
+  toNormalizedEvents,
   streamEvents,
   stopDaemon,
   startServer,

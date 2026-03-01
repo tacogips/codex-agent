@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "vitest";
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runAgent, type AgentEvent } from "./agent-runner";
+import { runAgent, toNormalizedEvents, type AgentEvent } from "./agent-runner";
+import type { SessionStreamChunk } from "./session-runner";
 
 const createdDirs: string[] = [];
 
@@ -466,5 +467,187 @@ describe("runAgent", () => {
       );
     });
     expect(agentMessageEvent).toBeDefined();
+  });
+
+  test("streamMode normalized maps event stream to provider-agnostic events", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-normalized-event-"));
+    createdDirs.push(fixtureDir);
+
+    const fakeCodexPath = join(fixtureDir, "fake-codex-normalized-event.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"meta\":{\"id\":\"normalized-event-001\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"codex\",\"cli_version\":\"1.0.0\",\"source\":\"exec\"}}}'",
+        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"ExecCommandBegin\",\"call_id\":\"call_1\",\"turn_id\":\"turn_1\",\"command\":[\"echo\",\"ok\"],\"cwd\":\"/tmp/project\"}}'",
+        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"ExecCommandEnd\",\"call_id\":\"call_1\",\"turn_id\":\"turn_1\",\"command\":[\"echo\",\"ok\"],\"cwd\":\"/tmp/project\",\"exit_code\":0,\"aggregated_output\":\"ok\"}}'",
+        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"AgentMessage\",\"message\":\"hello\"}}'",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    const events: Array<Record<string, unknown>> = [];
+    for await (const event of runAgent(
+      {
+        prompt: "say hello",
+        streamMode: "normalized",
+      },
+      {
+        codexBinary: fakeCodexPath,
+      },
+    )) {
+      events.push(event as unknown as Record<string, unknown>);
+    }
+
+    expect(events.some((event) => event["type"] === "session.started")).toBe(true);
+    expect(events.some((event) => event["type"] === "tool.call")).toBe(true);
+    expect(events.some((event) => event["type"] === "tool.result")).toBe(true);
+    expect(events.some((event) => event["type"] === "assistant.delta")).toBe(true);
+    expect(events.some((event) => event["type"] === "assistant.snapshot")).toBe(true);
+
+    const completed = events.find((event) => event["type"] === "session.completed");
+    expect(completed).toBeDefined();
+    expect(completed?.["success"]).toBe(true);
+    expect(completed?.["exitCode"]).toBe(0);
+  });
+
+  test("streamMode normalized maps char stream to assistant.delta events", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-normalized-char-"));
+    createdDirs.push(fixtureDir);
+
+    const fakeCodexPath = join(fixtureDir, "fake-codex-normalized-char.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"normalized-char-001\"}'",
+        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"OK\"}}'",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    const events: Array<Record<string, unknown>> = [];
+    for await (const event of runAgent(
+      {
+        prompt: "say ok",
+        streamGranularity: "char",
+        streamMode: "normalized",
+      },
+      {
+        codexBinary: fakeCodexPath,
+      },
+    )) {
+      events.push(event as unknown as Record<string, unknown>);
+    }
+
+    const deltas = events
+      .filter((event) => event["type"] === "assistant.delta")
+      .map((event) => event["text"]);
+    expect(deltas).toEqual(["O", "K"]);
+  });
+
+  test("streamMode normalized emits session.error for rollout error events", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-normalized-error-"));
+    createdDirs.push(fixtureDir);
+
+    const fakeCodexPath = join(fixtureDir, "fake-codex-normalized-error.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"meta\":{\"id\":\"normalized-error-001\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"codex\",\"cli_version\":\"1.0.0\",\"source\":\"exec\"}}}'",
+        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"Error\",\"message\":\"boom\"}}'",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    const events: Array<Record<string, unknown>> = [];
+    for await (const event of runAgent(
+      {
+        prompt: "trigger error",
+        streamMode: "normalized",
+      },
+      {
+        codexBinary: fakeCodexPath,
+      },
+    )) {
+      events.push(event as unknown as Record<string, unknown>);
+    }
+
+    const sessionError = events.find((event) => event["type"] === "session.error");
+    expect(sessionError).toBeDefined();
+  });
+
+  test("toNormalizedEvents adapts raw message chunks", async () => {
+    const chunks: SessionStreamChunk[] = [
+      {
+        timestamp: "2026-01-01T00:00:00Z",
+        type: "session_meta",
+        payload: {
+          meta: {
+            id: "adapter-001",
+            timestamp: "2026-01-01T00:00:00Z",
+            cwd: "/tmp/project",
+            originator: "codex",
+            cli_version: "1.0.0",
+            source: "exec",
+          },
+        },
+      },
+      {
+        timestamp: "2026-01-01T00:00:01Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "search",
+          arguments: "{\"query\":\"hello\"}",
+          call_id: "call_1",
+        },
+      },
+      {
+        timestamp: "2026-01-01T00:00:02Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: {
+            items: [1, 2, 3],
+          },
+        },
+      },
+      {
+        timestamp: "2026-01-01T00:00:03Z",
+        type: "event_msg",
+        payload: {
+          type: "AgentMessage",
+          message: "done",
+        },
+      },
+    ];
+
+    async function* source(): AsyncGenerator<SessionStreamChunk, void, undefined> {
+      for (const chunk of chunks) {
+        yield chunk;
+      }
+    }
+
+    const normalized: Array<Record<string, unknown>> = [];
+    for await (const event of toNormalizedEvents(source())) {
+      normalized.push(event as unknown as Record<string, unknown>);
+    }
+
+    expect(normalized.some((event) => event["type"] === "session.started")).toBe(true);
+    expect(normalized.some((event) => event["type"] === "tool.call")).toBe(true);
+    expect(normalized.some((event) => event["type"] === "tool.result")).toBe(true);
+    expect(normalized.some((event) => event["type"] === "assistant.delta")).toBe(true);
   });
 });

@@ -511,7 +511,7 @@ function asString(value: unknown): string | undefined {
 function parseCandidateSessionMeta(meta: unknown): ParsedSessionMeta | null {
   const payload = asRecord(meta);
   const metaRecord = payload === null ? null : asRecord(payload["meta"]);
-  if (metaRecord === null) {
+  if (metaRecord === null || payload === null) {
     return null;
   }
 

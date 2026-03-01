@@ -1,5 +1,5 @@
 {
-  "lastUpdated": "2026-02-27T18:55:00Z",
+  "lastUpdated": "2026-03-01T09:50:00Z",
   "phases": {
     "1": { "status": "COMPLETED" },
     "2": { "status": "COMPLETED" },
@@ -8,7 +8,8 @@
     "5": { "status": "COMPLETED" },
     "6": { "status": "COMPLETED" },
     "7": { "status": "COMPLETED" },
-    "8": { "status": "COMPLETED" }
+    "8": { "status": "COMPLETED" },
+    "9": { "status": "IN_PROGRESS" }
   },
   "plans": {
     "phase1-core-types-rollout-reader": {
@@ -85,6 +86,15 @@
       "tasks": {
         "TASK-001": { "status": "Completed", "parallelizable": false, "deps": [] },
         "TASK-002": { "status": "Completed", "parallelizable": false, "deps": ["TASK-001"] }
+      }
+    },
+    "issue22-normalized-stream-events": {
+      "phase": 9,
+      "status": "In Progress",
+      "tasks": {
+        "TASK-001": { "status": "Completed", "parallelizable": false, "deps": [] },
+        "TASK-002": { "status": "Completed", "parallelizable": true, "deps": ["TASK-001"] },
+        "TASK-003": { "status": "Completed", "parallelizable": true, "deps": ["TASK-001"] }
       }
     }
   }

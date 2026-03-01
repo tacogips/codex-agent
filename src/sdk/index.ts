@@ -21,17 +21,26 @@ export { SessionRunner, RunningSession } from "./session-runner";
 
 export type {
   AgentRunnerOptions,
+  AgentStreamMode,
   AgentRequest,
   NewAgentRequest,
   ResumeAgentRequest,
   AgentAttachment,
   AgentEvent,
+  AgentNormalizedEvent,
+  AgentNormalizedChunkEvent,
   AgentSessionStartedEvent,
   AgentSessionMessageEvent,
   AgentSessionCompletedEvent,
   AgentSessionErrorEvent,
+  AgentAssistantDeltaEvent,
+  AgentAssistantSnapshotEvent,
+  AgentToolCallEvent,
+  AgentToolResultEvent,
+  AgentActivityEvent,
+  AgentNormalizedSessionCompletedEvent,
 } from "./agent-runner";
-export { runAgent } from "./agent-runner";
+export { runAgent, toNormalizedEvents } from "./agent-runner";
 
 export type {
   ToolVersionInfo,

@@ -14,6 +14,8 @@ import type { ApprovalMode, SandboxMode, StreamGranularity } from "../process/ty
 
 export interface AgentRunnerOptions extends SessionRunnerOptions {}
 
+export type AgentStreamMode = "raw" | "normalized";
+
 interface AgentRequestBase {
   readonly cwd?: string | undefined;
   readonly sandbox?: SandboxMode | undefined;
@@ -22,6 +24,7 @@ interface AgentRequestBase {
   readonly model?: string | undefined;
   readonly additionalArgs?: readonly string[] | undefined;
   readonly streamGranularity?: StreamGranularity | undefined;
+  readonly streamMode?: AgentStreamMode | undefined;
   readonly attachments?: readonly AgentAttachment[] | undefined;
 }
 
@@ -79,13 +82,78 @@ export type AgentEvent =
   | AgentSessionCompletedEvent
   | AgentSessionErrorEvent;
 
+export interface AgentAssistantDeltaEvent {
+  readonly type: "assistant.delta";
+  readonly sessionId: string;
+  readonly text: string;
+}
+
+export interface AgentAssistantSnapshotEvent {
+  readonly type: "assistant.snapshot";
+  readonly sessionId: string;
+  readonly content: string;
+}
+
+export interface AgentToolCallEvent {
+  readonly type: "tool.call";
+  readonly sessionId: string;
+  readonly name: string;
+  readonly input?: unknown;
+}
+
+export interface AgentToolResultEvent {
+  readonly type: "tool.result";
+  readonly sessionId: string;
+  readonly name: string;
+  readonly isError: boolean;
+  readonly output?: unknown;
+}
+
+export interface AgentActivityEvent {
+  readonly type: "activity";
+  readonly sessionId: string;
+  readonly message?: string;
+}
+
+export interface AgentNormalizedSessionCompletedEvent {
+  readonly type: "session.completed";
+  readonly sessionId: string;
+  readonly success: boolean;
+  readonly exitCode: number;
+  readonly error?: string;
+}
+
+export type AgentNormalizedEvent =
+  | AgentSessionStartedEvent
+  | AgentAssistantDeltaEvent
+  | AgentAssistantSnapshotEvent
+  | AgentToolCallEvent
+  | AgentToolResultEvent
+  | AgentActivityEvent
+  | AgentNormalizedSessionCompletedEvent
+  | AgentSessionErrorEvent;
+
+export type AgentNormalizedChunkEvent = Exclude<
+  AgentNormalizedEvent,
+  AgentNormalizedSessionCompletedEvent
+>;
+
+export function runAgent(
+  request: AgentRequest & { readonly streamMode: "normalized" },
+  options?: AgentRunnerOptions,
+): AsyncGenerator<AgentNormalizedEvent, void, undefined>;
+export function runAgent(
+  request: AgentRequest,
+  options?: AgentRunnerOptions,
+): AsyncGenerator<AgentEvent, void, undefined>;
 export async function* runAgent(
   request: AgentRequest,
   options?: AgentRunnerOptions,
-): AsyncGenerator<AgentEvent, void, undefined> {
+): AsyncGenerator<AgentEvent | AgentNormalizedEvent, void, undefined> {
   const runner = new SessionRunner(options);
   const normalized = await normalizeAttachments(request.attachments);
   const resumed = isResumeRequest(request);
+  const normalizedMode = request.streamMode === "normalized";
   let currentSessionId: string | undefined =
     resumed ? request.sessionId : undefined;
 
@@ -94,33 +162,50 @@ export async function* runAgent(
     currentSessionId = session.sessionId;
 
     const iterator = session.messages();
+    const normalizerState = createNormalizerState();
+
     if (resumed) {
-      yield {
+      const startedEvent: AgentSessionStartedEvent = {
         type: "session.started",
         sessionId: session.sessionId,
         resumed: true,
       };
+      yield startedEvent;
     } else {
       const firstChunk = await iterator.next();
       if (firstChunk.done) {
-        yield {
+        const startedEvent: AgentSessionStartedEvent = {
           type: "session.started",
           sessionId: session.sessionId,
           resumed: false,
         };
+        yield startedEvent;
       } else {
         const startedSessionId = resolveSessionId(session.sessionId, firstChunk.value);
         currentSessionId = startedSessionId;
-        yield {
+        const startedEvent: AgentSessionStartedEvent = {
           type: "session.started",
           sessionId: startedSessionId,
           resumed: false,
         };
-        yield {
-          type: "session.message",
-          sessionId: startedSessionId,
-          chunk: firstChunk.value,
-        };
+        yield startedEvent;
+
+        if (normalizedMode) {
+          for (const event of normalizeChunkToEvents(
+            firstChunk.value,
+            startedSessionId,
+            normalizerState,
+            false,
+          )) {
+            yield event;
+          }
+        } else {
+          yield {
+            type: "session.message",
+            sessionId: startedSessionId,
+            chunk: firstChunk.value,
+          };
+        }
       }
     }
 
@@ -131,19 +216,41 @@ export async function* runAgent(
       }
       const resolvedSessionId = resolveSessionId(session.sessionId, nextChunk.value);
       currentSessionId = resolvedSessionId;
-      yield {
-        type: "session.message",
-        sessionId: resolvedSessionId,
-        chunk: nextChunk.value,
-      };
+
+      if (normalizedMode) {
+        for (const event of normalizeChunkToEvents(
+          nextChunk.value,
+          resolvedSessionId,
+          normalizerState,
+          false,
+        )) {
+          yield event;
+        }
+      } else {
+        yield {
+          type: "session.message",
+          sessionId: resolvedSessionId,
+          chunk: nextChunk.value,
+        };
+      }
     }
 
     const result = await session.waitForCompletion();
-    yield {
-      type: "session.completed",
-      sessionId: currentSessionId ?? session.sessionId,
-      result,
-    };
+    const resolvedSessionId = currentSessionId ?? session.sessionId;
+    if (normalizedMode) {
+      yield {
+        type: "session.completed",
+        sessionId: resolvedSessionId,
+        success: result.success,
+        exitCode: result.exitCode,
+      };
+    } else {
+      yield {
+        type: "session.completed",
+        sessionId: resolvedSessionId,
+        result,
+      };
+    }
   } catch (error: unknown) {
     yield {
       type: "session.error",
@@ -152,6 +259,19 @@ export async function* runAgent(
     };
   } finally {
     await normalized.cleanup();
+  }
+}
+
+export async function* toNormalizedEvents(
+  chunks: AsyncIterable<SessionStreamChunk>,
+): AsyncGenerator<AgentNormalizedChunkEvent, void, undefined> {
+  const state = createNormalizerState();
+  let fallbackSessionId = "unknown-session";
+  for await (const chunk of chunks) {
+    fallbackSessionId = resolveSessionId(fallbackSessionId, chunk);
+    for (const event of normalizeChunkToEvents(chunk, fallbackSessionId, state, true)) {
+      yield event;
+    }
   }
 }
 
@@ -333,4 +453,287 @@ function toError(value: unknown): Error {
 
 function isResumeRequest(request: AgentRequest): request is ResumeAgentRequest {
   return typeof request.sessionId === "string";
+}
+
+interface NormalizerState {
+  readonly startedSessionIds: Set<string>;
+  readonly assistantSnapshots: Map<string, string>;
+  readonly toolNamesByCallId: Map<string, string>;
+}
+
+function createNormalizerState(): NormalizerState {
+  return {
+    startedSessionIds: new Set<string>(),
+    assistantSnapshots: new Map<string, string>(),
+    toolNamesByCallId: new Map<string, string>(),
+  };
+}
+
+function normalizeChunkToEvents(
+  chunk: SessionStreamChunk,
+  fallbackSessionId: string,
+  state: NormalizerState,
+  includeSessionStarted: boolean,
+): readonly AgentNormalizedChunkEvent[] {
+  const sessionId = resolveSessionId(fallbackSessionId, chunk);
+  const events: AgentNormalizedChunkEvent[] = [];
+
+  if (isCharChunk(chunk)) {
+    events.push(...toAssistantTextEvents(sessionId, chunk.char, state));
+    return events;
+  }
+
+  if (chunk.type === "session_meta") {
+    if (includeSessionStarted && !state.startedSessionIds.has(sessionId)) {
+      state.startedSessionIds.add(sessionId);
+      events.push({
+        type: "session.started",
+        sessionId,
+        resumed: false,
+      });
+    }
+    return events;
+  }
+
+  if (chunk.type === "event_msg") {
+    const payload = toRecord(chunk.payload);
+    if (payload === null) {
+      return events;
+    }
+
+    const payloadType = readString(payload["type"]);
+    if (payloadType === "AgentMessage") {
+      const message = readString(payload["message"]);
+      if (message !== undefined) {
+        events.push(...toAssistantTextEvents(sessionId, message, state));
+      }
+      return events;
+    }
+
+    if (payloadType === "AgentReasoning") {
+      const message = readString(payload["text"]);
+      events.push({
+        type: "activity",
+        sessionId,
+        ...(message !== undefined ? { message } : {}),
+      });
+      return events;
+    }
+
+    if (payloadType === "ExecCommandBegin") {
+      const callId = readString(payload["call_id"]);
+      const command = readStringArray(payload["command"]);
+      const input = {
+        callId,
+        turnId: readString(payload["turn_id"]),
+        cwd: readString(payload["cwd"]),
+        command,
+      };
+      events.push({
+        type: "tool.call",
+        sessionId,
+        name: "local_shell",
+        input,
+      });
+      return events;
+    }
+
+    if (payloadType === "ExecCommandEnd") {
+      const callId = readString(payload["call_id"]);
+      const exitCode = readNumber(payload["exit_code"]);
+      const output = {
+        callId,
+        turnId: readString(payload["turn_id"]),
+        cwd: readString(payload["cwd"]),
+        command: readStringArray(payload["command"]),
+        exitCode,
+        aggregatedOutput: payload["aggregated_output"],
+      };
+      events.push({
+        type: "tool.result",
+        sessionId,
+        name: "local_shell",
+        isError: exitCode !== undefined ? exitCode !== 0 : false,
+        output,
+      });
+      return events;
+    }
+
+    if (payloadType === "Error") {
+      events.push({
+        type: "session.error",
+        sessionId,
+        error: new Error(readString(payload["message"]) ?? "Unknown rollout error"),
+      });
+      return events;
+    }
+
+    events.push({
+      type: "activity",
+      sessionId,
+      message: payloadType ?? "event_msg",
+    });
+    return events;
+  }
+
+  if (chunk.type !== "response_item") {
+    return events;
+  }
+
+  const payload = toRecord(chunk.payload);
+  if (payload === null) {
+    return events;
+  }
+
+  const itemType = readString(payload["type"]);
+  if (itemType === "function_call") {
+    const name = readString(payload["name"]) ?? "unknown-tool";
+    const callId = readString(payload["call_id"]);
+    if (callId !== undefined) {
+      state.toolNamesByCallId.set(callId, name);
+    }
+    events.push({
+      type: "tool.call",
+      sessionId,
+      name,
+      input: parseMaybeJson(readString(payload["arguments"])),
+    });
+    return events;
+  }
+
+  if (itemType === "function_call_output") {
+    const callId = readString(payload["call_id"]);
+    const output = payload["output"];
+    const outputRecord = toRecord(output);
+    const isError =
+      outputRecord?.["is_error"] === true ||
+      readString(outputRecord?.["status"]) === "error";
+    events.push({
+      type: "tool.result",
+      sessionId,
+      name:
+        (callId !== undefined ? state.toolNamesByCallId.get(callId) : undefined) ??
+        "unknown-tool",
+      isError,
+      output,
+    });
+    return events;
+  }
+
+  if (itemType === "local_shell_call") {
+    const status = readString(payload["status"]);
+    const action = payload["action"];
+    const output = payload["output"];
+    const callId = readString(payload["call_id"]);
+    const isTerminalStatus =
+      status === "completed" || status === "failed" || status === "error";
+
+    if (isTerminalStatus) {
+      events.push({
+        type: "tool.result",
+        sessionId,
+        name: "local_shell",
+        isError: status !== "completed",
+        output: {
+          callId,
+          status,
+          action,
+          output,
+        },
+      });
+      return events;
+    }
+
+    events.push({
+      type: "tool.call",
+      sessionId,
+      name: "local_shell",
+      input: {
+        callId,
+        status,
+        action,
+      },
+    });
+    return events;
+  }
+
+  if (
+    itemType === "message" &&
+    readString(payload["role"]) === "assistant" &&
+    Array.isArray(payload["content"])
+  ) {
+    for (const item of payload["content"]) {
+      const content = toRecord(item);
+      if (content === null) {
+        continue;
+      }
+      const contentType = readString(content["type"]);
+      if (contentType !== "output_text" && contentType !== "input_text") {
+        continue;
+      }
+      const text = readString(content["text"]);
+      if (text !== undefined && text.length > 0) {
+        events.push(...toAssistantTextEvents(sessionId, text, state));
+      }
+    }
+    return events;
+  }
+
+  return events;
+}
+
+function toAssistantTextEvents(
+  sessionId: string,
+  text: string,
+  state: NormalizerState,
+): readonly AgentNormalizedChunkEvent[] {
+  const previous = state.assistantSnapshots.get(sessionId) ?? "";
+  const content = `${previous}${text}`;
+  state.assistantSnapshots.set(sessionId, content);
+  return [
+    {
+      type: "assistant.delta",
+      sessionId,
+      text,
+    },
+    {
+      type: "assistant.snapshot",
+      sessionId,
+      content,
+    },
+  ];
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
+
+function readStringArray(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const strings = value.filter((item): item is string => typeof item === "string");
+  return strings.length > 0 ? strings : undefined;
+}
+
+function parseMaybeJson(value: string | undefined): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }

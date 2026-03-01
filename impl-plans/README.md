@@ -79,7 +79,7 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Status | Design Reference | Last Updated |
 |------|--------|------------------|--------------|
-| _None_ | - | - | - |
+| [issue22-normalized-stream-events](active/issue22-normalized-stream-events.md) | In Progress | github issue #22 | 2026-03-01 |
 
 ## Completed Plans
 
@@ -110,6 +110,7 @@ Only plans from eligible phases should be read to minimize context loading.
 | 6 | COMPLETED | Phase 5 |
 | 7 | COMPLETED | Phase 6 |
 | 8 | COMPLETED | Phase 7 |
+| 9 | IN_PROGRESS | Phase 8 |
 
 ### Phase to Plans Mapping
 
@@ -138,6 +139,9 @@ PHASE_TO_PLANS = {
   ],
   8: [
     "issue17-public-export-session-search.md"
+  ],
+  9: [
+    "issue22-normalized-stream-events.md"
   ]
 }
 ```
