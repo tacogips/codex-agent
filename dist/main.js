@@ -1233,8 +1233,12 @@ class ProcessManager {
       completion
     };
   }
-  spawnResume(sessionId, options) {
-    const args = ["resume", sessionId, ...buildCommonArgs(options)];
+  spawnResume(sessionId, options, prompt) {
+    const args = ["exec", "resume", "--json", sessionId];
+    if (prompt !== undefined && prompt.trim().length > 0) {
+      args.push(prompt);
+    }
+    args.push(...buildCommonArgs(options));
     return this.spawnTracked(args, options, `resume ${sessionId}`);
   }
   spawnFork(sessionId, nthMessage, options) {
@@ -2916,7 +2920,7 @@ class SessionRunner {
     const proc = this.pm.spawnResume(sessionId, {
       ...options,
       codexBinary: this.options.codexBinary
-    });
+    }, prompt);
     const running = new RunningSession(sessionId, this.pm, proc.id, startedAt, options?.streamGranularity ?? "event", false);
     this.trackSession(running);
     const watcher = new RolloutWatcher;
@@ -2936,10 +2940,6 @@ class SessionRunner {
       this.attachWatchWhenSessionAppears(sessionId, watcher, includeExisting);
     }
     running.setStopHook(() => watcher.stop());
-    if (prompt !== undefined && prompt.trim().length > 0) {
-      this.pm.writeInput(proc.id, prompt + `
-`);
-    }
     waitForExit2(this.pm, proc.id).then((exitCode) => {
       watcher.stop();
       running.finish(exitCode);

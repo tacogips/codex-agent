@@ -519,6 +519,104 @@ describe("runAgent", () => {
     expect(completed?.["exitCode"]).toBe(0);
   });
 
+  test("streamMode normalized emits assistant text events on resumed sessions", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-normalized-resume-"));
+    createdDirs.push(fixtureDir);
+
+    const codexHome = join(fixtureDir, "codex-home");
+    const now = new Date();
+    const dayDir = join(
+      codexHome,
+      "sessions",
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    );
+    await mkdir(dayDir, { recursive: true });
+
+    const sessionId = "normalized-resume-001";
+    const rolloutPath = join(dayDir, `rollout-${sessionId}.jsonl`);
+    await writeFile(
+      rolloutPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-01-01T00:00:00Z",
+          type: "session_meta",
+          payload: {
+            meta: {
+              id: sessionId,
+              timestamp: "2026-01-01T00:00:00Z",
+              cwd: "/tmp/project",
+              originator: "codex",
+              cli_version: "1.0.0",
+              source: "cli",
+            },
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-01-01T00:00:01Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "hello again" }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const argsLogPath = join(fixtureDir, "normalized-resume-args.log");
+    const fakeCodexPath = join(fixtureDir, "fake-codex-normalized-resume.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        "sleep 0.05",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    const events: Array<Record<string, unknown>> = [];
+    for await (const event of runAgent(
+      {
+        sessionId,
+        prompt: "continue",
+        streamMode: "normalized",
+      },
+      {
+        codexBinary: fakeCodexPath,
+        codexHome,
+        includeExistingOnResume: true,
+      },
+    )) {
+      events.push(event as unknown as Record<string, unknown>);
+    }
+
+    const args = await readFile(argsLogPath, "utf-8");
+    expect(args).toContain("exec");
+    expect(args).toContain("resume");
+    expect(args).toContain("--json");
+    expect(args).toContain(sessionId);
+    expect(args).toContain("continue");
+
+    expect(
+      events.some(
+        (event) => event["type"] === "assistant.delta" && event["text"] === "hello again",
+      ),
+    ).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event["type"] === "assistant.snapshot" && event["content"] === "hello again",
+      ),
+    ).toBe(true);
+  });
+
   test("streamMode normalized maps char stream to assistant.delta events", async () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-normalized-char-"));
     createdDirs.push(fixtureDir);
