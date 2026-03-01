@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -169,5 +169,141 @@ describe("dist runtime runAgent", () => {
         event.chunk.type === "session_meta",
     );
     expect(hasExistingRolloutLine).toBe(true);
+  });
+
+  test("aggregates usage stats from dist entrypoint for session_meta timestamp variants", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-02T12:00:00.000Z"));
+
+      const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-dist-usage-"));
+      createdDirs.push(fixtureDir);
+
+      const sessionsDir = join(fixtureDir, "sessions");
+      await mkdir(join(sessionsDir, "2026", "02", "01"), { recursive: true });
+      await mkdir(join(sessionsDir, "2026", "02", "02"), { recursive: true });
+
+      await writeFile(
+        join(sessionsDir, "2026", "02", "01", "rollout-dist-usage-a.jsonl"),
+        [
+          JSON.stringify({
+            timestamp: "invalid-line-timestamp",
+            type: "session_meta",
+            payload: {
+              meta: {
+                id: "dist-usage-a",
+                timestamp: "2026-02-01T08:00:00.000Z",
+                cwd: "/tmp/project",
+              },
+            },
+          }),
+          JSON.stringify({
+            timestamp: "invalid-line-timestamp",
+            type: "event_msg",
+            payload: {
+              type: "UserMessage",
+              message: "hello",
+            },
+          }),
+          JSON.stringify({
+            timestamp: "invalid-line-timestamp",
+            type: "event_msg",
+            payload: {
+              type: "token_count",
+              info: {
+                model: "gpt-5-codex",
+                stream_id: "dist-usage-stream-1",
+                last_token_usage: {
+                  input_tokens: 2,
+                  output_tokens: 3,
+                  total_tokens: 5,
+                },
+              },
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await writeFile(
+        join(sessionsDir, "2026", "02", "02", "rollout-dist-usage-b.jsonl"),
+        [
+          JSON.stringify({
+            timestamp: "invalid-line-timestamp",
+            type: "session_meta",
+            payload: {
+              id: "dist-usage-b",
+              timestamp: "2026-02-02T09:00:00.000Z",
+              cwd: "/tmp/project",
+            },
+          }),
+          JSON.stringify({
+            timestamp: "invalid-line-timestamp",
+            type: "event_msg",
+            payload: {
+              type: "UserMessage",
+              message: "continue",
+            },
+          }),
+          JSON.stringify({
+            timestamp: "invalid-line-timestamp",
+            type: "event_msg",
+            payload: {
+              type: "token_count",
+              info: {
+                model: "gpt-5-codex",
+                stream_id: "dist-usage-stream-1",
+                total_token_usage: {
+                  input_tokens: 5,
+                  output_tokens: 7,
+                  total_tokens: 12,
+                },
+              },
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      // @ts-expect-error dist artifact is runtime-only in this repository.
+      const distModule = await import("../../dist/main.js");
+      const getCodexUsageStats = distModule.getCodexUsageStats as (options?: {
+        codexSessionsDir?: string;
+        recentDays?: number;
+      }) => Promise<{
+        totalSessions: number;
+        totalMessages: number;
+        firstSessionDate: string | null;
+        modelUsage: Record<
+          string,
+          {
+            inputTokens: number;
+            outputTokens: number;
+            cacheReadInputTokens: number;
+            cacheCreationInputTokens: number;
+          }
+        >;
+      } | null>;
+
+      const stats = await getCodexUsageStats({
+        codexSessionsDir: sessionsDir,
+        recentDays: 2,
+      });
+
+      expect(stats).not.toBeNull();
+      expect(stats?.totalSessions).toBe(2);
+      expect(stats?.totalMessages).toBe(2);
+      expect(stats?.firstSessionDate).toBe("2026-02-01");
+      expect(stats?.modelUsage).toEqual({
+        "gpt-5-codex": {
+          inputTokens: 7,
+          outputTokens: 10,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
