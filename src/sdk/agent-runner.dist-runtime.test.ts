@@ -22,6 +22,7 @@ describe("dist runtime runAgent", () => {
     expect(typeof distModule.searchSessionTranscript).toBe("function");
     expect(typeof distModule.getCodexCliVersion).toBe("function");
     expect(typeof distModule.getToolVersions).toBe("function");
+    expect(typeof distModule.getCodexUsageStats).toBe("function");
     expect(typeof distModule.toNormalizedEvents).toBe("function");
   });
 

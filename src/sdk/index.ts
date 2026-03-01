@@ -49,3 +49,11 @@ export type {
   GetToolVersionsOptions,
 } from "./tool-versions";
 export { getCodexCliVersion, getToolVersions } from "./tool-versions";
+
+export type {
+  ModelUsageStats,
+  DailyActivity,
+  CodexUsageStats,
+  GetCodexUsageStatsOptions,
+} from "./usage-stats";
+export { getCodexUsageStats } from "./usage-stats";

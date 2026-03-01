@@ -3623,6 +3623,292 @@ function firstLine(value) {
   }
   return trimmed.split(/\r?\n/u)[0] ?? null;
 }
+// src/sdk/usage-stats.ts
+import { readdir as readdir2 } from "fs/promises";
+import { join as join10 } from "path";
+var ROLLOUT_PREFIX3 = "rollout-";
+var ROLLOUT_EXT3 = ".jsonl";
+var DEFAULT_RECENT_DAYS = 14;
+var DEFAULT_CACHE_TTL_MS = 5000;
+var usageStatsCache = null;
+async function getCodexUsageStats(options) {
+  const sessionsDir = options?.codexSessionsDir ?? join10(resolveCodexHome(), "sessions");
+  const recentDays = normalizeRecentDays(options?.recentDays);
+  const now = Date.now();
+  const cacheKey = `${sessionsDir}::${String(recentDays)}`;
+  if (usageStatsCache !== null && usageStatsCache.key === cacheKey && usageStatsCache.expiresAt > now) {
+    return usageStatsCache.value;
+  }
+  const rolloutFiles = await listRolloutFiles(sessionsDir);
+  if (rolloutFiles === null) {
+    cacheUsageStats(cacheKey, now, null);
+    return null;
+  }
+  const lastComputedDate = dateKeyFromEpochMs(now);
+  const firstRecentDayEpochMs = dayStartEpochMs(now) - (recentDays - 1) * 86400000;
+  let totalSessions = 0;
+  let totalMessages = 0;
+  let firstSessionDate = null;
+  const modelUsageMap = new Map;
+  const dailyActivityMap = new Map;
+  for (const rolloutFile of rolloutFiles) {
+    let hadParsableLine = false;
+    let sessionDateForFile = null;
+    try {
+      for await (const line of streamEvents(rolloutFile)) {
+        hadParsableLine = true;
+        const lineDate = dateKeyFromTimestamp(line.timestamp);
+        if (lineDate !== null && (sessionDateForFile === null || lineDate < sessionDateForFile)) {
+          sessionDateForFile = lineDate;
+        }
+        if (isSessionMeta(line)) {
+          const sessionMetaDate = dateKeyFromTimestamp(line.payload.meta.timestamp);
+          if (sessionMetaDate !== null && (sessionDateForFile === null || sessionMetaDate < sessionDateForFile)) {
+            sessionDateForFile = sessionMetaDate;
+          }
+        }
+        if (isUserOrAssistantMessage(line)) {
+          totalMessages += 1;
+          if (lineDate !== null) {
+            getOrCreateDailyActivity(dailyActivityMap, lineDate).messageCount += 1;
+          }
+        }
+        const toolCalls = extractToolCallCount(line);
+        if (toolCalls > 0 && lineDate !== null) {
+          getOrCreateDailyActivity(dailyActivityMap, lineDate).toolCallCount += toolCalls;
+        }
+        const usageEvent = extractUsageEvent(line);
+        if (usageEvent === null || usageEvent.totalTokens <= 0) {
+          continue;
+        }
+        const model = usageEvent.model;
+        const modelUsage = getOrCreateModelUsage(modelUsageMap, model);
+        modelUsage.inputTokens += usageEvent.inputTokens;
+        modelUsage.outputTokens += usageEvent.outputTokens;
+        modelUsage.cacheReadInputTokens += usageEvent.cacheReadInputTokens;
+        modelUsage.cacheCreationInputTokens += usageEvent.cacheCreationInputTokens;
+        if (lineDate !== null) {
+          const daily = getOrCreateDailyActivity(dailyActivityMap, lineDate);
+          const prev = daily.tokensByModel.get(model) ?? 0;
+          daily.tokensByModel.set(model, prev + usageEvent.totalTokens);
+        }
+      }
+    } catch {
+      continue;
+    }
+    if (!hadParsableLine) {
+      continue;
+    }
+    totalSessions += 1;
+    if (sessionDateForFile !== null) {
+      if (firstSessionDate === null || sessionDateForFile < firstSessionDate) {
+        firstSessionDate = sessionDateForFile;
+      }
+      getOrCreateDailyActivity(dailyActivityMap, sessionDateForFile).sessionCount += 1;
+    }
+  }
+  const recentDailyActivity = [];
+  for (let offset = 0;offset < recentDays; offset += 1) {
+    const epochMs = firstRecentDayEpochMs + offset * 86400000;
+    const date = dateKeyFromEpochMs(epochMs);
+    const activity = dailyActivityMap.get(date);
+    if (activity === undefined) {
+      recentDailyActivity.push({ date });
+      continue;
+    }
+    const tokensByModel = mapToRecord(activity.tokensByModel);
+    recentDailyActivity.push({
+      date,
+      ...activity.messageCount > 0 ? { messageCount: activity.messageCount } : {},
+      ...activity.sessionCount > 0 ? { sessionCount: activity.sessionCount } : {},
+      ...activity.toolCallCount > 0 ? { toolCallCount: activity.toolCallCount } : {},
+      ...Object.keys(tokensByModel).length > 0 ? { tokensByModel } : {}
+    });
+  }
+  const result = {
+    totalSessions,
+    totalMessages,
+    firstSessionDate,
+    lastComputedDate,
+    modelUsage: mapToRecord(modelUsageMap),
+    recentDailyActivity
+  };
+  cacheUsageStats(cacheKey, now, result);
+  return result;
+}
+function normalizeRecentDays(value) {
+  if (value === undefined) {
+    return DEFAULT_RECENT_DAYS;
+  }
+  if (!Number.isFinite(value)) {
+    return DEFAULT_RECENT_DAYS;
+  }
+  const floored = Math.floor(value);
+  return floored > 0 ? floored : DEFAULT_RECENT_DAYS;
+}
+async function listRolloutFiles(sessionsDir) {
+  try {
+    const files = [];
+    await collectRolloutFilesRecursive(sessionsDir, files);
+    files.sort();
+    return files;
+  } catch {
+    return null;
+  }
+}
+async function collectRolloutFilesRecursive(dirPath, out) {
+  const entries = await readdir2(dirPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = join10(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      await collectRolloutFilesRecursive(fullPath, out);
+      continue;
+    }
+    if (entry.isFile() && entry.name.startsWith(ROLLOUT_PREFIX3) && entry.name.endsWith(ROLLOUT_EXT3)) {
+      out.push(fullPath);
+    }
+  }
+}
+function cacheUsageStats(key, nowEpochMs, value) {
+  usageStatsCache = {
+    key,
+    expiresAt: nowEpochMs + DEFAULT_CACHE_TTL_MS,
+    value
+  };
+}
+function getOrCreateModelUsage(modelUsageMap, model) {
+  const existing = modelUsageMap.get(model);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0
+  };
+  modelUsageMap.set(model, created);
+  return created;
+}
+function getOrCreateDailyActivity(activityMap, date) {
+  const existing = activityMap.get(date);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = {
+    messageCount: 0,
+    sessionCount: 0,
+    toolCallCount: 0,
+    tokensByModel: new Map
+  };
+  activityMap.set(date, created);
+  return created;
+}
+function mapToRecord(value) {
+  const result = {};
+  for (const [key, entry] of value.entries()) {
+    result[key] = entry;
+  }
+  return result;
+}
+function isUserOrAssistantMessage(line) {
+  if (isEventMsg(line)) {
+    const payload = toRecord5(line.payload);
+    const eventType = readString3(payload, "type");
+    return eventType === "UserMessage" || eventType === "AgentMessage";
+  }
+  if (isResponseItem(line)) {
+    const payload = toRecord5(line.payload);
+    if (readString3(payload, "type") !== "message") {
+      return false;
+    }
+    const role = readString3(payload, "role");
+    return role === "user" || role === "assistant";
+  }
+  return false;
+}
+function extractToolCallCount(line) {
+  if (isEventMsg(line)) {
+    const payload = toRecord5(line.payload);
+    if (readString3(payload, "type") === "ExecCommandBegin") {
+      return 1;
+    }
+  }
+  if (isResponseItem(line)) {
+    const payload = toRecord5(line.payload);
+    const itemType = readString3(payload, "type");
+    if (itemType === "function_call" || itemType === "local_shell_call") {
+      return 1;
+    }
+  }
+  return 0;
+}
+function extractUsageEvent(line) {
+  if (!isEventMsg(line)) {
+    return null;
+  }
+  const payload = toRecord5(line.payload);
+  if (readString3(payload, "type") !== "TurnComplete") {
+    return null;
+  }
+  const usage = toRecord5(payload?.["usage"]);
+  if (usage === null) {
+    return null;
+  }
+  const inputTokens = readNumber2(usage, "input_tokens") ?? readNumber2(usage, "inputTokens") ?? 0;
+  const outputTokens = readNumber2(usage, "output_tokens") ?? readNumber2(usage, "outputTokens") ?? 0;
+  const cacheReadInputTokens = readNumber2(usage, "cache_read_input_tokens") ?? readNumber2(usage, "cacheReadInputTokens") ?? readNumber2(usage, "cached_input_tokens") ?? 0;
+  const cacheCreationInputTokens = readNumber2(usage, "cache_creation_input_tokens") ?? readNumber2(usage, "cacheCreationInputTokens") ?? 0;
+  const computedTotal = inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+  const totalTokens = readNumber2(usage, "total_tokens") ?? readNumber2(usage, "totalTokens") ?? computedTotal;
+  const model = readString3(usage, "model") ?? readString3(usage, "model_id") ?? readString3(payload, "model") ?? "unknown";
+  return {
+    model,
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    totalTokens
+  };
+}
+function toRecord5(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+function readString3(value, key) {
+  if (value === null) {
+    return;
+  }
+  const candidate = value[key];
+  return typeof candidate === "string" ? candidate : undefined;
+}
+function readNumber2(value, key) {
+  if (value === null) {
+    return;
+  }
+  const candidate = value[key];
+  if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
+    return;
+  }
+  return candidate;
+}
+function dateKeyFromTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  const epochMs = date.getTime();
+  if (Number.isNaN(epochMs)) {
+    return null;
+  }
+  return dateKeyFromEpochMs(epochMs);
+}
+function dayStartEpochMs(epochMs) {
+  const date = new Date(epochMs);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+function dateKeyFromEpochMs(epochMs) {
+  return new Date(epochMs).toISOString().slice(0, 10);
+}
 // src/server/router.ts
 class Router {
   routes = [];
@@ -4797,14 +5083,14 @@ function resolveServerConfig(overrides) {
 // src/daemon/manager.ts
 import { spawn as spawn3 } from "child_process";
 import { readFile as readFile7, writeFile as writeFile7, rename as rename6, unlink, mkdir as mkdir6 } from "fs/promises";
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 import { homedir as homedir7 } from "os";
-var DEFAULT_CONFIG_DIR6 = join10(homedir7(), ".config", "codex-agent");
+var DEFAULT_CONFIG_DIR6 = join11(homedir7(), ".config", "codex-agent");
 var PID_FILENAME = "daemon.pid";
 var POLL_INTERVAL_MS = 200;
 var POLL_TIMEOUT_MS = 1e4;
 function pidFilePath(configDir) {
-  return join10(configDir ?? DEFAULT_CONFIG_DIR6, PID_FILENAME);
+  return join11(configDir ?? DEFAULT_CONFIG_DIR6, PID_FILENAME);
 }
 async function readPidFile(configDir) {
   try {
@@ -4871,7 +5157,7 @@ async function startDaemon(config = {}) {
   if (existing.status === "stale") {
     await removePidFile(configDir);
   }
-  const binPath = join10(import.meta.dir, "..", "bin.ts");
+  const binPath = join11(import.meta.dir, "..", "bin.ts");
   const daemonArgs = ["run", binPath, "server", "start", "--port", String(port)];
   if (host !== undefined && host !== "") {
     daemonArgs.push("--host", host);
@@ -6599,6 +6885,7 @@ export {
   getToolVersions,
   getSessionActivity,
   getDaemonStatus,
+  getCodexUsageStats,
   getCodexCliVersion,
   getChangedFiles,
   getBookmark,

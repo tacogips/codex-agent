@@ -253,6 +253,10 @@ export type {
   AgentToolVersions,
   GetCodexCliVersionOptions,
   GetToolVersionsOptions,
+  ModelUsageStats,
+  DailyActivity,
+  CodexUsageStats,
+  GetCodexUsageStatsOptions,
 } from "./sdk/index";
 export {
   BasicSdkEventEmitter,
@@ -264,6 +268,7 @@ export {
   toNormalizedEvents,
   getCodexCliVersion,
   getToolVersions,
+  getCodexUsageStats,
 } from "./sdk/index";
 
 // Server
