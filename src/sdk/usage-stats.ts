@@ -404,6 +404,7 @@ function extractUsageEvent(line: RolloutLine): UsageEvent | null {
   let source: UsageEvent["source"] | null = null;
   let isCumulative = false;
   let aggregationKey: string | undefined;
+  let model: string | undefined;
 
   if (eventType === "TurnComplete") {
     source = "turn_complete";
@@ -431,11 +432,8 @@ function extractUsageEvent(line: RolloutLine): UsageEvent | null {
       usage = toRecord(info["usage"]) ?? toRecord(payload["usage"]) ?? payload;
       isCumulative = false;
     }
-    aggregationKey = extractTokenCountAggregationKey(
-      payload,
-      info,
-      modelFromInfo,
-    );
+    model = resolveTokenCountModel(payload, usage, info, modelFromInfo);
+    aggregationKey = extractTokenCountAggregationKey(payload, info, model);
   }
 
   if (source === null || usage === null) {
@@ -469,7 +467,8 @@ function extractUsageEvent(line: RolloutLine): UsageEvent | null {
     readNumber(usage, "totalTokens") ??
     computedTotal;
 
-  const model =
+  model =
+    model ??
     modelFromInfo ??
     readString(usage, "model") ??
     readString(usage, "model_id") ??
@@ -621,7 +620,7 @@ function maxDefined(previous: number | undefined, current: number): number {
 function extractTokenCountAggregationKey(
   payload: Record<string, unknown>,
   info: Record<string, unknown>,
-  modelFromInfo: string | undefined,
+  model: string,
 ): string {
   const parts: string[] = [];
   const infoStreamId = readString(info, "stream_id");
@@ -644,9 +643,69 @@ function extractTokenCountAggregationKey(
   if (messageId !== undefined) {
     parts.push(`message:${messageId}`);
   }
-  const model = modelFromInfo ?? readString(payload, "model") ?? "unknown";
   parts.push(`model:${model}`);
   return parts.join("|");
+}
+
+function resolveTokenCountModel(
+  payload: Record<string, unknown>,
+  usage: Record<string, unknown> | null,
+  info: Record<string, unknown>,
+  modelFromInfo: string | undefined,
+): string {
+  const explicitModel =
+    modelFromInfo ??
+    readString(usage, "model") ??
+    readString(usage, "model_id") ??
+    readString(payload, "model");
+  if (explicitModel !== undefined) {
+    return explicitModel;
+  }
+
+  const payloadRateLimitsModel = extractModelFromRateLimits(
+    toRecord(payload["rate_limits"]),
+  );
+  if (payloadRateLimitsModel !== undefined) {
+    return payloadRateLimitsModel;
+  }
+
+  const infoRateLimitsModel = extractModelFromRateLimits(
+    toRecord(info["rate_limits"]),
+  );
+  if (infoRateLimitsModel !== undefined) {
+    return infoRateLimitsModel;
+  }
+
+  return "unknown";
+}
+
+function extractModelFromRateLimits(
+  rateLimits: Record<string, unknown> | null,
+): string | undefined {
+  const limitName = readString(rateLimits, "limit_name");
+  const normalizedLimitName = normalizeRateLimitModel(limitName);
+  if (normalizedLimitName !== undefined) {
+    return normalizedLimitName;
+  }
+
+  const limitId = readString(rateLimits, "limit_id");
+  return normalizeRateLimitModel(limitId);
+}
+
+function normalizeRateLimitModel(
+  modelName: string | undefined,
+): string | undefined {
+  if (modelName === undefined) {
+    return undefined;
+  }
+  const normalized = modelName
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^a-z0-9.-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function extractSessionMetaTimestamp(

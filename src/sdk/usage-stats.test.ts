@@ -329,6 +329,69 @@ describe("getCodexUsageStats", () => {
     ]);
   });
 
+  it("falls back to token_count rate_limits model when info.model is missing", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-11T12:00:00.000Z"));
+
+    const sessionsDir = await createSessionsDir();
+    await writeRollout(
+      sessionsDir,
+      "2026/02/10/rollout-token-count-rate-limit.jsonl",
+      [
+        line("2026-02-10T09:00:00.000Z", "session_meta", {
+          meta: {
+            id: "sess-token-count-rate-limit",
+            timestamp: "2026-02-10T09:00:00.000Z",
+            cwd: "/tmp/work",
+            originator: "codex",
+            cli_version: "1.0.0",
+            source: "cli",
+          },
+        }),
+        line("2026-02-10T09:00:05.000Z", "event_msg", {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 90,
+              output_tokens: 10,
+              total_tokens: 100,
+            },
+          },
+          rate_limits: {
+            limit_name: "GPT-5.3-Codex-Spark",
+            limit_id: "gpt-5.3-codex-spark",
+          },
+        }),
+      ],
+    );
+
+    const stats = await getCodexUsageStats({
+      codexSessionsDir: sessionsDir,
+      recentDays: 2,
+    });
+
+    expect(stats).not.toBeNull();
+    expect(stats?.totalSessions).toBe(1);
+    expect(stats?.modelUsage).toEqual({
+      "gpt-5.3-codex-spark": {
+        inputTokens: 90,
+        outputTokens: 10,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+      },
+    });
+    expect(stats?.recentDailyActivity).toEqual([
+      {
+        date: "2026-02-10",
+        sessionCount: 1,
+        tokensByModel: {
+          "gpt-5.3-codex-spark": 100,
+        },
+      },
+      { date: "2026-02-11" },
+    ]);
+  });
+
   it("aggregates mixed TurnComplete and token_count usage and ignores partial token_count payloads", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-12T12:00:00.000Z"));
