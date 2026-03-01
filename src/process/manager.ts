@@ -66,6 +66,7 @@ export class ProcessManager {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env },
     });
+    drainPipe(child.stderr);
 
     const id = randomUUID();
     const managed = createManagedProcess(
@@ -215,6 +216,8 @@ export class ProcessManager {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env },
     });
+    drainPipe(child.stdout);
+    drainPipe(child.stderr);
 
     const id = randomUUID();
     const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
@@ -344,4 +347,12 @@ function waitForExit(child: ChildProcess): Promise<number> {
       resolve(1);
     });
   });
+}
+
+function drainPipe(stream: NodeJS.ReadableStream | null): void {
+  if (stream === null) {
+    return;
+  }
+  // Drop unconsumed child output to avoid pipe backpressure deadlocks.
+  stream.resume();
 }

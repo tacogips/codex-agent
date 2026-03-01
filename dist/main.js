@@ -1219,6 +1219,7 @@ class ProcessManager {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env }
     });
+    drainPipe(child.stderr);
     const id = randomUUID();
     const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
     this.processes.set(id, managed);
@@ -1308,6 +1309,8 @@ class ProcessManager {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env }
     });
+    drainPipe(child.stdout);
+    drainPipe(child.stderr);
     const id = randomUUID();
     const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
     this.processes.set(id, managed);
@@ -1399,6 +1402,12 @@ function waitForExit(child) {
       resolve3(1);
     });
   });
+}
+function drainPipe(stream) {
+  if (stream === null) {
+    return;
+  }
+  stream.resume();
 }
 // src/group/repository.ts
 import { readFile as readFile2, writeFile, mkdir, rename } from "fs/promises";
@@ -3651,6 +3660,7 @@ async function getCodexUsageStats(options) {
   let firstSessionDate = null;
   const modelUsageMap = new Map;
   const dailyActivityMap = new Map;
+  const tokenCountStateByKey = new Map;
   for (const rolloutFile of rolloutFiles) {
     let hadParsableLine = false;
     let sessionDateForFile = null;
@@ -3662,9 +3672,12 @@ async function getCodexUsageStats(options) {
           sessionDateForFile = lineDate;
         }
         if (isSessionMeta(line)) {
-          const sessionMetaDate = dateKeyFromTimestamp(line.payload.meta.timestamp);
-          if (sessionMetaDate !== null && (sessionDateForFile === null || sessionMetaDate < sessionDateForFile)) {
-            sessionDateForFile = sessionMetaDate;
+          const sessionMetaTimestamp = extractSessionMetaTimestamp(line.payload);
+          if (sessionMetaTimestamp !== undefined) {
+            const sessionMetaDate = dateKeyFromTimestamp(sessionMetaTimestamp);
+            if (sessionMetaDate !== null && (sessionDateForFile === null || sessionMetaDate < sessionDateForFile)) {
+              sessionDateForFile = sessionMetaDate;
+            }
           }
         }
         if (isUserOrAssistantMessage(line)) {
@@ -3677,7 +3690,8 @@ async function getCodexUsageStats(options) {
         if (toolCalls > 0 && lineDate !== null) {
           getOrCreateDailyActivity(dailyActivityMap, lineDate).toolCallCount += toolCalls;
         }
-        const usageEvent = extractUsageEvent(line);
+        const rawUsageEvent = extractUsageEvent(line);
+        const usageEvent = normalizeUsageEventForAggregation(rawUsageEvent, tokenCountStateByKey);
         if (usageEvent === null || usageEvent.totalTokens <= 0) {
           continue;
         }
@@ -3848,11 +3862,40 @@ function extractUsageEvent(line) {
     return null;
   }
   const payload = toRecord5(line.payload);
-  if (readString3(payload, "type") !== "TurnComplete") {
+  if (payload === null) {
     return null;
   }
-  const usage = toRecord5(payload?.["usage"]);
-  if (usage === null) {
+  const eventType = readString3(payload, "type");
+  let usage = null;
+  let modelFromInfo;
+  let source = null;
+  let isCumulative = false;
+  let aggregationKey;
+  if (eventType === "TurnComplete") {
+    source = "turn_complete";
+    usage = toRecord5(payload["usage"]);
+  } else if (eventType === "token_count" || eventType === "TokenCount") {
+    const info = toRecord5(payload["info"]);
+    if (info === null) {
+      return null;
+    }
+    source = "token_count";
+    modelFromInfo = readString3(info, "model");
+    const lastTokenUsage = toRecord5(info["last_token_usage"]) ?? toRecord5(payload["last_token_usage"]);
+    const totalTokenUsage = toRecord5(info["total_token_usage"]) ?? toRecord5(payload["total_token_usage"]);
+    if (lastTokenUsage !== null) {
+      usage = lastTokenUsage;
+      isCumulative = false;
+    } else if (totalTokenUsage !== null) {
+      usage = totalTokenUsage;
+      isCumulative = true;
+    } else {
+      usage = toRecord5(info["usage"]) ?? toRecord5(payload["usage"]) ?? payload;
+      isCumulative = false;
+    }
+    aggregationKey = extractTokenCountAggregationKey(payload, info, modelFromInfo);
+  }
+  if (source === null || usage === null) {
     return null;
   }
   const inputTokens = readNumber2(usage, "input_tokens") ?? readNumber2(usage, "inputTokens") ?? 0;
@@ -3861,15 +3904,127 @@ function extractUsageEvent(line) {
   const cacheCreationInputTokens = readNumber2(usage, "cache_creation_input_tokens") ?? readNumber2(usage, "cacheCreationInputTokens") ?? 0;
   const computedTotal = inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
   const totalTokens = readNumber2(usage, "total_tokens") ?? readNumber2(usage, "totalTokens") ?? computedTotal;
-  const model = readString3(usage, "model") ?? readString3(usage, "model_id") ?? readString3(payload, "model") ?? "unknown";
+  const model = modelFromInfo ?? readString3(usage, "model") ?? readString3(usage, "model_id") ?? readString3(payload, "model") ?? "unknown";
   return {
+    source,
     model,
     inputTokens,
     outputTokens,
     cacheReadInputTokens,
     cacheCreationInputTokens,
-    totalTokens
+    totalTokens,
+    isCumulative,
+    ...aggregationKey !== undefined ? { aggregationKey } : {}
   };
+}
+function normalizeUsageEventForAggregation(usageEvent, tokenCountStateByKey) {
+  if (usageEvent === null || usageEvent.source !== "token_count") {
+    return usageEvent;
+  }
+  const key = usageEvent.aggregationKey ?? usageEvent.model;
+  const state = getOrCreateTokenCountState(tokenCountStateByKey, key);
+  if (!usageEvent.isCumulative) {
+    return usageEvent;
+  }
+  if (state.lastTotalTokens !== undefined && usageEvent.totalTokens < state.lastTotalTokens) {
+    setTokenCountState(state, usageEvent);
+    return {
+      ...usageEvent,
+      isCumulative: false
+    };
+  }
+  const deltaInputTokens = positiveDelta(usageEvent.inputTokens, state.lastInputTokens);
+  const deltaOutputTokens = positiveDelta(usageEvent.outputTokens, state.lastOutputTokens);
+  const deltaCacheReadInputTokens = positiveDelta(usageEvent.cacheReadInputTokens, state.lastCacheReadInputTokens);
+  const deltaCacheCreationInputTokens = positiveDelta(usageEvent.cacheCreationInputTokens, state.lastCacheCreationInputTokens);
+  const deltaTotalTokens = positiveDelta(usageEvent.totalTokens, state.lastTotalTokens);
+  setTokenCountStateMax(state, usageEvent);
+  if (deltaTotalTokens <= 0) {
+    return null;
+  }
+  return {
+    ...usageEvent,
+    inputTokens: deltaInputTokens,
+    outputTokens: deltaOutputTokens,
+    cacheReadInputTokens: deltaCacheReadInputTokens,
+    cacheCreationInputTokens: deltaCacheCreationInputTokens,
+    totalTokens: deltaTotalTokens,
+    isCumulative: false
+  };
+}
+function getOrCreateTokenCountState(stateByKey, key) {
+  const existing = stateByKey.get(key);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = {};
+  stateByKey.set(key, created);
+  return created;
+}
+function setTokenCountState(state, usageEvent) {
+  state.lastInputTokens = usageEvent.inputTokens;
+  state.lastOutputTokens = usageEvent.outputTokens;
+  state.lastCacheReadInputTokens = usageEvent.cacheReadInputTokens;
+  state.lastCacheCreationInputTokens = usageEvent.cacheCreationInputTokens;
+  state.lastTotalTokens = usageEvent.totalTokens;
+}
+function setTokenCountStateMax(state, usageEvent) {
+  state.lastInputTokens = maxDefined(state.lastInputTokens, usageEvent.inputTokens);
+  state.lastOutputTokens = maxDefined(state.lastOutputTokens, usageEvent.outputTokens);
+  state.lastCacheReadInputTokens = maxDefined(state.lastCacheReadInputTokens, usageEvent.cacheReadInputTokens);
+  state.lastCacheCreationInputTokens = maxDefined(state.lastCacheCreationInputTokens, usageEvent.cacheCreationInputTokens);
+  state.lastTotalTokens = maxDefined(state.lastTotalTokens, usageEvent.totalTokens);
+}
+function positiveDelta(current, previous) {
+  if (previous === undefined) {
+    return current;
+  }
+  const delta = current - previous;
+  return delta > 0 ? delta : 0;
+}
+function maxDefined(previous, current) {
+  if (previous === undefined) {
+    return current;
+  }
+  return current > previous ? current : previous;
+}
+function extractTokenCountAggregationKey(payload, info, modelFromInfo) {
+  const parts = [];
+  const infoStreamId = readString3(info, "stream_id");
+  if (infoStreamId !== undefined) {
+    parts.push(`stream:${infoStreamId}`);
+  }
+  const infoTurnId = readString3(info, "turn_id");
+  if (infoTurnId !== undefined) {
+    parts.push(`info_turn:${infoTurnId}`);
+  }
+  const payloadTurnId = readString3(payload, "turn_id");
+  if (payloadTurnId !== undefined) {
+    parts.push(`payload_turn:${payloadTurnId}`);
+  }
+  const responseId = readString3(info, "response_id");
+  if (responseId !== undefined) {
+    parts.push(`response:${responseId}`);
+  }
+  const messageId = readString3(info, "message_id");
+  if (messageId !== undefined) {
+    parts.push(`message:${messageId}`);
+  }
+  const model = modelFromInfo ?? readString3(payload, "model") ?? "unknown";
+  parts.push(`model:${model}`);
+  return parts.join("|");
+}
+function extractSessionMetaTimestamp(payloadValue) {
+  const payload = toRecord5(payloadValue);
+  if (payload === null) {
+    return;
+  }
+  const payloadTimestamp = readString3(payload, "timestamp");
+  if (payloadTimestamp !== undefined) {
+    return payloadTimestamp;
+  }
+  const meta = toRecord5(payload["meta"]);
+  return readString3(meta, "timestamp");
 }
 function toRecord5(value) {
   if (typeof value !== "object" || value === null) {

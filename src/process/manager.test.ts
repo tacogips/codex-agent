@@ -1,3 +1,6 @@
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { ProcessManager } from "./manager";
 
@@ -135,5 +138,48 @@ describe("ProcessManager", () => {
     expect(exitCode).toBe(0);
     expect(stream.process.status).toBe("running");
     expect(Array.isArray(streamed)).toBe(true);
+  });
+
+  test("spawnResume does not stall when child writes large stdout/stderr output", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-process-manager-"));
+    try {
+      const fakeCodexPath = join(fixtureDir, "fake-codex-heavy-resume.sh");
+      await writeFile(
+        fakeCodexPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -eu",
+          "if [ \"$1\" = \"exec\" ] && [ \"$2\" = \"resume\" ] && [ \"$3\" = \"--json\" ]; then",
+          "  i=0",
+          "  while [ \"$i\" -lt 4000 ]; do",
+          "    printf '%s\\n' '{\"type\":\"event_msg\",\"payload\":{\"type\":\"AgentMessage\",\"message\":\"stdout\"}}'",
+          "    printf '%s\\n' 'stderr noise line' >&2",
+          "    i=$((i+1))",
+          "  done",
+          "fi",
+          "exit 0",
+        ].join("\n"),
+        "utf-8",
+      );
+      await chmod(fakeCodexPath, 0o755);
+
+      const pm = new ProcessManager(fakeCodexPath);
+      const proc = pm.spawnResume("heavy-output-session", {
+        codexBinary: fakeCodexPath,
+      });
+
+      const deadline = Date.now() + 5000;
+      let current = pm.get(proc.id);
+      while (current?.status === "running" && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        current = pm.get(proc.id);
+      }
+
+      expect(current).not.toBeNull();
+      expect(current?.status).toBe("exited");
+      expect(current?.exitCode).toBe(0);
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
   });
 });
