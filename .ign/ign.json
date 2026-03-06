@@ -6,10 +6,10 @@
   },
   "hash": "0fb751730f349a76f24e34ae89a58e7e98a35d1e29877b20324ffe8af9345a8c",
   "metadata": {
-    "generated_at": "2026-02-19T23:06:38.05978237+09:00",
-    "generated_by": "ign checkout",
+    "generated_at": "2026-03-03T11:17:18.236028566+09:00",
+    "generated_by": "ign update",
     "template_name": "bun-ts-v1",
     "template_version": "1.0.0",
-    "ign_version": "0.1.8"
+    "ign_version": "0.1.13"
   }
 }

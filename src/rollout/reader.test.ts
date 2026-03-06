@@ -8,6 +8,7 @@ import {
   parseSessionMeta,
   streamEvents,
   extractFirstUserMessage,
+  getSessionMessages,
 } from "./reader";
 
 const TEST_DIR = join(tmpdir(), "codex-agent-test-rollout-" + Date.now());
@@ -51,6 +52,15 @@ const INJECTED_AGENTS_LINE = JSON.stringify({
   },
 });
 
+const INJECTED_ENV_CONTEXT_LINE = JSON.stringify({
+  timestamp: "2025-05-07T17:24:24.700Z",
+  type: "event_msg",
+  payload: {
+    type: "UserMessage",
+    message: "<environment_context>\n  <cwd>/tmp/test-project</cwd>\n</environment_context>",
+  },
+});
+
 const AGENT_MSG_LINE = JSON.stringify({
   timestamp: "2025-05-07T17:24:30.000Z",
   type: "event_msg",
@@ -80,6 +90,116 @@ const RESPONSE_ITEM_LINE = JSON.stringify({
   },
 });
 
+const TOOL_CALL_LINE = JSON.stringify({
+  timestamp: "2025-05-07T17:24:32.000Z",
+  type: "response_item",
+  payload: {
+    type: "function_call",
+    id: "fc-001",
+    name: "web.search",
+    arguments: '{"q":"hello"}',
+    call_id: "call-001",
+  },
+});
+
+const TOOL_RESULT_LINE = JSON.stringify({
+  timestamp: "2025-05-07T17:24:33.000Z",
+  type: "response_item",
+  payload: {
+    type: "function_call_output",
+    call_id: "call-001",
+    output: {
+      status: "ok",
+      text: "result payload",
+    },
+  },
+});
+
+const EXEC_COMMAND_BEGIN_LINE = JSON.stringify({
+  timestamp: "2025-05-07T17:24:34.000Z",
+  type: "event_msg",
+  payload: {
+    type: "ExecCommandBegin",
+    call_id: "exec-call-001",
+    turn_id: "turn-001",
+    command: ["echo", "hello"],
+    cwd: "/tmp/test-project",
+  },
+});
+
+const EXEC_COMMAND_END_LINE = JSON.stringify({
+  timestamp: "2025-05-07T17:24:35.000Z",
+  type: "event_msg",
+  payload: {
+    type: "ExecCommandEnd",
+    call_id: "exec-call-001",
+    turn_id: "turn-001",
+    command: ["echo", "hello"],
+    cwd: "/tmp/test-project",
+    exit_code: 0,
+    aggregated_output: "hello\n",
+  },
+});
+
+const EXEC_COMMAND_END_NO_OUTPUT_LINE = JSON.stringify({
+  timestamp: "2025-05-07T17:24:35.100Z",
+  type: "event_msg",
+  payload: {
+    type: "ExecCommandEnd",
+    call_id: "exec-call-002",
+    turn_id: "turn-001",
+    command: ["printf", "hello"],
+    cwd: "/tmp/test-project",
+    exit_code: 0,
+    aggregated_output: 123,
+  },
+});
+
+const LOCAL_SHELL_CALL_RUNNING_LINE = JSON.stringify({
+  timestamp: "2025-05-07T17:24:36.000Z",
+  type: "response_item",
+  payload: {
+    type: "local_shell_call",
+    id: "shell-1",
+    call_id: "shell-call-1",
+    status: "running",
+    action: {
+      type: "exec",
+      command: ["pwd"],
+    },
+  },
+});
+
+const LOCAL_SHELL_CALL_COMPLETED_LINE = JSON.stringify({
+  timestamp: "2025-05-07T17:24:37.000Z",
+  type: "response_item",
+  payload: {
+    type: "local_shell_call",
+    id: "shell-1",
+    call_id: "shell-call-1",
+    status: "completed",
+    action: {
+      type: "exec",
+      command: ["pwd"],
+    },
+  },
+});
+
+const LOCAL_SHELL_CALL_UNKNOWN_STATUS_LINE = JSON.stringify({
+  timestamp: "2025-05-07T17:24:37.100Z",
+  type: "response_item",
+  payload: {
+    type: "local_shell_call",
+    id: "shell-2",
+    call_id: "shell-call-2",
+    status: "queued",
+    action: {
+      type: "exec",
+      command: ["ls"],
+    },
+  },
+});
+
 const EXEC_THREAD_STARTED_LINE = JSON.stringify({
   type: "thread.started",
   thread_id: "exec-thread-001",
@@ -100,6 +220,8 @@ const SAMPLE_ROLLOUT = [
   INJECTED_AGENTS_LINE,
   USER_MSG_LINE,
   AGENT_MSG_LINE,
+  TOOL_CALL_LINE,
+  TOOL_RESULT_LINE,
   RESPONSE_ITEM_LINE,
 ].join("\n");
 
@@ -164,7 +286,9 @@ describe("parseRolloutLine", () => {
     expect(result).not.toBeNull();
     expect(result?.type).toBe("session_meta");
     if (result !== null && result.type === "session_meta") {
-      const payload = result.payload as { readonly meta: { readonly id: string; readonly source: string } };
+      const payload = result.payload as {
+        readonly meta: { readonly id: string; readonly source: string };
+      };
       expect(payload.meta.id).toBe("exec-thread-001");
       expect(payload.meta.source).toBe("exec");
     }
@@ -186,13 +310,15 @@ describe("parseRolloutLine", () => {
 describe("readRollout", () => {
   test("reads all lines from a rollout file", async () => {
     const lines = await readRollout(rolloutFilePath);
-    expect(lines).toHaveLength(6);
+    expect(lines).toHaveLength(8);
     expect(lines[0]?.type).toBe("session_meta");
     expect(lines[1]?.type).toBe("event_msg");
     expect(lines[2]?.type).toBe("event_msg");
     expect(lines[3]?.type).toBe("event_msg");
     expect(lines[4]?.type).toBe("event_msg");
     expect(lines[5]?.type).toBe("response_item");
+    expect(lines[6]?.type).toBe("response_item");
+    expect(lines[7]?.type).toBe("response_item");
   });
 
   test("skips empty lines", async () => {
@@ -232,7 +358,7 @@ describe("streamEvents", () => {
     for await (const event of streamEvents(rolloutFilePath)) {
       events.push(event);
     }
-    expect(events).toHaveLength(6);
+    expect(events).toHaveLength(8);
   });
 });
 
@@ -268,5 +394,247 @@ describe("extractFirstUserMessage", () => {
     );
     const msg = await extractFirstUserMessage(noMsgPath);
     expect(msg).toBeUndefined();
+  });
+});
+
+describe("getSessionMessages", () => {
+  test("classifies each message with exact category, role, order, and counts", async () => {
+    const messages = await getSessionMessages(rolloutFilePath);
+    expect(messages).toHaveLength(6);
+
+    expect(
+      messages.map((message) => ({
+        category: message.category,
+        role: message.role,
+        text: message.text,
+        sourceType: message.sourceType,
+      })),
+    ).toEqual([
+      {
+        category: "other_message",
+        role: "user",
+        text: "# AGENTS.md instructions for /tmp/test-project",
+        sourceType: "event_msg",
+      },
+      {
+        category: "other_message",
+        role: "user",
+        text: "Fix the auth bug",
+        sourceType: "event_msg",
+      },
+      {
+        category: "other_message",
+        role: "assistant",
+        text: "I will fix the authentication issue.",
+        sourceType: "event_msg",
+      },
+      {
+        category: "assistant_tool_response",
+        role: "assistant",
+        text: "web.search",
+        sourceType: "response_item",
+      },
+      {
+        category: "tool_user_response",
+        role: "user",
+        text: '{"status":"ok","text":"result payload"}',
+        sourceType: "response_item",
+      },
+      {
+        category: "other_message",
+        role: "assistant",
+        text: "Done.",
+        sourceType: "response_item",
+      },
+    ]);
+
+    expect(
+      messages.filter((line) => line.category === "assistant_tool_response"),
+    ).toHaveLength(1);
+    expect(
+      messages.filter((line) => line.category === "tool_user_response"),
+    ).toHaveLength(1);
+    expect(
+      messages.filter((line) => line.category === "other_message"),
+    ).toHaveLength(4);
+  });
+
+  test("can exclude tool-related messages", async () => {
+    const messages = await getSessionMessages(rolloutFilePath, {
+      excludeToolRelated: true,
+    });
+    expect(messages.every((line) => line.category === "other_message")).toBe(
+      true,
+    );
+    expect(messages.some((line) => line.text === "Fix the auth bug")).toBe(
+      true,
+    );
+  });
+
+  test("can exclude injected/framework user messages for conversation-only output", async () => {
+    const path = join(TEST_DIR, "rollout-conversation-only.jsonl");
+    await writeFile(
+      path,
+      [
+        SESSION_META_LINE,
+        INJECTED_AGENTS_LINE,
+        INJECTED_ENV_CONTEXT_LINE,
+        USER_MSG_LINE,
+        AGENT_MSG_LINE,
+        RESPONSE_ITEM_LINE,
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const messages = await getSessionMessages(path, {
+      excludeSystemInjected: true,
+    });
+    expect(messages.map((m) => m.text)).toEqual([
+      "Fix the auth bug",
+      "I will fix the authentication issue.",
+      "Done.",
+    ]);
+    expect(messages.map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+    ]);
+  });
+
+  test("excludes ExecCommand and local_shell_call tool-related messages", async () => {
+    const path = join(TEST_DIR, "rollout-tools-exclude.jsonl");
+    await writeFile(
+      path,
+      [
+        SESSION_META_LINE,
+        USER_MSG_LINE,
+        EXEC_COMMAND_BEGIN_LINE,
+        EXEC_COMMAND_END_LINE,
+        LOCAL_SHELL_CALL_RUNNING_LINE,
+        LOCAL_SHELL_CALL_COMPLETED_LINE,
+        RESPONSE_ITEM_LINE,
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const allMessages = await getSessionMessages(path);
+    expect(allMessages.map((m) => m.category)).toEqual([
+      "other_message",
+      "assistant_tool_response",
+      "tool_user_response",
+      "assistant_tool_response",
+      "tool_user_response",
+      "other_message",
+    ]);
+
+    const filtered = await getSessionMessages(path, {
+      excludeToolRelated: true,
+    });
+    expect(filtered.map((m) => m.category)).toEqual([
+      "other_message",
+      "other_message",
+    ]);
+    expect(filtered.map((m) => m.text)).toEqual(["Fix the auth bug", "Done."]);
+  });
+
+  test("combines excludeToolRelated and excludeSystemInjected for conversation-only transcript", async () => {
+    const path = join(TEST_DIR, "rollout-combined-filtering.jsonl");
+    await writeFile(
+      path,
+      [
+        SESSION_META_LINE,
+        INJECTED_AGENTS_LINE,
+        INJECTED_ENV_CONTEXT_LINE,
+        USER_MSG_LINE,
+        EXEC_COMMAND_BEGIN_LINE,
+        EXEC_COMMAND_END_LINE,
+        RESPONSE_ITEM_LINE,
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const filtered = await getSessionMessages(path, {
+      excludeToolRelated: true,
+      excludeSystemInjected: true,
+    });
+    expect(filtered.map((m) => m.category)).toEqual([
+      "other_message",
+      "other_message",
+    ]);
+    expect(filtered.map((m) => m.text)).toEqual(["Fix the auth bug", "Done."]);
+  });
+
+  test("uses aggregated_output for ExecCommandEnd tool reply text", async () => {
+    const path = join(TEST_DIR, "rollout-exec-output.jsonl");
+    await writeFile(
+      path,
+      [SESSION_META_LINE, EXEC_COMMAND_END_LINE].join("\n"),
+      "utf-8",
+    );
+
+    const messages = await getSessionMessages(path);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.category).toBe("tool_user_response");
+    expect(messages[0]?.text).toBe("hello\n");
+  });
+
+  test("falls back to command text when ExecCommandEnd aggregated_output is invalid", async () => {
+    const path = join(TEST_DIR, "rollout-exec-output-fallback.jsonl");
+    await writeFile(
+      path,
+      [SESSION_META_LINE, EXEC_COMMAND_END_NO_OUTPUT_LINE].join("\n"),
+      "utf-8",
+    );
+
+    const messages = await getSessionMessages(path);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.category).toBe("tool_user_response");
+    expect(messages[0]?.text).toBe("printf hello");
+  });
+
+  test("treats unknown local_shell_call status as assistant-side tool message", async () => {
+    const path = join(TEST_DIR, "rollout-local-shell-unknown-status.jsonl");
+    await writeFile(
+      path,
+      [SESSION_META_LINE, LOCAL_SHELL_CALL_UNKNOWN_STATUS_LINE].join("\n"),
+      "utf-8",
+    );
+
+    const messages = await getSessionMessages(path);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.category).toBe("assistant_tool_response");
+    expect(messages[0]?.role).toBe("assistant");
+  });
+
+  test("drops unknown response_item type from session message extraction", async () => {
+    const unknownResponseItem = JSON.stringify({
+      timestamp: "2025-05-07T17:24:38.000Z",
+      type: "response_item",
+      payload: {
+        type: "unexpected_item_type",
+        value: "ignored",
+      },
+    });
+    const path = join(TEST_DIR, "rollout-unknown-response-item.jsonl");
+    await writeFile(path, [SESSION_META_LINE, unknownResponseItem].join("\n"), "utf-8");
+
+    const messages = await getSessionMessages(path);
+    expect(messages).toHaveLength(0);
+  });
+
+  test("drops unknown event_msg type from session message extraction", async () => {
+    const unknownEventMsg = JSON.stringify({
+      timestamp: "2025-05-07T17:24:39.000Z",
+      type: "event_msg",
+      payload: {
+        type: "UnexpectedEventType",
+        message: "ignored",
+      },
+    });
+    const path = join(TEST_DIR, "rollout-unknown-event-msg.jsonl");
+    await writeFile(path, [SESSION_META_LINE, unknownEventMsg].join("\n"), "utf-8");
+
+    const messages = await getSessionMessages(path);
+    expect(messages).toHaveLength(0);
   });
 });

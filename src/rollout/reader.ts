@@ -138,6 +138,59 @@ export async function extractFirstUserMessage(
   return undefined;
 }
 
+export type SessionMessageCategory =
+  | "assistant_tool_response"
+  | "tool_user_response"
+  | "other_message";
+
+export interface SessionMessage {
+  readonly timestamp: string;
+  readonly category: SessionMessageCategory;
+  readonly role: "assistant" | "user" | "unknown";
+  readonly text?: string;
+  readonly sourceType: RolloutLine["type"];
+  readonly sourceTag?: string;
+  readonly line: RolloutLine;
+}
+
+export interface GetSessionMessagesOptions {
+  readonly excludeToolRelated?: boolean;
+  readonly excludeSystemInjected?: boolean;
+}
+
+/**
+ * Extract session messages with category labels.
+ * Useful for separating tool-call exchanges from normal conversation messages.
+ */
+export async function getSessionMessages(
+  path: string,
+  options?: GetSessionMessagesOptions,
+): Promise<readonly SessionMessage[]> {
+  const messages: SessionMessage[] = [];
+  const excludeToolRelated = options?.excludeToolRelated === true;
+  const excludeSystemInjected = options?.excludeSystemInjected === true;
+
+  for await (const line of streamEvents(path)) {
+    const message = toSessionMessage(line);
+    if (message === null) {
+      continue;
+    }
+    if (
+      excludeToolRelated &&
+      (message.category === "assistant_tool_response" ||
+        message.category === "tool_user_response")
+    ) {
+      continue;
+    }
+    if (excludeSystemInjected && isInjectedOrFrameworkUserMessage(message)) {
+      continue;
+    }
+    messages.push(message);
+  }
+
+  return messages;
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -150,7 +203,7 @@ function isValidRolloutLine(value: unknown): value is RolloutLine {
   return (
     typeof obj["timestamp"] === "string" &&
     typeof obj["type"] === "string" &&
-      "payload" in obj
+    "payload" in obj
   );
 }
 
@@ -437,4 +490,174 @@ function toSnakeCase(value: string): string {
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[\s-]+/g, "_")
     .toLowerCase();
+}
+
+function toSessionMessage(line: RolloutLine): SessionMessage | null {
+  if (line.type === "event_msg") {
+    const payload = toRecord(line.payload);
+    if (payload === null) {
+      return null;
+    }
+    const eventType = readString(payload["type"]);
+    if (eventType === "UserMessage" || eventType === "AgentMessage") {
+      const text = readString(payload["message"]);
+      const role = eventType === "UserMessage" ? "user" : "assistant";
+      return {
+        timestamp: line.timestamp,
+        category: "other_message",
+        role,
+        ...(text !== undefined ? { text } : {}),
+        sourceType: line.type,
+        ...(line.provenance?.source_tag !== undefined
+          ? { sourceTag: line.provenance.source_tag }
+          : {}),
+        line,
+      };
+    }
+    if (eventType === "ExecCommandBegin") {
+      const text = toCommandText(payload["command"]);
+      return {
+        timestamp: line.timestamp,
+        category: "assistant_tool_response",
+        role: "assistant",
+        ...(text !== undefined ? { text } : {}),
+        sourceType: line.type,
+        sourceTag: "exec_command_begin",
+        line,
+      };
+    }
+    if (eventType === "ExecCommandEnd") {
+      const text =
+        readString(payload["aggregated_output"]) ??
+        toCommandText(payload["command"]);
+      return {
+        timestamp: line.timestamp,
+        category: "tool_user_response",
+        role: "user",
+        ...(text !== undefined ? { text } : {}),
+        sourceType: line.type,
+        sourceTag: "exec_command_end",
+        line,
+      };
+    }
+    return null;
+  }
+
+  if (line.type !== "response_item") {
+    return null;
+  }
+  const payload = toRecord(line.payload);
+  if (payload === null) {
+    return null;
+  }
+  const itemType = readString(payload["type"]);
+  if (itemType === "function_call") {
+    const name = readString(payload["name"]) ?? "unknown-tool";
+    return {
+      timestamp: line.timestamp,
+      category: "assistant_tool_response",
+      role: "assistant",
+      text: name,
+      sourceType: line.type,
+      ...(line.provenance?.source_tag !== undefined
+        ? { sourceTag: line.provenance.source_tag }
+        : {}),
+      line,
+    };
+  }
+  if (itemType === "function_call_output") {
+    const text = summarizeUnknown(payload["output"]);
+    return {
+      timestamp: line.timestamp,
+      category: "tool_user_response",
+      role: "user",
+      ...(text !== undefined ? { text } : {}),
+      sourceType: line.type,
+      ...(line.provenance?.source_tag !== undefined
+        ? { sourceTag: line.provenance.source_tag }
+        : {}),
+      line,
+    };
+  }
+  if (itemType === "local_shell_call") {
+    const status = readString(payload["status"]);
+    const isTerminalStatus =
+      status === "completed" || status === "failed" || status === "error";
+    const text = summarizeUnknown(payload["action"]);
+    return {
+      timestamp: line.timestamp,
+      category: isTerminalStatus
+        ? "tool_user_response"
+        : "assistant_tool_response",
+      role: isTerminalStatus ? "user" : "assistant",
+      ...(text !== undefined ? { text } : {}),
+      sourceType: line.type,
+      ...(line.provenance?.source_tag !== undefined
+        ? { sourceTag: line.provenance.source_tag }
+        : {}),
+      line,
+    };
+  }
+  if (itemType === "message") {
+    const role = readString(payload["role"]);
+    const text = extractMessageText(payload["content"]);
+    return {
+      timestamp: line.timestamp,
+      category: "other_message",
+      role: role === "assistant" || role === "user" ? role : "unknown",
+      ...(text !== undefined ? { text } : {}),
+      sourceType: line.type,
+      ...(line.provenance?.source_tag !== undefined
+        ? { sourceTag: line.provenance.source_tag }
+        : {}),
+      line,
+    };
+  }
+  return null;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function toCommandText(value: unknown): string | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const command = value.filter(
+    (item): item is string => typeof item === "string",
+  );
+  if (command.length === 0) {
+    return undefined;
+  }
+  return command.join(" ");
+}
+
+function summarizeUnknown(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function isInjectedOrFrameworkUserMessage(message: SessionMessage): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+  const origin = message.line.provenance?.origin;
+  if (origin === "system_injected" || origin === "framework_event") {
+    return true;
+  }
+  return (
+    message.sourceTag === "agents_instructions" ||
+    message.sourceTag === "environment_context" ||
+    message.sourceTag === "turn_aborted"
+  );
 }
