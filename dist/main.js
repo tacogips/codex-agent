@@ -15,6 +15,11 @@ function isCompacted(item) {
 function isTurnContext(item) {
   return item.type === "turn_context";
 }
+// src/session/index.ts
+import { readdir, stat } from "fs/promises";
+import { join as join2, resolve } from "path";
+import { homedir } from "os";
+
 // src/rollout/reader.ts
 import { readFile } from "fs/promises";
 import { createReadStream } from "fs";
@@ -100,6 +105,25 @@ async function extractFirstUserMessage(path) {
     }
   }
   return;
+}
+async function getSessionMessages(path, options) {
+  const messages = [];
+  const excludeToolRelated = options?.excludeToolRelated === true;
+  const excludeSystemInjected = options?.excludeSystemInjected === true;
+  for await (const line of streamEvents(path)) {
+    const message = toSessionMessage(line);
+    if (message === null) {
+      continue;
+    }
+    if (excludeToolRelated && (message.category === "assistant_tool_response" || message.category === "tool_user_response")) {
+      continue;
+    }
+    if (excludeSystemInjected && isInjectedOrFrameworkUserMessage(message)) {
+      continue;
+    }
+    messages.push(message);
+  }
+  return messages;
 }
 function isValidRolloutLine(value) {
   if (typeof value !== "object" || value === null) {
@@ -348,178 +372,157 @@ function toRecord(value) {
 function toSnakeCase(value) {
   return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[\s-]+/g, "_").toLowerCase();
 }
-// src/rollout/watcher.ts
-import { watch } from "fs";
-import { open, stat } from "fs/promises";
-import { join } from "path";
-import { EventEmitter } from "events";
-var ROLLOUT_PREFIX = "rollout-";
-var ROLLOUT_EXT = ".jsonl";
-var DEBOUNCE_MS = 100;
-
-class RolloutWatcher extends EventEmitter {
-  fileWatchers = new Map;
-  dirWatchers = new Map;
-  closed = false;
-  async watchFile(path, options) {
-    if (this.closed) {
-      return;
+function toSessionMessage(line) {
+  if (line.type === "event_msg") {
+    const payload2 = toRecord(line.payload);
+    if (payload2 === null) {
+      return null;
     }
-    if (this.fileWatchers.has(path)) {
-      return;
+    const eventType = readString(payload2["type"]);
+    if (eventType === "UserMessage" || eventType === "AgentMessage") {
+      const text = readString(payload2["message"]);
+      const role = eventType === "UserMessage" ? "user" : "assistant";
+      return {
+        timestamp: line.timestamp,
+        category: "other_message",
+        role,
+        ...text !== undefined ? { text } : {},
+        sourceType: line.type,
+        ...line.provenance?.source_tag !== undefined ? { sourceTag: line.provenance.source_tag } : {},
+        line
+      };
     }
-    const fileSize = await getFileSize(path);
-    const requestedOffset = options?.startOffset;
-    const startOffset = requestedOffset !== undefined && Number.isFinite(requestedOffset) ? Math.max(0, Math.floor(requestedOffset)) : fileSize;
-    const state = {
-      path,
-      offset: startOffset,
-      watcher: null,
-      debounceTimer: null,
-      inFlightRead: null,
-      pendingRead: false
+    if (eventType === "ExecCommandBegin") {
+      const text = toCommandText(payload2["command"]);
+      return {
+        timestamp: line.timestamp,
+        category: "assistant_tool_response",
+        role: "assistant",
+        ...text !== undefined ? { text } : {},
+        sourceType: line.type,
+        sourceTag: "exec_command_begin",
+        line
+      };
+    }
+    if (eventType === "ExecCommandEnd") {
+      const text = readString(payload2["aggregated_output"]) ?? toCommandText(payload2["command"]);
+      return {
+        timestamp: line.timestamp,
+        category: "tool_user_response",
+        role: "user",
+        ...text !== undefined ? { text } : {},
+        sourceType: line.type,
+        sourceTag: "exec_command_end",
+        line
+      };
+    }
+    return null;
+  }
+  if (line.type !== "response_item") {
+    return null;
+  }
+  const payload = toRecord(line.payload);
+  if (payload === null) {
+    return null;
+  }
+  const itemType = readString(payload["type"]);
+  if (itemType === "function_call") {
+    const name = readString(payload["name"]) ?? "unknown-tool";
+    return {
+      timestamp: line.timestamp,
+      category: "assistant_tool_response",
+      role: "assistant",
+      text: name,
+      sourceType: line.type,
+      ...line.provenance?.source_tag !== undefined ? { sourceTag: line.provenance.source_tag } : {},
+      line
     };
-    const watcher = watch(path, () => {
-      this.debouncedReadAppended(state);
-    });
-    watcher.on("error", (err) => {
-      this.emit("error", err);
-    });
-    state.watcher = watcher;
-    this.fileWatchers.set(path, state);
-    this.enqueueRead(state);
   }
-  watchDirectory(dir) {
-    if (this.closed) {
-      return;
-    }
-    if (this.dirWatchers.has(dir)) {
-      return;
-    }
-    const watcher = watch(dir, { recursive: true }, (_event, filename) => {
-      if (filename === null) {
-        return;
-      }
-      const basename = filename.split("/").pop() ?? filename;
-      if (basename.startsWith(ROLLOUT_PREFIX) && basename.endsWith(ROLLOUT_EXT)) {
-        const fullPath = join(dir, filename);
-        this.emit("newSession", fullPath);
-      }
-    });
-    watcher.on("error", (err) => {
-      this.emit("error", err);
-    });
-    this.dirWatchers.set(dir, watcher);
+  if (itemType === "function_call_output") {
+    const text = summarizeUnknown(payload["output"]);
+    return {
+      timestamp: line.timestamp,
+      category: "tool_user_response",
+      role: "user",
+      ...text !== undefined ? { text } : {},
+      sourceType: line.type,
+      ...line.provenance?.source_tag !== undefined ? { sourceTag: line.provenance.source_tag } : {},
+      line
+    };
   }
-  stop() {
-    this.closed = true;
-    for (const state of this.fileWatchers.values()) {
-      if (state.debounceTimer !== null) {
-        clearTimeout(state.debounceTimer);
-      }
-      state.watcher?.close();
-    }
-    this.fileWatchers.clear();
-    for (const watcher of this.dirWatchers.values()) {
-      watcher.close();
-    }
-    this.dirWatchers.clear();
-    this.removeAllListeners();
+  if (itemType === "local_shell_call") {
+    const status = readString(payload["status"]);
+    const isTerminalStatus = status === "completed" || status === "failed" || status === "error";
+    const text = summarizeUnknown(payload["action"]);
+    return {
+      timestamp: line.timestamp,
+      category: isTerminalStatus ? "tool_user_response" : "assistant_tool_response",
+      role: isTerminalStatus ? "user" : "assistant",
+      ...text !== undefined ? { text } : {},
+      sourceType: line.type,
+      ...line.provenance?.source_tag !== undefined ? { sourceTag: line.provenance.source_tag } : {},
+      line
+    };
   }
-  async flush() {
-    if (this.closed) {
-      return;
-    }
-    for (const state of this.fileWatchers.values()) {
-      await this.enqueueRead(state);
-    }
+  if (itemType === "message") {
+    const role = readString(payload["role"]);
+    const text = extractMessageText(payload["content"]);
+    return {
+      timestamp: line.timestamp,
+      category: "other_message",
+      role: role === "assistant" || role === "user" ? role : "unknown",
+      ...text !== undefined ? { text } : {},
+      sourceType: line.type,
+      ...line.provenance?.source_tag !== undefined ? { sourceTag: line.provenance.source_tag } : {},
+      line
+    };
   }
-  get isClosed() {
-    return this.closed;
-  }
-  debouncedReadAppended(state) {
-    if (state.debounceTimer !== null) {
-      clearTimeout(state.debounceTimer);
-    }
-    state.debounceTimer = setTimeout(() => {
-      state.debounceTimer = null;
-      this.enqueueRead(state);
-    }, DEBOUNCE_MS);
-  }
-  async enqueueRead(state) {
-    if (state.inFlightRead !== null) {
-      state.pendingRead = true;
-      await state.inFlightRead;
-      return;
-    }
-    const run = (async () => {
-      do {
-        state.pendingRead = false;
-        await this.readAppendedLines(state);
-      } while (state.pendingRead && !this.closed);
-    })();
-    state.inFlightRead = run;
-    try {
-      await run;
-    } finally {
-      state.inFlightRead = null;
-    }
-  }
-  async readAppendedLines(state) {
-    if (this.closed) {
-      return;
-    }
-    try {
-      const currentSize = await getFileSize(state.path);
-      if (currentSize <= state.offset) {
-        return;
-      }
-      const fd = await open(state.path, "r");
-      try {
-        const bytesToRead = currentSize - state.offset;
-        const buffer = new Uint8Array(bytesToRead);
-        await fd.read(buffer, 0, bytesToRead, state.offset);
-        state.offset = currentSize;
-        const text = new TextDecoder().decode(buffer);
-        const lines = text.split(`
-`);
-        for (const line of lines) {
-          const parsed = parseRolloutLine(line);
-          if (parsed !== null) {
-            this.emit("line", state.path, parsed);
-          }
-        }
-      } finally {
-        await fd.close();
-      }
-    } catch (err) {
-      this.emit("error", err instanceof Error ? err : new Error(String(err)));
-    }
-  }
+  return null;
 }
-async function getFileSize(path) {
+function readString(value) {
+  return typeof value === "string" ? value : undefined;
+}
+function toCommandText(value) {
+  if (!Array.isArray(value)) {
+    return;
+  }
+  const command = value.filter((item) => typeof item === "string");
+  if (command.length === 0) {
+    return;
+  }
+  return command.join(" ");
+}
+function summarizeUnknown(value) {
+  if (value === undefined) {
+    return;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
   try {
-    const s = await stat(path);
-    return s.size;
+    return JSON.stringify(value);
   } catch {
-    return 0;
+    return String(value);
   }
 }
-function sessionsWatchDir(codexHome) {
-  return join(codexHome, "sessions");
+function isInjectedOrFrameworkUserMessage(message) {
+  if (message.role !== "user") {
+    return false;
+  }
+  const origin = message.line.provenance?.origin;
+  if (origin === "system_injected" || origin === "framework_event") {
+    return true;
+  }
+  return message.sourceTag === "agents_instructions" || message.sourceTag === "environment_context" || message.sourceTag === "turn_aborted";
 }
-// src/session/index.ts
-import { readdir, stat as stat2 } from "fs/promises";
-import { join as join3, resolve } from "path";
-import { homedir } from "os";
 
 // src/session/sqlite.ts
 import { Database } from "bun:sqlite";
-import { join as join2 } from "path";
+import { join } from "path";
 var STATE_DB_FILENAME = "state";
 function openCodexDb(codexHome) {
   const home = codexHome ?? resolveCodexHome();
-  const dbPath = join2(home, STATE_DB_FILENAME);
+  const dbPath = join(home, STATE_DB_FILENAME);
   try {
     const db = new Database(dbPath, { readonly: true });
     const check = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='threads'").get();
@@ -614,44 +617,44 @@ function findLatestSessionSqlite(db, cwd) {
 }
 
 // src/session/index.ts
-var DEFAULT_CODEX_HOME = join3(homedir(), ".codex");
+var DEFAULT_CODEX_HOME = join2(homedir(), ".codex");
 var SESSIONS_DIR = "sessions";
 var ARCHIVED_DIR = "archived_sessions";
-var ROLLOUT_PREFIX2 = "rollout-";
-var ROLLOUT_EXT2 = ".jsonl";
+var ROLLOUT_PREFIX = "rollout-";
+var ROLLOUT_EXT = ".jsonl";
 function resolveCodexHome() {
   return process.env["CODEX_HOME"] ?? DEFAULT_CODEX_HOME;
 }
 async function* discoverRolloutPaths(codexHome) {
   const home = codexHome ?? resolveCodexHome();
-  const sessionsDir = join3(home, SESSIONS_DIR);
+  const sessionsDir = join2(home, SESSIONS_DIR);
   if (!await dirExists(sessionsDir)) {
     return;
   }
   const years = await readSortedDirs(sessionsDir, "desc");
   for (const year of years) {
-    const yearPath = join3(sessionsDir, year);
+    const yearPath = join2(sessionsDir, year);
     const months = await readSortedDirs(yearPath, "desc");
     for (const month of months) {
-      const monthPath = join3(yearPath, month);
+      const monthPath = join2(yearPath, month);
       const days = await readSortedDirs(monthPath, "desc");
       for (const day of days) {
-        const dayPath = join3(monthPath, day);
+        const dayPath = join2(monthPath, day);
         const files = await readSortedFiles(dayPath, "desc");
         for (const file of files) {
-          if (file.startsWith(ROLLOUT_PREFIX2) && file.endsWith(ROLLOUT_EXT2)) {
-            yield join3(dayPath, file);
+          if (file.startsWith(ROLLOUT_PREFIX) && file.endsWith(ROLLOUT_EXT)) {
+            yield join2(dayPath, file);
           }
         }
       }
     }
   }
-  const archivedDir = join3(home, ARCHIVED_DIR);
+  const archivedDir = join2(home, ARCHIVED_DIR);
   if (await dirExists(archivedDir)) {
     const files = await readSortedFiles(archivedDir, "desc");
     for (const file of files) {
-      if (file.startsWith(ROLLOUT_PREFIX2) && file.endsWith(ROLLOUT_EXT2)) {
-        yield join3(archivedDir, file);
+      if (file.startsWith(ROLLOUT_PREFIX) && file.endsWith(ROLLOUT_EXT)) {
+        yield join2(archivedDir, file);
       }
     }
   }
@@ -661,7 +664,7 @@ async function buildSession(rolloutPath) {
   if (meta === null) {
     return null;
   }
-  const fileStat = await stat2(rolloutPath);
+  const fileStat = await stat(rolloutPath);
   const firstMessage = await extractFirstUserMessage(rolloutPath);
   const isArchived = rolloutPath.includes(`/${ARCHIVED_DIR}/`);
   return sessionFromMeta(meta, rolloutPath, fileStat.mtime, firstMessage, isArchived);
@@ -756,10 +759,10 @@ function sessionFromMeta(meta, rolloutPath, mtime, firstUserMessage, isArchived)
   if (metaRecord === null) {
     return null;
   }
-  const id = readString(metaRecord, "id");
-  const timestamp = readString(metaRecord, "timestamp");
-  const cwd = readString(metaRecord, "cwd");
-  const source = toSessionSource(readString(metaRecord, "source"));
+  const id = readString2(metaRecord, "id");
+  const timestamp = readString2(metaRecord, "timestamp");
+  const cwd = readString2(metaRecord, "cwd");
+  const source = toSessionSource(readString2(metaRecord, "source"));
   if (id === undefined || timestamp === undefined || cwd === undefined || source === undefined) {
     return null;
   }
@@ -773,14 +776,14 @@ function sessionFromMeta(meta, rolloutPath, mtime, firstUserMessage, isArchived)
     createdAt,
     updatedAt: mtime,
     source,
-    modelProvider: readString(metaRecord, "model_provider"),
+    modelProvider: readString2(metaRecord, "model_provider"),
     cwd,
-    cliVersion: readString(metaRecord, "cli_version") ?? "unknown",
+    cliVersion: readString2(metaRecord, "cli_version") ?? "unknown",
     title: firstUserMessage ?? id,
     firstUserMessage,
     archivedAt: isArchived ? mtime : undefined,
     git: meta.git,
-    forkedFromId: readString(metaRecord, "forked_from_id")
+    forkedFromId: readString2(metaRecord, "forked_from_id")
   };
 }
 function toRecord2(value) {
@@ -789,7 +792,7 @@ function toRecord2(value) {
   }
   return value;
 }
-function readString(record, key) {
+function readString2(record, key) {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
 }
@@ -816,7 +819,7 @@ function matchesFilter(session, options) {
 }
 async function dirExists(path) {
   try {
-    const s = await stat2(path);
+    const s = await stat(path);
     return s.isDirectory();
   } catch {
     return false;
@@ -1221,10 +1224,328 @@ function parseCandidateSessionMeta(meta) {
     branch
   };
 }
+// src/rollout/watcher.ts
+import { watch } from "fs";
+import { open, stat as stat2 } from "fs/promises";
+import { join as join3 } from "path";
+import { EventEmitter } from "events";
+var ROLLOUT_PREFIX2 = "rollout-";
+var ROLLOUT_EXT2 = ".jsonl";
+var DEBOUNCE_MS = 100;
+
+class RolloutWatcher extends EventEmitter {
+  fileWatchers = new Map;
+  dirWatchers = new Map;
+  closed = false;
+  async watchFile(path, options) {
+    if (this.closed) {
+      return;
+    }
+    if (this.fileWatchers.has(path)) {
+      return;
+    }
+    const fileSize = await getFileSize(path);
+    const requestedOffset = options?.startOffset;
+    const startOffset = requestedOffset !== undefined && Number.isFinite(requestedOffset) ? Math.max(0, Math.floor(requestedOffset)) : fileSize;
+    const state = {
+      path,
+      offset: startOffset,
+      watcher: null,
+      debounceTimer: null,
+      inFlightRead: null,
+      pendingRead: false
+    };
+    const watcher = watch(path, () => {
+      this.debouncedReadAppended(state);
+    });
+    watcher.on("error", (err) => {
+      this.emit("error", err);
+    });
+    state.watcher = watcher;
+    this.fileWatchers.set(path, state);
+    this.enqueueRead(state);
+  }
+  watchDirectory(dir) {
+    if (this.closed) {
+      return;
+    }
+    if (this.dirWatchers.has(dir)) {
+      return;
+    }
+    const watcher = watch(dir, { recursive: true }, (_event, filename) => {
+      if (filename === null) {
+        return;
+      }
+      const basename = filename.split("/").pop() ?? filename;
+      if (basename.startsWith(ROLLOUT_PREFIX2) && basename.endsWith(ROLLOUT_EXT2)) {
+        const fullPath = join3(dir, filename);
+        this.emit("newSession", fullPath);
+      }
+    });
+    watcher.on("error", (err) => {
+      this.emit("error", err);
+    });
+    this.dirWatchers.set(dir, watcher);
+  }
+  stop() {
+    this.closed = true;
+    for (const state of this.fileWatchers.values()) {
+      if (state.debounceTimer !== null) {
+        clearTimeout(state.debounceTimer);
+      }
+      state.watcher?.close();
+    }
+    this.fileWatchers.clear();
+    for (const watcher of this.dirWatchers.values()) {
+      watcher.close();
+    }
+    this.dirWatchers.clear();
+    this.removeAllListeners();
+  }
+  async flush() {
+    if (this.closed) {
+      return;
+    }
+    for (const state of this.fileWatchers.values()) {
+      await this.enqueueRead(state);
+    }
+  }
+  get isClosed() {
+    return this.closed;
+  }
+  debouncedReadAppended(state) {
+    if (state.debounceTimer !== null) {
+      clearTimeout(state.debounceTimer);
+    }
+    state.debounceTimer = setTimeout(() => {
+      state.debounceTimer = null;
+      this.enqueueRead(state);
+    }, DEBOUNCE_MS);
+  }
+  async enqueueRead(state) {
+    if (state.inFlightRead !== null) {
+      state.pendingRead = true;
+      await state.inFlightRead;
+      return;
+    }
+    const run = (async () => {
+      do {
+        state.pendingRead = false;
+        await this.readAppendedLines(state);
+      } while (state.pendingRead && !this.closed);
+    })();
+    state.inFlightRead = run;
+    try {
+      await run;
+    } finally {
+      state.inFlightRead = null;
+    }
+  }
+  async readAppendedLines(state) {
+    if (this.closed) {
+      return;
+    }
+    try {
+      const currentSize = await getFileSize(state.path);
+      if (currentSize <= state.offset) {
+        return;
+      }
+      const fd = await open(state.path, "r");
+      try {
+        const bytesToRead = currentSize - state.offset;
+        const buffer = new Uint8Array(bytesToRead);
+        await fd.read(buffer, 0, bytesToRead, state.offset);
+        state.offset = currentSize;
+        const text = new TextDecoder().decode(buffer);
+        const lines = text.split(`
+`);
+        for (const line of lines) {
+          const parsed = parseRolloutLine(line);
+          if (parsed !== null) {
+            this.emit("line", state.path, parsed);
+          }
+        }
+      } finally {
+        await fd.close();
+      }
+    } catch (err) {
+      this.emit("error", err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+}
+async function getFileSize(path) {
+  try {
+    const s = await stat2(path);
+    return s.size;
+  } catch {
+    return 0;
+  }
+}
+function sessionsWatchDir(codexHome) {
+  return join3(codexHome, "sessions");
+}
+// src/group/repository.ts
+import { readFile as readFile2, writeFile, mkdir, rename } from "fs/promises";
+import { join as join4 } from "path";
+import { homedir as homedir2 } from "os";
+import { randomUUID } from "crypto";
+var DEFAULT_CONFIG_DIR = join4(homedir2(), ".config", "codex-agent");
+var GROUPS_FILE = "groups.json";
+function resolveConfigDir(configDir) {
+  return configDir ?? DEFAULT_CONFIG_DIR;
+}
+function groupFilePath(configDir) {
+  return join4(resolveConfigDir(configDir), GROUPS_FILE);
+}
+function toGroup(data) {
+  return {
+    id: data.id,
+    name: data.name,
+    description: data.description,
+    paused: data.paused,
+    sessionIds: [...data.sessionIds],
+    createdAt: new Date(data.createdAt),
+    updatedAt: new Date(data.updatedAt)
+  };
+}
+function toData(group) {
+  return {
+    id: group.id,
+    name: group.name,
+    description: group.description,
+    paused: group.paused,
+    sessionIds: [...group.sessionIds],
+    createdAt: group.createdAt.toISOString(),
+    updatedAt: group.updatedAt.toISOString()
+  };
+}
+async function loadGroups(configDir) {
+  const path = groupFilePath(configDir);
+  try {
+    const raw = await readFile2(path, "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return { groups: [] };
+  }
+}
+async function saveGroups(config, configDir) {
+  const dir = resolveConfigDir(configDir);
+  await mkdir(dir, { recursive: true });
+  const path = groupFilePath(configDir);
+  const tmpPath = path + ".tmp." + randomUUID().slice(0, 8);
+  const json = JSON.stringify(config, null, 2) + `
+`;
+  await writeFile(tmpPath, json, "utf-8");
+  await rename(tmpPath, path);
+}
+async function addGroup(name, description, configDir) {
+  const config = await loadGroups(configDir);
+  const now = new Date;
+  const group = {
+    id: randomUUID(),
+    name,
+    description,
+    paused: false,
+    sessionIds: [],
+    createdAt: now,
+    updatedAt: now
+  };
+  const newConfig = {
+    groups: [...config.groups, toData(group)]
+  };
+  await saveGroups(newConfig, configDir);
+  return group;
+}
+async function removeGroup(id, configDir) {
+  const config = await loadGroups(configDir);
+  const filtered = config.groups.filter((g) => g.id !== id);
+  if (filtered.length === config.groups.length) {
+    return false;
+  }
+  await saveGroups({ groups: filtered }, configDir);
+  return true;
+}
+async function findGroup(idOrName, configDir) {
+  const config = await loadGroups(configDir);
+  const data = config.groups.find((g) => g.id === idOrName || g.name === idOrName);
+  return data ? toGroup(data) : null;
+}
+async function listGroups(configDir) {
+  const config = await loadGroups(configDir);
+  return config.groups.map(toGroup);
+}
+async function addSessionToGroup(groupId, sessionId, configDir) {
+  const config = await loadGroups(configDir);
+  const newGroups = config.groups.map((g) => {
+    if (g.id !== groupId)
+      return g;
+    if (g.sessionIds.includes(sessionId))
+      return g;
+    return {
+      ...g,
+      sessionIds: [...g.sessionIds, sessionId],
+      updatedAt: new Date().toISOString()
+    };
+  });
+  await saveGroups({ groups: newGroups }, configDir);
+}
+async function removeSessionFromGroup(groupId, sessionId, configDir) {
+  const config = await loadGroups(configDir);
+  const newGroups = config.groups.map((g) => {
+    if (g.id !== groupId)
+      return g;
+    return {
+      ...g,
+      sessionIds: g.sessionIds.filter((s) => s !== sessionId),
+      updatedAt: new Date().toISOString()
+    };
+  });
+  await saveGroups({ groups: newGroups }, configDir);
+}
+async function pauseGroup(groupId, configDir) {
+  const config = await loadGroups(configDir);
+  let found = false;
+  const groups = config.groups.map((group) => {
+    if (group.id !== groupId) {
+      return group;
+    }
+    found = true;
+    return {
+      ...group,
+      paused: true,
+      updatedAt: new Date().toISOString()
+    };
+  });
+  if (!found) {
+    return false;
+  }
+  await saveGroups({ groups }, configDir);
+  return true;
+}
+async function resumeGroup(groupId, configDir) {
+  const config = await loadGroups(configDir);
+  let found = false;
+  const groups = config.groups.map((group) => {
+    if (group.id !== groupId) {
+      return group;
+    }
+    found = true;
+    return {
+      ...group,
+      paused: false,
+      updatedAt: new Date().toISOString()
+    };
+  });
+  if (!found) {
+    return false;
+  }
+  await saveGroups({ groups }, configDir);
+  return true;
+}
 // src/process/manager.ts
 import { spawn } from "child_process";
 import { createInterface as createInterface2 } from "readline";
-import { randomUUID } from "crypto";
+import { randomUUID as randomUUID2 } from "crypto";
 var DEFAULT_BINARY = "codex";
 
 class ProcessManager {
@@ -1252,7 +1573,7 @@ class ProcessManager {
       env: { ...process.env }
     });
     drainPipe(child.stderr);
-    const id = randomUUID();
+    const id = randomUUID2();
     const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
     this.processes.set(id, managed);
     const completion = waitForExit(child).then((exitCode) => {
@@ -1281,7 +1602,7 @@ class ProcessManager {
       env: { ...process.env }
     });
     drainPipe(child.stderr);
-    const id = randomUUID();
+    const id = randomUUID2();
     const managed = createManagedProcess(id, child, binary + " " + args.join(" "), `resume ${sessionId}`);
     this.processes.set(id, managed);
     const completion = waitForExit(child).then((exitCode) => {
@@ -1364,7 +1685,7 @@ class ProcessManager {
     });
     drainPipe(child.stdout);
     drainPipe(child.stderr);
-    const id = randomUUID();
+    const id = randomUUID2();
     const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
     this.processes.set(id, managed);
     child.on("exit", (code) => {
@@ -1475,164 +1796,7 @@ function drainAsyncIterable(lines) {
     for await (const _ of lines) {}
   })();
 }
-// src/group/repository.ts
-import { readFile as readFile2, writeFile, mkdir, rename } from "fs/promises";
-import { join as join4 } from "path";
-import { homedir as homedir2 } from "os";
-import { randomUUID as randomUUID2 } from "crypto";
-var DEFAULT_CONFIG_DIR = join4(homedir2(), ".config", "codex-agent");
-var GROUPS_FILE = "groups.json";
-function resolveConfigDir(configDir) {
-  return configDir ?? DEFAULT_CONFIG_DIR;
-}
-function groupFilePath(configDir) {
-  return join4(resolveConfigDir(configDir), GROUPS_FILE);
-}
-function toGroup(data) {
-  return {
-    id: data.id,
-    name: data.name,
-    description: data.description,
-    paused: data.paused,
-    sessionIds: [...data.sessionIds],
-    createdAt: new Date(data.createdAt),
-    updatedAt: new Date(data.updatedAt)
-  };
-}
-function toData(group) {
-  return {
-    id: group.id,
-    name: group.name,
-    description: group.description,
-    paused: group.paused,
-    sessionIds: [...group.sessionIds],
-    createdAt: group.createdAt.toISOString(),
-    updatedAt: group.updatedAt.toISOString()
-  };
-}
-async function loadGroups(configDir) {
-  const path = groupFilePath(configDir);
-  try {
-    const raw = await readFile2(path, "utf-8");
-    return JSON.parse(raw);
-  } catch {
-    return { groups: [] };
-  }
-}
-async function saveGroups(config, configDir) {
-  const dir = resolveConfigDir(configDir);
-  await mkdir(dir, { recursive: true });
-  const path = groupFilePath(configDir);
-  const tmpPath = path + ".tmp." + randomUUID2().slice(0, 8);
-  const json = JSON.stringify(config, null, 2) + `
-`;
-  await writeFile(tmpPath, json, "utf-8");
-  await rename(tmpPath, path);
-}
-async function addGroup(name, description, configDir) {
-  const config = await loadGroups(configDir);
-  const now = new Date;
-  const group = {
-    id: randomUUID2(),
-    name,
-    description,
-    paused: false,
-    sessionIds: [],
-    createdAt: now,
-    updatedAt: now
-  };
-  const newConfig = {
-    groups: [...config.groups, toData(group)]
-  };
-  await saveGroups(newConfig, configDir);
-  return group;
-}
-async function removeGroup(id, configDir) {
-  const config = await loadGroups(configDir);
-  const filtered = config.groups.filter((g) => g.id !== id);
-  if (filtered.length === config.groups.length) {
-    return false;
-  }
-  await saveGroups({ groups: filtered }, configDir);
-  return true;
-}
-async function findGroup(idOrName, configDir) {
-  const config = await loadGroups(configDir);
-  const data = config.groups.find((g) => g.id === idOrName || g.name === idOrName);
-  return data ? toGroup(data) : null;
-}
-async function listGroups(configDir) {
-  const config = await loadGroups(configDir);
-  return config.groups.map(toGroup);
-}
-async function addSessionToGroup(groupId, sessionId, configDir) {
-  const config = await loadGroups(configDir);
-  const newGroups = config.groups.map((g) => {
-    if (g.id !== groupId)
-      return g;
-    if (g.sessionIds.includes(sessionId))
-      return g;
-    return {
-      ...g,
-      sessionIds: [...g.sessionIds, sessionId],
-      updatedAt: new Date().toISOString()
-    };
-  });
-  await saveGroups({ groups: newGroups }, configDir);
-}
-async function removeSessionFromGroup(groupId, sessionId, configDir) {
-  const config = await loadGroups(configDir);
-  const newGroups = config.groups.map((g) => {
-    if (g.id !== groupId)
-      return g;
-    return {
-      ...g,
-      sessionIds: g.sessionIds.filter((s) => s !== sessionId),
-      updatedAt: new Date().toISOString()
-    };
-  });
-  await saveGroups({ groups: newGroups }, configDir);
-}
-async function pauseGroup(groupId, configDir) {
-  const config = await loadGroups(configDir);
-  let found = false;
-  const groups = config.groups.map((group) => {
-    if (group.id !== groupId) {
-      return group;
-    }
-    found = true;
-    return {
-      ...group,
-      paused: true,
-      updatedAt: new Date().toISOString()
-    };
-  });
-  if (!found) {
-    return false;
-  }
-  await saveGroups({ groups }, configDir);
-  return true;
-}
-async function resumeGroup(groupId, configDir) {
-  const config = await loadGroups(configDir);
-  let found = false;
-  const groups = config.groups.map((group) => {
-    if (group.id !== groupId) {
-      return group;
-    }
-    found = true;
-    return {
-      ...group,
-      paused: false,
-      updatedAt: new Date().toISOString()
-    };
-  });
-  if (!found) {
-    return false;
-  }
-  await saveGroups({ groups }, configDir);
-  return true;
-}
+
 // src/group/manager.ts
 var DEFAULT_MAX_CONCURRENT = 3;
 async function* runGroup(group, prompt, options) {
@@ -2681,1526 +2845,6 @@ async function rebuildFileIndex(configDir, codexHome) {
     updatedAt
   };
 }
-// src/activity/manager.ts
-function deriveStatus(line, current) {
-  if (isEventMsg(line)) {
-    const event = line.payload;
-    switch (event.type) {
-      case "TurnStarted":
-      case "ExecCommandBegin":
-        return "running";
-      case "TurnComplete":
-      case "ExecCommandEnd":
-        return "idle";
-      case "TurnAborted":
-      case "Error":
-        return "failed";
-      default:
-        return current;
-    }
-  }
-  if (isResponseItem(line) && line.payload.type === "local_shell_call") {
-    const rawStatus = line.payload.status;
-    if (typeof rawStatus !== "string") {
-      return current;
-    }
-    const status = rawStatus.toLowerCase();
-    if (status.includes("approval") || status.includes("consent")) {
-      return "waiting_approval";
-    }
-    if (status === "in_progress" || status === "running") {
-      return "running";
-    }
-  }
-  return current;
-}
-function deriveActivityEntry(sessionId, lines) {
-  let status = "idle";
-  let updatedAt = new Date(0).toISOString();
-  for (const line of lines) {
-    const next = deriveStatus(line, status);
-    if (next !== status) {
-      status = next;
-      updatedAt = line.timestamp;
-    }
-  }
-  return {
-    sessionId,
-    status,
-    updatedAt
-  };
-}
-async function getSessionActivity(sessionId, codexHome) {
-  const session = await findSession(sessionId, codexHome);
-  if (session === null) {
-    return null;
-  }
-  const lines = await readRollout(session.rolloutPath);
-  return deriveActivityEntry(session.id, lines);
-}
-// src/markdown/parser.ts
-var HEADING_RE = /^(#{1,6})\s+(.+)$/;
-var TASK_RE = /^\s*[-*]\s+\[([ xX])\]\s+(.+)$/;
-function parseMarkdown(content) {
-  const lines = content.split(/\r?\n/);
-  const sections = [];
-  let currentHeading = "";
-  let currentContent = [];
-  const flush = () => {
-    if (currentContent.length === 0 && currentHeading.length === 0) {
-      return;
-    }
-    sections.push({
-      heading: currentHeading,
-      content: currentContent.join(`
-`).trim()
-    });
-  };
-  for (const line of lines) {
-    const match = HEADING_RE.exec(line);
-    if (match !== null) {
-      flush();
-      currentHeading = match[2]?.trim() ?? "";
-      currentContent = [];
-      continue;
-    }
-    currentContent.push(line);
-  }
-  flush();
-  if (sections.length === 0) {
-    return { sections: [{ heading: "", content: content.trim() }] };
-  }
-  return { sections };
-}
-function extractMarkdownTasks(content) {
-  const parsed = parseMarkdown(content);
-  const tasks = [];
-  for (const section of parsed.sections) {
-    const lines = section.content.split(/\r?\n/);
-    for (const line of lines) {
-      const match = TASK_RE.exec(line);
-      if (match === null) {
-        continue;
-      }
-      tasks.push({
-        sectionHeading: section.heading,
-        checked: match[1]?.toLowerCase() === "x",
-        text: match[2]?.trim() ?? ""
-      });
-    }
-  }
-  return tasks;
-}
-// src/sdk/events.ts
-class BasicSdkEventEmitter {
-  handlers = new Map;
-  on(event, handler) {
-    const set = this.handlers.get(event) ?? new Set;
-    set.add(handler);
-    this.handlers.set(event, set);
-  }
-  off(event, handler) {
-    this.handlers.get(event)?.delete(handler);
-  }
-  emit(event, payload) {
-    const set = this.handlers.get(event);
-    if (set === undefined) {
-      return;
-    }
-    for (const handler of set) {
-      handler(payload);
-    }
-  }
-}
-// src/sdk/tool-registry.ts
-function tool(config) {
-  if (config.name.trim().length === 0) {
-    throw new Error("tool name is required");
-  }
-  return {
-    name: config.name,
-    description: config.description,
-    async run(input, context) {
-      return await config.run(input, context);
-    }
-  };
-}
-
-class ToolRegistry {
-  tools = new Map;
-  register(registeredTool) {
-    this.tools.set(registeredTool.name, registeredTool);
-  }
-  get(name) {
-    const value = this.tools.get(name);
-    if (value === undefined) {
-      return null;
-    }
-    return value;
-  }
-  list() {
-    return Array.from(this.tools.keys()).sort();
-  }
-  async run(name, input, context) {
-    const registered = this.get(name);
-    if (registered === null) {
-      throw new Error(`tool not found: ${name}`);
-    }
-    return registered.run(input, context);
-  }
-}
-// src/sdk/session-runner.ts
-import { EventEmitter as EventEmitter2 } from "events";
-import { stat as stat3 } from "fs/promises";
-class RunningSession extends EventEmitter2 {
-  _sessionId;
-  allowSessionIdUpdate;
-  pm;
-  processId;
-  startedAt;
-  streamGranularity;
-  state;
-  stopHook = null;
-  constructor(sessionId, pm, processId, startedAt, streamGranularity, allowSessionIdUpdate = true) {
-    super();
-    this._sessionId = sessionId;
-    this.allowSessionIdUpdate = allowSessionIdUpdate;
-    this.pm = pm;
-    this.processId = processId;
-    this.startedAt = startedAt;
-    this.streamGranularity = streamGranularity;
-    let resolveCompletion = null;
-    const completionPromise = new Promise((resolve3) => {
-      resolveCompletion = resolve3;
-    });
-    this.state = {
-      completed: false,
-      completionResolver: resolveCompletion,
-      completionPromise,
-      queued: [],
-      waiter: null,
-      messageCount: 0
-    };
-  }
-  get sessionId() {
-    return this._sessionId;
-  }
-  setStopHook(stop) {
-    this.stopHook = stop;
-  }
-  pushLine(line) {
-    if (this.allowSessionIdUpdate && isSessionMeta(line) && this._sessionId !== line.payload.meta.id) {
-      this._sessionId = line.payload.meta.id;
-      this.emit("sessionId", this._sessionId);
-    }
-    this.state.messageCount += 1;
-    this.emit("message", line);
-    const chunks = this.streamGranularity === "char" ? toCharStreamChunks(line, this._sessionId) : [line];
-    for (const chunk of chunks) {
-      this.state.queued.push(chunk);
-    }
-    if (this.state.waiter !== null) {
-      const waiter = this.state.waiter;
-      this.state.waiter = null;
-      waiter();
-    }
-  }
-  finish(exitCode) {
-    if (this.state.completed) {
-      return;
-    }
-    this.state.completed = true;
-    const completedAt = new Date;
-    const result = {
-      success: exitCode === 0,
-      exitCode,
-      stats: {
-        startedAt: this.startedAt.toISOString(),
-        completedAt: completedAt.toISOString(),
-        messageCount: this.state.messageCount
-      }
-    };
-    this.emit("complete", result);
-    if (this.state.completionResolver !== null) {
-      this.state.completionResolver(result);
-      this.state.completionResolver = null;
-    }
-    if (this.state.waiter !== null) {
-      const waiter = this.state.waiter;
-      this.state.waiter = null;
-      waiter();
-    }
-  }
-  async* messages() {
-    while (!this.state.completed || this.state.queued.length > 0) {
-      while (this.state.queued.length > 0) {
-        const line = this.state.queued.shift();
-        if (line !== undefined) {
-          yield line;
-        }
-      }
-      if (this.state.completed) {
-        break;
-      }
-      await new Promise((resolve3) => {
-        this.state.waiter = resolve3;
-      });
-    }
-  }
-  async waitForCompletion() {
-    return await this.state.completionPromise;
-  }
-  async cancel() {
-    this.stopHook?.();
-    this.pm.kill(this.processId);
-  }
-  async interrupt() {
-    this.pm.writeInput(this.processId, "\x03");
-  }
-  async pause() {}
-  async resume() {}
-}
-
-class SessionRunner {
-  options;
-  pm;
-  active = new Set;
-  constructor(options) {
-    this.options = options ?? {};
-    this.pm = new ProcessManager(options?.codexBinary);
-  }
-  async startSession(config) {
-    if (config.resumeSessionId !== undefined) {
-      return await this.resumeSession(config.resumeSessionId, config.prompt, {
-        cwd: config.cwd,
-        model: config.model,
-        sandbox: config.sandbox,
-        approvalMode: config.approvalMode,
-        fullAuto: config.fullAuto,
-        additionalArgs: config.additionalArgs,
-        images: config.images,
-        streamGranularity: config.streamGranularity
-      });
-    }
-    const startedAt = new Date;
-    const options = this.toProcessOptions(config);
-    const execStream = this.pm.spawnExecStream(config.prompt, options);
-    const session = new RunningSession(`pending-${startedAt.getTime()}`, this.pm, execStream.process.id, startedAt, options.streamGranularity ?? "event");
-    this.trackSession(session);
-    this.forwardExecStream(execStream, session);
-    return session;
-  }
-  async resumeSession(sessionId, prompt, options) {
-    const sessionInfo = await findSession(sessionId, this.options.codexHome);
-    const includeExisting = this.options.includeExistingOnResume === true;
-    const preResumeRolloutOffset = sessionInfo !== null ? await getRolloutSize(sessionInfo.rolloutPath) : undefined;
-    const existingRolloutLines = includeExisting && sessionInfo !== null ? await readRollout(sessionInfo.rolloutPath) : undefined;
-    const startedAt = new Date;
-    const resumeStream = this.pm.spawnResumeStream(sessionId, {
-      ...options,
-      codexBinary: this.options.codexBinary
-    }, prompt);
-    const running = new RunningSession(sessionId, this.pm, resumeStream.process.id, startedAt, options?.streamGranularity ?? "event", false);
-    this.trackSession(running);
-    const seenLineKeys = new Set;
-    const pushLineIfNew = (line) => {
-      const key = stableLineKey(line);
-      if (seenLineKeys.has(key)) {
-        return;
-      }
-      seenLineKeys.add(key);
-      running.pushLine(line);
-    };
-    const watcher = new RolloutWatcher;
-    watcher.on("line", (_path, line) => {
-      pushLineIfNew(line);
-    });
-    let attachPromise = null;
-    if (sessionInfo !== null) {
-      if (includeExisting) {
-        for (const line of existingRolloutLines ?? []) {
-          pushLineIfNew(line);
-        }
-      }
-      await watcher.watchFile(sessionInfo.rolloutPath, {
-        startOffset: preResumeRolloutOffset
-      });
-    } else {
-      attachPromise = this.attachWatchWhenSessionAppears(sessionId, watcher, includeExisting);
-    }
-    running.setStopHook(() => watcher.stop());
-    const streamForwardPromise = (async () => {
-      for await (const line of resumeStream.lines) {
-        pushLineIfNew(line);
-      }
-    })();
-    resumeStream.completion.then(async (exitCode) => {
-      await streamForwardPromise;
-      if (attachPromise !== null) {
-        await attachPromise;
-      }
-      await watcher.flush();
-      watcher.stop();
-      running.finish(exitCode);
-    });
-    return running;
-  }
-  async attachWatchWhenSessionAppears(sessionId, watcher, includeExisting) {
-    for (let attempt = 0;attempt < 20; attempt += 1) {
-      if (watcher.isClosed) {
-        return;
-      }
-      const discovered = await findSession(sessionId, this.options.codexHome);
-      if (discovered !== null) {
-        if (includeExisting) {
-          const existing = await readRollout(discovered.rolloutPath);
-          for (const line of existing) {
-            watcher.emit("line", discovered.rolloutPath, line);
-          }
-          await watcher.watchFile(discovered.rolloutPath);
-        } else {
-          await watcher.watchFile(discovered.rolloutPath, { startOffset: 0 });
-        }
-        return;
-      }
-      await sleep(100);
-    }
-  }
-  listActiveSessions() {
-    return Array.from(this.active);
-  }
-  trackSession(session) {
-    this.active.add(session);
-    session.on("complete", () => {
-      this.active.delete(session);
-    });
-  }
-  toProcessOptions(config) {
-    return {
-      codexBinary: this.options.codexBinary,
-      cwd: config.cwd,
-      model: config.model,
-      sandbox: config.sandbox,
-      approvalMode: config.approvalMode,
-      fullAuto: config.fullAuto,
-      additionalArgs: config.additionalArgs,
-      images: config.images,
-      streamGranularity: config.streamGranularity
-    };
-  }
-  forwardExecStream(stream, session) {
-    (async () => {
-      for await (const line of stream.lines) {
-        session.pushLine(line);
-      }
-    })();
-    stream.completion.then((exitCode) => {
-      session.finish(exitCode);
-    });
-  }
-}
-function toCharStreamChunks(line, sessionId) {
-  const textSegments = extractAssistantTextSegments(line);
-  if (textSegments.length === 0) {
-    return [line];
-  }
-  const chunks = [];
-  for (const segment of textSegments) {
-    for (const char of Array.from(segment)) {
-      chunks.push({
-        kind: "char",
-        char,
-        sessionId,
-        timestamp: line.timestamp,
-        sourceType: line.type,
-        source: line
-      });
-    }
-  }
-  return chunks;
-}
-function extractAssistantTextSegments(line) {
-  if (line.type === "event_msg") {
-    const payload2 = toRecord3(line.payload);
-    if (payload2?.["type"] === "AgentMessage" && typeof payload2["message"] === "string") {
-      return [payload2["message"]];
-    }
-    return [];
-  }
-  if (line.type !== "response_item") {
-    return [];
-  }
-  const payload = toRecord3(line.payload);
-  if (payload?.["type"] !== "message" || payload["role"] !== "assistant" || !Array.isArray(payload["content"])) {
-    return [];
-  }
-  const segments = [];
-  for (const item of payload["content"]) {
-    const content = toRecord3(item);
-    if (content === null) {
-      continue;
-    }
-    if ((content["type"] === "output_text" || content["type"] === "input_text") && typeof content["text"] === "string" && content["text"].length > 0) {
-      segments.push(content["text"]);
-    }
-  }
-  return segments;
-}
-function toRecord3(value) {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  return value;
-}
-function sleep(ms) {
-  return new Promise((resolve3) => {
-    setTimeout(resolve3, ms);
-  });
-}
-function stableLineKey(line) {
-  return JSON.stringify(toCanonicalJsonValue(line));
-}
-function toCanonicalJsonValue(value) {
-  if (Array.isArray(value)) {
-    return value.map((item) => toCanonicalJsonValue(item));
-  }
-  if (typeof value !== "object" || value === null) {
-    return value;
-  }
-  const record = value;
-  const canonical = {};
-  for (const key of Object.keys(record).sort()) {
-    canonical[key] = toCanonicalJsonValue(record[key]);
-  }
-  return canonical;
-}
-async function getRolloutSize(path) {
-  try {
-    const info = await stat3(path);
-    return info.size;
-  } catch {
-    return 0;
-  }
-}
-// src/sdk/agent-runner.ts
-import { mkdtemp, rm, writeFile as writeFile6 } from "fs/promises";
-import { tmpdir } from "os";
-import { extname, join as join9 } from "path";
-import { randomUUID as randomUUID8 } from "crypto";
-async function* runAgent(request, options) {
-  const runner = new SessionRunner(options);
-  const normalized = await normalizeAttachments(request.attachments);
-  const resumed = isResumeRequest(request);
-  const normalizedMode = request.streamMode === "normalized";
-  let currentSessionId = resumed ? request.sessionId : undefined;
-  try {
-    const session = await startFromRequest(runner, request, normalized.imagePaths);
-    currentSessionId = session.sessionId;
-    const iterator = session.messages();
-    const normalizerState = createNormalizerState();
-    if (resumed) {
-      const startedEvent = {
-        type: "session.started",
-        sessionId: session.sessionId,
-        resumed: true
-      };
-      yield startedEvent;
-    } else {
-      const firstChunk = await iterator.next();
-      if (firstChunk.done) {
-        const startedEvent = {
-          type: "session.started",
-          sessionId: session.sessionId,
-          resumed: false
-        };
-        yield startedEvent;
-      } else {
-        const startedSessionId = resolveSessionId(session.sessionId, firstChunk.value);
-        currentSessionId = startedSessionId;
-        const startedEvent = {
-          type: "session.started",
-          sessionId: startedSessionId,
-          resumed: false
-        };
-        yield startedEvent;
-        if (normalizedMode) {
-          for (const event of normalizeChunkToEvents(firstChunk.value, startedSessionId, normalizerState, false)) {
-            yield event;
-          }
-        } else {
-          yield {
-            type: "session.message",
-            sessionId: startedSessionId,
-            chunk: firstChunk.value
-          };
-        }
-      }
-    }
-    while (true) {
-      const nextChunk = await iterator.next();
-      if (nextChunk.done) {
-        break;
-      }
-      const resolvedSessionId2 = resolveSessionId(session.sessionId, nextChunk.value);
-      currentSessionId = resolvedSessionId2;
-      if (normalizedMode) {
-        for (const event of normalizeChunkToEvents(nextChunk.value, resolvedSessionId2, normalizerState, false)) {
-          yield event;
-        }
-      } else {
-        yield {
-          type: "session.message",
-          sessionId: resolvedSessionId2,
-          chunk: nextChunk.value
-        };
-      }
-    }
-    const result = await session.waitForCompletion();
-    const resolvedSessionId = currentSessionId ?? session.sessionId;
-    if (normalizedMode) {
-      yield {
-        type: "session.completed",
-        sessionId: resolvedSessionId,
-        success: result.success,
-        exitCode: result.exitCode
-      };
-    } else {
-      yield {
-        type: "session.completed",
-        sessionId: resolvedSessionId,
-        result
-      };
-    }
-  } catch (error) {
-    yield {
-      type: "session.error",
-      sessionId: currentSessionId,
-      error: toError(error)
-    };
-  } finally {
-    await normalized.cleanup();
-  }
-}
-async function* toNormalizedEvents(chunks) {
-  const state = createNormalizerState();
-  let fallbackSessionId = "unknown-session";
-  for await (const chunk of chunks) {
-    fallbackSessionId = resolveSessionId(fallbackSessionId, chunk);
-    for (const event of normalizeChunkToEvents(chunk, fallbackSessionId, state, true)) {
-      yield event;
-    }
-  }
-}
-async function startFromRequest(runner, request, imagePaths) {
-  if (isResumeRequest(request)) {
-    const session = await runner.resumeSession(request.sessionId, request.prompt, {
-      cwd: request.cwd,
-      model: request.model,
-      sandbox: request.sandbox,
-      approvalMode: request.approvalMode,
-      fullAuto: request.fullAuto,
-      additionalArgs: request.additionalArgs,
-      images: imagePaths,
-      streamGranularity: request.streamGranularity
-    });
-    return session;
-  }
-  const config = {
-    prompt: request.prompt,
-    cwd: request.cwd,
-    model: request.model,
-    sandbox: request.sandbox,
-    approvalMode: request.approvalMode,
-    fullAuto: request.fullAuto,
-    additionalArgs: request.additionalArgs,
-    images: imagePaths,
-    streamGranularity: request.streamGranularity
-  };
-  return await runner.startSession(config);
-}
-async function normalizeAttachments(attachments) {
-  if (attachments === undefined || attachments.length === 0) {
-    return {
-      imagePaths: [],
-      cleanup: async () => {
-        return;
-      }
-    };
-  }
-  const paths = [];
-  const tempDirs = [];
-  for (const attachment of attachments) {
-    if (attachment.type === "path") {
-      paths.push(attachment.path);
-      continue;
-    }
-    const tempDir = await mkdtemp(join9(tmpdir(), "codex-agent-attachment-"));
-    tempDirs.push(tempDir);
-    const parsed = parseBase64Input(attachment.data);
-    const mediaType = attachment.mediaType ?? parsed.mediaType;
-    const ext = extensionForMediaType(mediaType);
-    const fileName = sanitizeFileName(attachment.filename, ext);
-    const filePath = join9(tempDir, fileName);
-    const body = parsed.body;
-    const content = Uint8Array.from(Buffer.from(body, "base64"));
-    await writeFile6(filePath, content);
-    paths.push(filePath);
-  }
-  return {
-    imagePaths: paths,
-    cleanup: async () => {
-      await Promise.all(tempDirs.map(async (dir) => {
-        await rm(dir, { recursive: true, force: true });
-      }));
-    }
-  };
-}
-function parseBase64Input(data) {
-  if (!data.startsWith("data:")) {
-    return { body: data };
-  }
-  const marker = ";base64,";
-  const markerIndex = data.indexOf(marker);
-  if (markerIndex < 0) {
-    return { body: data };
-  }
-  const mediaType = data.slice(5, markerIndex);
-  const body = data.slice(markerIndex + marker.length);
-  if (mediaType.length === 0) {
-    return { body };
-  }
-  return { body, mediaType };
-}
-function extensionForMediaType(mediaType) {
-  if (mediaType === undefined) {
-    return ".img";
-  }
-  switch (mediaType.toLowerCase()) {
-    case "image/png":
-      return ".png";
-    case "image/jpeg":
-      return ".jpg";
-    case "image/webp":
-      return ".webp";
-    case "image/gif":
-      return ".gif";
-    default:
-      return ".img";
-  }
-}
-function sanitizeFileName(filename, defaultExt) {
-  if (filename === undefined || filename.trim().length === 0) {
-    return `${randomUUID8()}${defaultExt}`;
-  }
-  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-  if (safe.length === 0) {
-    return `${randomUUID8()}${defaultExt}`;
-  }
-  if (extname(safe).length > 0) {
-    return safe;
-  }
-  return `${safe}${defaultExt}`;
-}
-function resolveSessionId(fallbackSessionId, chunk) {
-  if (isCharChunk(chunk)) {
-    return chunk.sessionId;
-  }
-  if (chunk.type === "session_meta" && typeof chunk.payload === "object" && chunk.payload !== null && "meta" in chunk.payload) {
-    const payload = chunk.payload;
-    const candidate = payload.meta?.id;
-    if (typeof candidate === "string" && candidate.length > 0) {
-      return candidate;
-    }
-  }
-  return fallbackSessionId;
-}
-function isCharChunk(chunk) {
-  return chunk.kind === "char";
-}
-function toError(value) {
-  if (value instanceof Error) {
-    return value;
-  }
-  return new Error(typeof value === "string" ? value : "Unknown runAgent error");
-}
-function isResumeRequest(request) {
-  return typeof request.sessionId === "string";
-}
-function createNormalizerState() {
-  return {
-    startedSessionIds: new Set,
-    assistantSnapshots: new Map,
-    toolNamesByCallId: new Map
-  };
-}
-function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionStarted) {
-  const sessionId = resolveSessionId(fallbackSessionId, chunk);
-  const events = [];
-  if (isCharChunk(chunk)) {
-    events.push(...toAssistantTextEvents(sessionId, chunk.char, state));
-    return events;
-  }
-  if (chunk.type === "session_meta") {
-    if (includeSessionStarted && !state.startedSessionIds.has(sessionId)) {
-      state.startedSessionIds.add(sessionId);
-      events.push({
-        type: "session.started",
-        sessionId,
-        resumed: false
-      });
-    }
-    return events;
-  }
-  if (chunk.type === "event_msg") {
-    const payload2 = toRecord4(chunk.payload);
-    if (payload2 === null) {
-      return events;
-    }
-    const payloadType = readString2(payload2["type"]);
-    if (payloadType === "AgentMessage") {
-      const message = readString2(payload2["message"]);
-      if (message !== undefined) {
-        events.push(...toAssistantTextEvents(sessionId, message, state));
-      }
-      return events;
-    }
-    if (payloadType === "AgentReasoning") {
-      const message = readString2(payload2["text"]);
-      events.push({
-        type: "activity",
-        sessionId,
-        ...message !== undefined ? { message } : {}
-      });
-      return events;
-    }
-    if (payloadType === "ExecCommandBegin") {
-      const callId = readString2(payload2["call_id"]);
-      const command = readStringArray(payload2["command"]);
-      const input = {
-        callId,
-        turnId: readString2(payload2["turn_id"]),
-        cwd: readString2(payload2["cwd"]),
-        command
-      };
-      events.push({
-        type: "tool.call",
-        sessionId,
-        name: "local_shell",
-        input
-      });
-      return events;
-    }
-    if (payloadType === "ExecCommandEnd") {
-      const callId = readString2(payload2["call_id"]);
-      const exitCode = readNumber(payload2["exit_code"]);
-      const output = {
-        callId,
-        turnId: readString2(payload2["turn_id"]),
-        cwd: readString2(payload2["cwd"]),
-        command: readStringArray(payload2["command"]),
-        exitCode,
-        aggregatedOutput: payload2["aggregated_output"]
-      };
-      events.push({
-        type: "tool.result",
-        sessionId,
-        name: "local_shell",
-        isError: exitCode !== undefined ? exitCode !== 0 : false,
-        output
-      });
-      return events;
-    }
-    if (payloadType === "Error") {
-      events.push({
-        type: "session.error",
-        sessionId,
-        error: new Error(readString2(payload2["message"]) ?? "Unknown rollout error")
-      });
-      return events;
-    }
-    events.push({
-      type: "activity",
-      sessionId,
-      message: payloadType ?? "event_msg"
-    });
-    return events;
-  }
-  if (chunk.type !== "response_item") {
-    return events;
-  }
-  const payload = toRecord4(chunk.payload);
-  if (payload === null) {
-    return events;
-  }
-  const itemType = readString2(payload["type"]);
-  if (itemType === "function_call") {
-    const name = readString2(payload["name"]) ?? "unknown-tool";
-    const callId = readString2(payload["call_id"]);
-    if (callId !== undefined) {
-      state.toolNamesByCallId.set(callId, name);
-    }
-    events.push({
-      type: "tool.call",
-      sessionId,
-      name,
-      input: parseMaybeJson(readString2(payload["arguments"]))
-    });
-    return events;
-  }
-  if (itemType === "function_call_output") {
-    const callId = readString2(payload["call_id"]);
-    const output = payload["output"];
-    const outputRecord = toRecord4(output);
-    const isError = outputRecord?.["is_error"] === true || readString2(outputRecord?.["status"]) === "error";
-    events.push({
-      type: "tool.result",
-      sessionId,
-      name: (callId !== undefined ? state.toolNamesByCallId.get(callId) : undefined) ?? "unknown-tool",
-      isError,
-      output
-    });
-    return events;
-  }
-  if (itemType === "local_shell_call") {
-    const status = readString2(payload["status"]);
-    const action = payload["action"];
-    const output = payload["output"];
-    const callId = readString2(payload["call_id"]);
-    const isTerminalStatus = status === "completed" || status === "failed" || status === "error";
-    if (isTerminalStatus) {
-      events.push({
-        type: "tool.result",
-        sessionId,
-        name: "local_shell",
-        isError: status !== "completed",
-        output: {
-          callId,
-          status,
-          action,
-          output
-        }
-      });
-      return events;
-    }
-    events.push({
-      type: "tool.call",
-      sessionId,
-      name: "local_shell",
-      input: {
-        callId,
-        status,
-        action
-      }
-    });
-    return events;
-  }
-  if (itemType === "message" && readString2(payload["role"]) === "assistant" && Array.isArray(payload["content"])) {
-    for (const item of payload["content"]) {
-      const content = toRecord4(item);
-      if (content === null) {
-        continue;
-      }
-      const contentType = readString2(content["type"]);
-      if (contentType !== "output_text" && contentType !== "input_text") {
-        continue;
-      }
-      const text = readString2(content["text"]);
-      if (text !== undefined && text.length > 0) {
-        events.push(...toAssistantTextEvents(sessionId, text, state));
-      }
-    }
-    return events;
-  }
-  return events;
-}
-function toAssistantTextEvents(sessionId, text, state) {
-  const previous = state.assistantSnapshots.get(sessionId) ?? "";
-  const content = `${previous}${text}`;
-  state.assistantSnapshots.set(sessionId, content);
-  return [
-    {
-      type: "assistant.delta",
-      sessionId,
-      text
-    },
-    {
-      type: "assistant.snapshot",
-      sessionId,
-      content
-    }
-  ];
-}
-function toRecord4(value) {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  return value;
-}
-function readString2(value) {
-  return typeof value === "string" ? value : undefined;
-}
-function readNumber(value) {
-  return typeof value === "number" ? value : undefined;
-}
-function readStringArray(value) {
-  if (!Array.isArray(value)) {
-    return;
-  }
-  const strings = value.filter((item) => typeof item === "string");
-  return strings.length > 0 ? strings : undefined;
-}
-function parseMaybeJson(value) {
-  if (value === undefined) {
-    return;
-  }
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-// src/sdk/tool-versions.ts
-import { spawn as spawn2 } from "child_process";
-var DEFAULT_TIMEOUT_MS = 5000;
-async function getCodexCliVersion(options) {
-  return await readToolVersion(options?.codexBinary ?? "codex", options?.timeoutMs);
-}
-async function getToolVersions(options) {
-  const codex = await getCodexCliVersion(options);
-  if (options?.includeGit !== true) {
-    return { codex };
-  }
-  const git = await readToolVersion(options.gitBinary ?? "git", options.timeoutMs);
-  return { codex, git };
-}
-async function readToolVersion(binary, timeoutMs) {
-  const effectiveTimeout = timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
-  return await new Promise((resolve3) => {
-    const child = spawn2(binary, ["--version"], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env }
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const settle = (result) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      resolve3(result);
-    };
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      settle({ version: null, error: message });
-    });
-    child.on("close", (code, signal) => {
-      if (code === 0) {
-        const line = firstLine(stdout);
-        if (line !== null) {
-          settle({ version: line, error: null });
-          return;
-        }
-        settle({
-          version: null,
-          error: "version command succeeded but produced no output"
-        });
-        return;
-      }
-      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-      const details = firstLine(stderr);
-      const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
-      settle({ version: null, error: message });
-    });
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      settle({
-        version: null,
-        error: `version command timed out after ${effectiveTimeout}ms`
-      });
-    }, effectiveTimeout);
-  });
-}
-function firstLine(value) {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  return trimmed.split(/\r?\n/u)[0] ?? null;
-}
-// src/sdk/usage-stats.ts
-import { readdir as readdir2 } from "fs/promises";
-import { join as join10 } from "path";
-var ROLLOUT_PREFIX3 = "rollout-";
-var ROLLOUT_EXT3 = ".jsonl";
-var DEFAULT_RECENT_DAYS = 14;
-var DEFAULT_CACHE_TTL_MS = 5000;
-var usageStatsCache = null;
-async function getCodexUsageStats(options) {
-  const sessionsDir = options?.codexSessionsDir ?? join10(resolveCodexHome(), "sessions");
-  const recentDays = normalizeRecentDays(options?.recentDays);
-  const now = Date.now();
-  const cacheKey = `${sessionsDir}::${String(recentDays)}`;
-  if (usageStatsCache !== null && usageStatsCache.key === cacheKey && usageStatsCache.expiresAt > now) {
-    return usageStatsCache.value;
-  }
-  const rolloutFiles = await listRolloutFiles(sessionsDir);
-  if (rolloutFiles === null) {
-    cacheUsageStats(cacheKey, now, null);
-    return null;
-  }
-  const lastComputedDate = dateKeyFromEpochMs(now);
-  const firstRecentDayEpochMs = dayStartEpochMs(now) - (recentDays - 1) * 86400000;
-  let totalSessions = 0;
-  let totalMessages = 0;
-  let firstSessionDate = null;
-  const modelUsageMap = new Map;
-  const dailyActivityMap = new Map;
-  const tokenCountStateByKey = new Map;
-  for (const rolloutFile of rolloutFiles) {
-    let hadParsableLine = false;
-    let sessionDateForFile = null;
-    try {
-      for await (const line of streamEvents(rolloutFile)) {
-        hadParsableLine = true;
-        const lineDate = dateKeyFromTimestamp(line.timestamp);
-        if (lineDate !== null && (sessionDateForFile === null || lineDate < sessionDateForFile)) {
-          sessionDateForFile = lineDate;
-        }
-        if (isSessionMeta(line)) {
-          const sessionMetaTimestamp = extractSessionMetaTimestamp(line.payload);
-          if (sessionMetaTimestamp !== undefined) {
-            const sessionMetaDate = dateKeyFromTimestamp(sessionMetaTimestamp);
-            if (sessionMetaDate !== null && (sessionDateForFile === null || sessionMetaDate < sessionDateForFile)) {
-              sessionDateForFile = sessionMetaDate;
-            }
-          }
-        }
-        if (isUserOrAssistantMessage(line)) {
-          totalMessages += 1;
-          if (lineDate !== null) {
-            getOrCreateDailyActivity(dailyActivityMap, lineDate).messageCount += 1;
-          }
-        }
-        const toolCalls = extractToolCallCount(line);
-        if (toolCalls > 0 && lineDate !== null) {
-          getOrCreateDailyActivity(dailyActivityMap, lineDate).toolCallCount += toolCalls;
-        }
-        const rawUsageEvent = extractUsageEvent(line);
-        const usageEvent = normalizeUsageEventForAggregation(rawUsageEvent, tokenCountStateByKey);
-        if (usageEvent === null || usageEvent.totalTokens <= 0) {
-          continue;
-        }
-        const model = usageEvent.model;
-        const modelUsage = getOrCreateModelUsage(modelUsageMap, model);
-        modelUsage.inputTokens += usageEvent.inputTokens;
-        modelUsage.outputTokens += usageEvent.outputTokens;
-        modelUsage.cacheReadInputTokens += usageEvent.cacheReadInputTokens;
-        modelUsage.cacheCreationInputTokens += usageEvent.cacheCreationInputTokens;
-        if (lineDate !== null) {
-          const daily = getOrCreateDailyActivity(dailyActivityMap, lineDate);
-          const prev = daily.tokensByModel.get(model) ?? 0;
-          daily.tokensByModel.set(model, prev + usageEvent.totalTokens);
-        }
-      }
-    } catch {
-      continue;
-    }
-    if (!hadParsableLine) {
-      continue;
-    }
-    totalSessions += 1;
-    if (sessionDateForFile !== null) {
-      if (firstSessionDate === null || sessionDateForFile < firstSessionDate) {
-        firstSessionDate = sessionDateForFile;
-      }
-      getOrCreateDailyActivity(dailyActivityMap, sessionDateForFile).sessionCount += 1;
-    }
-  }
-  const recentDailyActivity = [];
-  for (let offset = 0;offset < recentDays; offset += 1) {
-    const epochMs = firstRecentDayEpochMs + offset * 86400000;
-    const date = dateKeyFromEpochMs(epochMs);
-    const activity = dailyActivityMap.get(date);
-    if (activity === undefined) {
-      recentDailyActivity.push({ date });
-      continue;
-    }
-    const tokensByModel = mapToRecord(activity.tokensByModel);
-    recentDailyActivity.push({
-      date,
-      ...activity.messageCount > 0 ? { messageCount: activity.messageCount } : {},
-      ...activity.sessionCount > 0 ? { sessionCount: activity.sessionCount } : {},
-      ...activity.toolCallCount > 0 ? { toolCallCount: activity.toolCallCount } : {},
-      ...Object.keys(tokensByModel).length > 0 ? { tokensByModel } : {}
-    });
-  }
-  const result = {
-    totalSessions,
-    totalMessages,
-    firstSessionDate,
-    lastComputedDate,
-    modelUsage: mapToRecord(modelUsageMap),
-    recentDailyActivity
-  };
-  cacheUsageStats(cacheKey, now, result);
-  return result;
-}
-function normalizeRecentDays(value) {
-  if (value === undefined) {
-    return DEFAULT_RECENT_DAYS;
-  }
-  if (!Number.isFinite(value)) {
-    return DEFAULT_RECENT_DAYS;
-  }
-  const floored = Math.floor(value);
-  return floored > 0 ? floored : DEFAULT_RECENT_DAYS;
-}
-async function listRolloutFiles(sessionsDir) {
-  try {
-    const files = [];
-    await collectRolloutFilesRecursive(sessionsDir, files);
-    files.sort();
-    return files;
-  } catch {
-    return null;
-  }
-}
-async function collectRolloutFilesRecursive(dirPath, out) {
-  const entries = await readdir2(dirPath, { withFileTypes: true });
-  for (const entry of entries) {
-    const fullPath = join10(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      await collectRolloutFilesRecursive(fullPath, out);
-      continue;
-    }
-    if (entry.isFile() && entry.name.startsWith(ROLLOUT_PREFIX3) && entry.name.endsWith(ROLLOUT_EXT3)) {
-      out.push(fullPath);
-    }
-  }
-}
-function cacheUsageStats(key, nowEpochMs, value) {
-  usageStatsCache = {
-    key,
-    expiresAt: nowEpochMs + DEFAULT_CACHE_TTL_MS,
-    value
-  };
-}
-function getOrCreateModelUsage(modelUsageMap, model) {
-  const existing = modelUsageMap.get(model);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const created = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadInputTokens: 0,
-    cacheCreationInputTokens: 0
-  };
-  modelUsageMap.set(model, created);
-  return created;
-}
-function getOrCreateDailyActivity(activityMap, date) {
-  const existing = activityMap.get(date);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const created = {
-    messageCount: 0,
-    sessionCount: 0,
-    toolCallCount: 0,
-    tokensByModel: new Map
-  };
-  activityMap.set(date, created);
-  return created;
-}
-function mapToRecord(value) {
-  const result = {};
-  for (const [key, entry] of value.entries()) {
-    result[key] = entry;
-  }
-  return result;
-}
-function isUserOrAssistantMessage(line) {
-  if (isEventMsg(line)) {
-    const payload = toRecord5(line.payload);
-    const eventType = readString3(payload, "type");
-    return eventType === "UserMessage" || eventType === "AgentMessage";
-  }
-  if (isResponseItem(line)) {
-    const payload = toRecord5(line.payload);
-    if (readString3(payload, "type") !== "message") {
-      return false;
-    }
-    const role = readString3(payload, "role");
-    return role === "user" || role === "assistant";
-  }
-  return false;
-}
-function extractToolCallCount(line) {
-  if (isEventMsg(line)) {
-    const payload = toRecord5(line.payload);
-    if (readString3(payload, "type") === "ExecCommandBegin") {
-      return 1;
-    }
-  }
-  if (isResponseItem(line)) {
-    const payload = toRecord5(line.payload);
-    const itemType = readString3(payload, "type");
-    if (itemType === "function_call" || itemType === "local_shell_call") {
-      return 1;
-    }
-  }
-  return 0;
-}
-function extractUsageEvent(line) {
-  if (!isEventMsg(line)) {
-    return null;
-  }
-  const payload = toRecord5(line.payload);
-  if (payload === null) {
-    return null;
-  }
-  const eventType = readString3(payload, "type");
-  let usage = null;
-  let modelFromInfo;
-  let source = null;
-  let isCumulative = false;
-  let aggregationKey;
-  let model;
-  if (eventType === "TurnComplete") {
-    source = "turn_complete";
-    usage = toRecord5(payload["usage"]);
-  } else if (eventType === "token_count" || eventType === "TokenCount") {
-    const info = toRecord5(payload["info"]);
-    if (info === null) {
-      return null;
-    }
-    source = "token_count";
-    modelFromInfo = readString3(info, "model");
-    const lastTokenUsage = toRecord5(info["last_token_usage"]) ?? toRecord5(payload["last_token_usage"]);
-    const totalTokenUsage = toRecord5(info["total_token_usage"]) ?? toRecord5(payload["total_token_usage"]);
-    if (lastTokenUsage !== null) {
-      usage = lastTokenUsage;
-      isCumulative = false;
-    } else if (totalTokenUsage !== null) {
-      usage = totalTokenUsage;
-      isCumulative = true;
-    } else {
-      usage = toRecord5(info["usage"]) ?? toRecord5(payload["usage"]) ?? payload;
-      isCumulative = false;
-    }
-    model = resolveTokenCountModel(payload, usage, info, modelFromInfo);
-    aggregationKey = extractTokenCountAggregationKey(payload, info, model);
-  }
-  if (source === null || usage === null) {
-    return null;
-  }
-  const inputTokens = readNumber2(usage, "input_tokens") ?? readNumber2(usage, "inputTokens") ?? 0;
-  const outputTokens = readNumber2(usage, "output_tokens") ?? readNumber2(usage, "outputTokens") ?? 0;
-  const cacheReadInputTokens = readNumber2(usage, "cache_read_input_tokens") ?? readNumber2(usage, "cacheReadInputTokens") ?? readNumber2(usage, "cached_input_tokens") ?? 0;
-  const cacheCreationInputTokens = readNumber2(usage, "cache_creation_input_tokens") ?? readNumber2(usage, "cacheCreationInputTokens") ?? 0;
-  const computedTotal = inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
-  const totalTokens = readNumber2(usage, "total_tokens") ?? readNumber2(usage, "totalTokens") ?? computedTotal;
-  model = model ?? modelFromInfo ?? readString3(usage, "model") ?? readString3(usage, "model_id") ?? readString3(payload, "model") ?? "unknown";
-  return {
-    source,
-    model,
-    inputTokens,
-    outputTokens,
-    cacheReadInputTokens,
-    cacheCreationInputTokens,
-    totalTokens,
-    isCumulative,
-    ...aggregationKey !== undefined ? { aggregationKey } : {}
-  };
-}
-function normalizeUsageEventForAggregation(usageEvent, tokenCountStateByKey) {
-  if (usageEvent === null || usageEvent.source !== "token_count") {
-    return usageEvent;
-  }
-  const key = usageEvent.aggregationKey ?? usageEvent.model;
-  const state = getOrCreateTokenCountState(tokenCountStateByKey, key);
-  if (!usageEvent.isCumulative) {
-    return usageEvent;
-  }
-  if (state.lastTotalTokens !== undefined && usageEvent.totalTokens < state.lastTotalTokens) {
-    setTokenCountState(state, usageEvent);
-    return {
-      ...usageEvent,
-      isCumulative: false
-    };
-  }
-  const deltaInputTokens = positiveDelta(usageEvent.inputTokens, state.lastInputTokens);
-  const deltaOutputTokens = positiveDelta(usageEvent.outputTokens, state.lastOutputTokens);
-  const deltaCacheReadInputTokens = positiveDelta(usageEvent.cacheReadInputTokens, state.lastCacheReadInputTokens);
-  const deltaCacheCreationInputTokens = positiveDelta(usageEvent.cacheCreationInputTokens, state.lastCacheCreationInputTokens);
-  const deltaTotalTokens = positiveDelta(usageEvent.totalTokens, state.lastTotalTokens);
-  setTokenCountStateMax(state, usageEvent);
-  if (deltaTotalTokens <= 0) {
-    return null;
-  }
-  return {
-    ...usageEvent,
-    inputTokens: deltaInputTokens,
-    outputTokens: deltaOutputTokens,
-    cacheReadInputTokens: deltaCacheReadInputTokens,
-    cacheCreationInputTokens: deltaCacheCreationInputTokens,
-    totalTokens: deltaTotalTokens,
-    isCumulative: false
-  };
-}
-function getOrCreateTokenCountState(stateByKey, key) {
-  const existing = stateByKey.get(key);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const created = {};
-  stateByKey.set(key, created);
-  return created;
-}
-function setTokenCountState(state, usageEvent) {
-  state.lastInputTokens = usageEvent.inputTokens;
-  state.lastOutputTokens = usageEvent.outputTokens;
-  state.lastCacheReadInputTokens = usageEvent.cacheReadInputTokens;
-  state.lastCacheCreationInputTokens = usageEvent.cacheCreationInputTokens;
-  state.lastTotalTokens = usageEvent.totalTokens;
-}
-function setTokenCountStateMax(state, usageEvent) {
-  state.lastInputTokens = maxDefined(state.lastInputTokens, usageEvent.inputTokens);
-  state.lastOutputTokens = maxDefined(state.lastOutputTokens, usageEvent.outputTokens);
-  state.lastCacheReadInputTokens = maxDefined(state.lastCacheReadInputTokens, usageEvent.cacheReadInputTokens);
-  state.lastCacheCreationInputTokens = maxDefined(state.lastCacheCreationInputTokens, usageEvent.cacheCreationInputTokens);
-  state.lastTotalTokens = maxDefined(state.lastTotalTokens, usageEvent.totalTokens);
-}
-function positiveDelta(current, previous) {
-  if (previous === undefined) {
-    return current;
-  }
-  const delta = current - previous;
-  return delta > 0 ? delta : 0;
-}
-function maxDefined(previous, current) {
-  if (previous === undefined) {
-    return current;
-  }
-  return current > previous ? current : previous;
-}
-function extractTokenCountAggregationKey(payload, info, model) {
-  const parts = [];
-  const infoStreamId = readString3(info, "stream_id");
-  if (infoStreamId !== undefined) {
-    parts.push(`stream:${infoStreamId}`);
-  }
-  const infoTurnId = readString3(info, "turn_id");
-  if (infoTurnId !== undefined) {
-    parts.push(`info_turn:${infoTurnId}`);
-  }
-  const payloadTurnId = readString3(payload, "turn_id");
-  if (payloadTurnId !== undefined) {
-    parts.push(`payload_turn:${payloadTurnId}`);
-  }
-  const responseId = readString3(info, "response_id");
-  if (responseId !== undefined) {
-    parts.push(`response:${responseId}`);
-  }
-  const messageId = readString3(info, "message_id");
-  if (messageId !== undefined) {
-    parts.push(`message:${messageId}`);
-  }
-  parts.push(`model:${model}`);
-  return parts.join("|");
-}
-function resolveTokenCountModel(payload, usage, info, modelFromInfo) {
-  const explicitModel = modelFromInfo ?? readString3(usage, "model") ?? readString3(usage, "model_id") ?? readString3(payload, "model");
-  if (explicitModel !== undefined) {
-    return explicitModel;
-  }
-  const payloadRateLimitsModel = extractModelFromRateLimits(toRecord5(payload["rate_limits"]));
-  if (payloadRateLimitsModel !== undefined) {
-    return payloadRateLimitsModel;
-  }
-  const infoRateLimitsModel = extractModelFromRateLimits(toRecord5(info["rate_limits"]));
-  if (infoRateLimitsModel !== undefined) {
-    return infoRateLimitsModel;
-  }
-  return "unknown";
-}
-function extractModelFromRateLimits(rateLimits) {
-  const limitName = readString3(rateLimits, "limit_name");
-  const normalizedLimitName = normalizeRateLimitModel(limitName);
-  if (normalizedLimitName !== undefined) {
-    return normalizedLimitName;
-  }
-  const limitId = readString3(rateLimits, "limit_id");
-  return normalizeRateLimitModel(limitId);
-}
-function normalizeRateLimitModel(modelName) {
-  if (modelName === undefined) {
-    return;
-  }
-  const normalized = modelName.trim().toLowerCase().replace(/[\s_]+/g, "-").replace(/[^a-z0-9.-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-  return normalized.length > 0 ? normalized : undefined;
-}
-function extractSessionMetaTimestamp(payloadValue) {
-  const payload = toRecord5(payloadValue);
-  if (payload === null) {
-    return;
-  }
-  const payloadTimestamp = readString3(payload, "timestamp");
-  if (payloadTimestamp !== undefined) {
-    return payloadTimestamp;
-  }
-  const meta = toRecord5(payload["meta"]);
-  return readString3(meta, "timestamp");
-}
-function toRecord5(value) {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  return value;
-}
-function readString3(value, key) {
-  if (value === null) {
-    return;
-  }
-  const candidate = value[key];
-  return typeof candidate === "string" ? candidate : undefined;
-}
-function readNumber2(value, key) {
-  if (value === null) {
-    return;
-  }
-  const candidate = value[key];
-  if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
-    return;
-  }
-  return candidate;
-}
-function dateKeyFromTimestamp(timestamp) {
-  const date = new Date(timestamp);
-  const epochMs = date.getTime();
-  if (Number.isNaN(epochMs)) {
-    return null;
-  }
-  return dateKeyFromEpochMs(epochMs);
-}
-function dayStartEpochMs(epochMs) {
-  const date = new Date(epochMs);
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
-}
-function dateKeyFromEpochMs(epochMs) {
-  return new Date(epochMs).toISOString().slice(0, 10);
-}
 // src/server/router.ts
 class Router {
   routes = [];
@@ -4301,6 +2945,15 @@ function ensurePermission(context, required) {
   }
   if (!hasPermission(context.permissions, required)) {
     return forbiddenResponse(required);
+  }
+  return null;
+}
+function checkAuth(req, token) {
+  if (token === undefined)
+    return null;
+  const bearer = parseBearerToken(req);
+  if (bearer === null || bearer !== token) {
+    return unauthorizedResponse();
   }
   return null;
 }
@@ -4440,7 +3093,7 @@ class WebSocketManager {
 }
 
 // src/server/app-server-client.ts
-var DEFAULT_TIMEOUT_MS2 = 1e4;
+var DEFAULT_TIMEOUT_MS = 1e4;
 function randomId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -4522,7 +3175,7 @@ class DefaultAppServerClient {
       throw new Error("App-server is not connected");
     }
     const id = randomId();
-    const timeoutMs = this.config.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS2;
+    const timeoutMs = this.config.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     const payload = {
       id,
       method,
@@ -5373,16 +4026,16 @@ function resolveServerConfig(overrides) {
   };
 }
 // src/daemon/manager.ts
-import { spawn as spawn3 } from "child_process";
-import { readFile as readFile7, writeFile as writeFile7, rename as rename6, unlink, mkdir as mkdir6 } from "fs/promises";
-import { join as join11 } from "path";
+import { spawn as spawn2 } from "child_process";
+import { readFile as readFile7, writeFile as writeFile6, rename as rename6, unlink, mkdir as mkdir6 } from "fs/promises";
+import { join as join9 } from "path";
 import { homedir as homedir7 } from "os";
-var DEFAULT_CONFIG_DIR6 = join11(homedir7(), ".config", "codex-agent");
+var DEFAULT_CONFIG_DIR6 = join9(homedir7(), ".config", "codex-agent");
 var PID_FILENAME = "daemon.pid";
 var POLL_INTERVAL_MS = 200;
 var POLL_TIMEOUT_MS = 1e4;
 function pidFilePath(configDir) {
-  return join11(configDir ?? DEFAULT_CONFIG_DIR6, PID_FILENAME);
+  return join9(configDir ?? DEFAULT_CONFIG_DIR6, PID_FILENAME);
 }
 async function readPidFile(configDir) {
   try {
@@ -5406,7 +4059,7 @@ async function writePidFile(info, configDir) {
   const finalPath = pidFilePath(configDir);
   const tmpPath = `${finalPath}.tmp-${process.pid}-${Date.now()}`;
   await mkdir6(dir, { recursive: true });
-  await writeFile7(tmpPath, JSON.stringify(info, null, 2));
+  await writeFile6(tmpPath, JSON.stringify(info, null, 2));
   await rename6(tmpPath, finalPath);
 }
 async function removePidFile(configDir) {
@@ -5449,7 +4102,7 @@ async function startDaemon(config = {}) {
   if (existing.status === "stale") {
     await removePidFile(configDir);
   }
-  const binPath = join11(import.meta.dir, "..", "bin.ts");
+  const binPath = join9(import.meta.dir, "..", "bin.ts");
   const daemonArgs = ["run", binPath, "server", "start", "--port", String(port)];
   if (host !== undefined && host !== "") {
     daemonArgs.push("--host", host);
@@ -5463,7 +4116,7 @@ async function startDaemon(config = {}) {
       daemonArgs.push("--app-server-url", config.appServerUrl);
     }
   }
-  const child = spawn3("bun", daemonArgs, { detached: true, stdio: "ignore" });
+  const child = spawn2("bun", daemonArgs, { detached: true, stdio: "ignore" });
   child.unref();
   if (child.pid === undefined) {
     throw new Error("Failed to spawn daemon process");
@@ -5504,6 +4157,1526 @@ async function getDaemonStatus(configDir) {
     return { status: "stale", info };
   }
   return { status: "running", info };
+}
+// src/activity/manager.ts
+function deriveStatus(line, current) {
+  if (isEventMsg(line)) {
+    const event = line.payload;
+    switch (event.type) {
+      case "TurnStarted":
+      case "ExecCommandBegin":
+        return "running";
+      case "TurnComplete":
+      case "ExecCommandEnd":
+        return "idle";
+      case "TurnAborted":
+      case "Error":
+        return "failed";
+      default:
+        return current;
+    }
+  }
+  if (isResponseItem(line) && line.payload.type === "local_shell_call") {
+    const rawStatus = line.payload.status;
+    if (typeof rawStatus !== "string") {
+      return current;
+    }
+    const status = rawStatus.toLowerCase();
+    if (status.includes("approval") || status.includes("consent")) {
+      return "waiting_approval";
+    }
+    if (status === "in_progress" || status === "running") {
+      return "running";
+    }
+  }
+  return current;
+}
+function deriveActivityEntry(sessionId, lines) {
+  let status = "idle";
+  let updatedAt = new Date(0).toISOString();
+  for (const line of lines) {
+    const next = deriveStatus(line, status);
+    if (next !== status) {
+      status = next;
+      updatedAt = line.timestamp;
+    }
+  }
+  return {
+    sessionId,
+    status,
+    updatedAt
+  };
+}
+async function getSessionActivity(sessionId, codexHome) {
+  const session = await findSession(sessionId, codexHome);
+  if (session === null) {
+    return null;
+  }
+  const lines = await readRollout(session.rolloutPath);
+  return deriveActivityEntry(session.id, lines);
+}
+// src/markdown/parser.ts
+var HEADING_RE = /^(#{1,6})\s+(.+)$/;
+var TASK_RE = /^\s*[-*]\s+\[([ xX])\]\s+(.+)$/;
+function parseMarkdown(content) {
+  const lines = content.split(/\r?\n/);
+  const sections = [];
+  let currentHeading = "";
+  let currentContent = [];
+  const flush = () => {
+    if (currentContent.length === 0 && currentHeading.length === 0) {
+      return;
+    }
+    sections.push({
+      heading: currentHeading,
+      content: currentContent.join(`
+`).trim()
+    });
+  };
+  for (const line of lines) {
+    const match = HEADING_RE.exec(line);
+    if (match !== null) {
+      flush();
+      currentHeading = match[2]?.trim() ?? "";
+      currentContent = [];
+      continue;
+    }
+    currentContent.push(line);
+  }
+  flush();
+  if (sections.length === 0) {
+    return { sections: [{ heading: "", content: content.trim() }] };
+  }
+  return { sections };
+}
+function extractMarkdownTasks(content) {
+  const parsed = parseMarkdown(content);
+  const tasks = [];
+  for (const section of parsed.sections) {
+    const lines = section.content.split(/\r?\n/);
+    for (const line of lines) {
+      const match = TASK_RE.exec(line);
+      if (match === null) {
+        continue;
+      }
+      tasks.push({
+        sectionHeading: section.heading,
+        checked: match[1]?.toLowerCase() === "x",
+        text: match[2]?.trim() ?? ""
+      });
+    }
+  }
+  return tasks;
+}
+// src/sdk/events.ts
+class BasicSdkEventEmitter {
+  handlers = new Map;
+  on(event, handler) {
+    const set = this.handlers.get(event) ?? new Set;
+    set.add(handler);
+    this.handlers.set(event, set);
+  }
+  off(event, handler) {
+    this.handlers.get(event)?.delete(handler);
+  }
+  emit(event, payload) {
+    const set = this.handlers.get(event);
+    if (set === undefined) {
+      return;
+    }
+    for (const handler of set) {
+      handler(payload);
+    }
+  }
+}
+// src/sdk/tool-registry.ts
+function tool(config) {
+  if (config.name.trim().length === 0) {
+    throw new Error("tool name is required");
+  }
+  return {
+    name: config.name,
+    description: config.description,
+    async run(input, context) {
+      return await config.run(input, context);
+    }
+  };
+}
+
+class ToolRegistry {
+  tools = new Map;
+  register(registeredTool) {
+    this.tools.set(registeredTool.name, registeredTool);
+  }
+  get(name) {
+    const value = this.tools.get(name);
+    if (value === undefined) {
+      return null;
+    }
+    return value;
+  }
+  list() {
+    return Array.from(this.tools.keys()).sort();
+  }
+  async run(name, input, context) {
+    const registered = this.get(name);
+    if (registered === null) {
+      throw new Error(`tool not found: ${name}`);
+    }
+    return registered.run(input, context);
+  }
+}
+// src/sdk/session-runner.ts
+import { EventEmitter as EventEmitter2 } from "events";
+import { stat as stat3 } from "fs/promises";
+class RunningSession extends EventEmitter2 {
+  _sessionId;
+  allowSessionIdUpdate;
+  pm;
+  processId;
+  startedAt;
+  streamGranularity;
+  state;
+  stopHook = null;
+  constructor(sessionId, pm, processId, startedAt2, streamGranularity, allowSessionIdUpdate = true) {
+    super();
+    this._sessionId = sessionId;
+    this.allowSessionIdUpdate = allowSessionIdUpdate;
+    this.pm = pm;
+    this.processId = processId;
+    this.startedAt = startedAt2;
+    this.streamGranularity = streamGranularity;
+    let resolveCompletion = null;
+    const completionPromise = new Promise((resolve3) => {
+      resolveCompletion = resolve3;
+    });
+    this.state = {
+      completed: false,
+      completionResolver: resolveCompletion,
+      completionPromise,
+      queued: [],
+      waiter: null,
+      messageCount: 0
+    };
+  }
+  get sessionId() {
+    return this._sessionId;
+  }
+  setStopHook(stop) {
+    this.stopHook = stop;
+  }
+  pushLine(line) {
+    if (this.allowSessionIdUpdate && isSessionMeta(line) && this._sessionId !== line.payload.meta.id) {
+      this._sessionId = line.payload.meta.id;
+      this.emit("sessionId", this._sessionId);
+    }
+    this.state.messageCount += 1;
+    this.emit("message", line);
+    const chunks = this.streamGranularity === "char" ? toCharStreamChunks(line, this._sessionId) : [line];
+    for (const chunk of chunks) {
+      this.state.queued.push(chunk);
+    }
+    if (this.state.waiter !== null) {
+      const waiter = this.state.waiter;
+      this.state.waiter = null;
+      waiter();
+    }
+  }
+  finish(exitCode) {
+    if (this.state.completed) {
+      return;
+    }
+    this.state.completed = true;
+    const completedAt = new Date;
+    const result = {
+      success: exitCode === 0,
+      exitCode,
+      stats: {
+        startedAt: this.startedAt.toISOString(),
+        completedAt: completedAt.toISOString(),
+        messageCount: this.state.messageCount
+      }
+    };
+    this.emit("complete", result);
+    if (this.state.completionResolver !== null) {
+      this.state.completionResolver(result);
+      this.state.completionResolver = null;
+    }
+    if (this.state.waiter !== null) {
+      const waiter = this.state.waiter;
+      this.state.waiter = null;
+      waiter();
+    }
+  }
+  async* messages() {
+    while (!this.state.completed || this.state.queued.length > 0) {
+      while (this.state.queued.length > 0) {
+        const line = this.state.queued.shift();
+        if (line !== undefined) {
+          yield line;
+        }
+      }
+      if (this.state.completed) {
+        break;
+      }
+      await new Promise((resolve3) => {
+        this.state.waiter = resolve3;
+      });
+    }
+  }
+  async waitForCompletion() {
+    return await this.state.completionPromise;
+  }
+  async cancel() {
+    this.stopHook?.();
+    this.pm.kill(this.processId);
+  }
+  async interrupt() {
+    this.pm.writeInput(this.processId, "\x03");
+  }
+  async pause() {}
+  async resume() {}
+}
+
+class SessionRunner {
+  options;
+  pm;
+  active = new Set;
+  constructor(options) {
+    this.options = options ?? {};
+    this.pm = new ProcessManager(options?.codexBinary);
+  }
+  async startSession(config) {
+    if (config.resumeSessionId !== undefined) {
+      return await this.resumeSession(config.resumeSessionId, config.prompt, {
+        cwd: config.cwd,
+        model: config.model,
+        sandbox: config.sandbox,
+        approvalMode: config.approvalMode,
+        fullAuto: config.fullAuto,
+        additionalArgs: config.additionalArgs,
+        images: config.images,
+        streamGranularity: config.streamGranularity
+      });
+    }
+    const startedAt2 = new Date;
+    const options = this.toProcessOptions(config);
+    const execStream = this.pm.spawnExecStream(config.prompt, options);
+    const session = new RunningSession(`pending-${startedAt2.getTime()}`, this.pm, execStream.process.id, startedAt2, options.streamGranularity ?? "event");
+    this.trackSession(session);
+    this.forwardExecStream(execStream, session);
+    return session;
+  }
+  async resumeSession(sessionId, prompt, options) {
+    const sessionInfo = await findSession(sessionId, this.options.codexHome);
+    const includeExisting = this.options.includeExistingOnResume === true;
+    const preResumeRolloutOffset = sessionInfo !== null ? await getRolloutSize(sessionInfo.rolloutPath) : undefined;
+    const existingRolloutLines = includeExisting && sessionInfo !== null ? await readRollout(sessionInfo.rolloutPath) : undefined;
+    const startedAt2 = new Date;
+    const resumeStream = this.pm.spawnResumeStream(sessionId, {
+      ...options,
+      codexBinary: this.options.codexBinary
+    }, prompt);
+    const running = new RunningSession(sessionId, this.pm, resumeStream.process.id, startedAt2, options?.streamGranularity ?? "event", false);
+    this.trackSession(running);
+    const seenLineKeys = new Set;
+    const pushLineIfNew = (line) => {
+      const key = stableLineKey(line);
+      if (seenLineKeys.has(key)) {
+        return;
+      }
+      seenLineKeys.add(key);
+      running.pushLine(line);
+    };
+    const watcher = new RolloutWatcher;
+    watcher.on("line", (_path, line) => {
+      pushLineIfNew(line);
+    });
+    let attachPromise = null;
+    if (sessionInfo !== null) {
+      if (includeExisting) {
+        for (const line of existingRolloutLines ?? []) {
+          pushLineIfNew(line);
+        }
+      }
+      await watcher.watchFile(sessionInfo.rolloutPath, {
+        startOffset: preResumeRolloutOffset
+      });
+    } else {
+      attachPromise = this.attachWatchWhenSessionAppears(sessionId, watcher, includeExisting);
+    }
+    running.setStopHook(() => watcher.stop());
+    const streamForwardPromise = (async () => {
+      for await (const line of resumeStream.lines) {
+        pushLineIfNew(line);
+      }
+    })();
+    resumeStream.completion.then(async (exitCode) => {
+      await streamForwardPromise;
+      if (attachPromise !== null) {
+        await attachPromise;
+      }
+      await watcher.flush();
+      watcher.stop();
+      running.finish(exitCode);
+    });
+    return running;
+  }
+  async attachWatchWhenSessionAppears(sessionId, watcher, includeExisting) {
+    for (let attempt = 0;attempt < 20; attempt += 1) {
+      if (watcher.isClosed) {
+        return;
+      }
+      const discovered = await findSession(sessionId, this.options.codexHome);
+      if (discovered !== null) {
+        if (includeExisting) {
+          const existing = await readRollout(discovered.rolloutPath);
+          for (const line of existing) {
+            watcher.emit("line", discovered.rolloutPath, line);
+          }
+          await watcher.watchFile(discovered.rolloutPath);
+        } else {
+          await watcher.watchFile(discovered.rolloutPath, { startOffset: 0 });
+        }
+        return;
+      }
+      await sleep(100);
+    }
+  }
+  listActiveSessions() {
+    return Array.from(this.active);
+  }
+  trackSession(session) {
+    this.active.add(session);
+    session.on("complete", () => {
+      this.active.delete(session);
+    });
+  }
+  toProcessOptions(config) {
+    return {
+      codexBinary: this.options.codexBinary,
+      cwd: config.cwd,
+      model: config.model,
+      sandbox: config.sandbox,
+      approvalMode: config.approvalMode,
+      fullAuto: config.fullAuto,
+      additionalArgs: config.additionalArgs,
+      images: config.images,
+      streamGranularity: config.streamGranularity
+    };
+  }
+  forwardExecStream(stream, session) {
+    (async () => {
+      for await (const line of stream.lines) {
+        session.pushLine(line);
+      }
+    })();
+    stream.completion.then((exitCode) => {
+      session.finish(exitCode);
+    });
+  }
+}
+function toCharStreamChunks(line, sessionId) {
+  const textSegments = extractAssistantTextSegments(line);
+  if (textSegments.length === 0) {
+    return [line];
+  }
+  const chunks = [];
+  for (const segment of textSegments) {
+    for (const char of Array.from(segment)) {
+      chunks.push({
+        kind: "char",
+        char,
+        sessionId,
+        timestamp: line.timestamp,
+        sourceType: line.type,
+        source: line
+      });
+    }
+  }
+  return chunks;
+}
+function extractAssistantTextSegments(line) {
+  if (line.type === "event_msg") {
+    const payload2 = toRecord3(line.payload);
+    if (payload2?.["type"] === "AgentMessage" && typeof payload2["message"] === "string") {
+      return [payload2["message"]];
+    }
+    return [];
+  }
+  if (line.type !== "response_item") {
+    return [];
+  }
+  const payload = toRecord3(line.payload);
+  if (payload?.["type"] !== "message" || payload["role"] !== "assistant" || !Array.isArray(payload["content"])) {
+    return [];
+  }
+  const segments = [];
+  for (const item of payload["content"]) {
+    const content = toRecord3(item);
+    if (content === null) {
+      continue;
+    }
+    if ((content["type"] === "output_text" || content["type"] === "input_text") && typeof content["text"] === "string" && content["text"].length > 0) {
+      segments.push(content["text"]);
+    }
+  }
+  return segments;
+}
+function toRecord3(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+function sleep(ms) {
+  return new Promise((resolve3) => {
+    setTimeout(resolve3, ms);
+  });
+}
+function stableLineKey(line) {
+  return JSON.stringify(toCanonicalJsonValue(line));
+}
+function toCanonicalJsonValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => toCanonicalJsonValue(item));
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+  const record = value;
+  const canonical = {};
+  for (const key of Object.keys(record).sort()) {
+    canonical[key] = toCanonicalJsonValue(record[key]);
+  }
+  return canonical;
+}
+async function getRolloutSize(path) {
+  try {
+    const info = await stat3(path);
+    return info.size;
+  } catch {
+    return 0;
+  }
+}
+// src/sdk/agent-runner.ts
+import { mkdtemp, rm, writeFile as writeFile7 } from "fs/promises";
+import { tmpdir } from "os";
+import { extname, join as join10 } from "path";
+import { randomUUID as randomUUID8 } from "crypto";
+async function* runAgent(request, options) {
+  const runner = new SessionRunner(options);
+  const normalized = await normalizeAttachments(request.attachments);
+  const resumed = isResumeRequest(request);
+  const normalizedMode = request.streamMode === "normalized";
+  let currentSessionId = resumed ? request.sessionId : undefined;
+  try {
+    const session = await startFromRequest(runner, request, normalized.imagePaths);
+    currentSessionId = session.sessionId;
+    const iterator = session.messages();
+    const normalizerState = createNormalizerState();
+    if (resumed) {
+      const startedEvent = {
+        type: "session.started",
+        sessionId: session.sessionId,
+        resumed: true
+      };
+      yield startedEvent;
+    } else {
+      const firstChunk = await iterator.next();
+      if (firstChunk.done) {
+        const startedEvent = {
+          type: "session.started",
+          sessionId: session.sessionId,
+          resumed: false
+        };
+        yield startedEvent;
+      } else {
+        const startedSessionId = resolveSessionId(session.sessionId, firstChunk.value);
+        currentSessionId = startedSessionId;
+        const startedEvent = {
+          type: "session.started",
+          sessionId: startedSessionId,
+          resumed: false
+        };
+        yield startedEvent;
+        if (normalizedMode) {
+          for (const event of normalizeChunkToEvents(firstChunk.value, startedSessionId, normalizerState, false)) {
+            yield event;
+          }
+        } else {
+          yield {
+            type: "session.message",
+            sessionId: startedSessionId,
+            chunk: firstChunk.value
+          };
+        }
+      }
+    }
+    while (true) {
+      const nextChunk = await iterator.next();
+      if (nextChunk.done) {
+        break;
+      }
+      const resolvedSessionId2 = resolveSessionId(session.sessionId, nextChunk.value);
+      currentSessionId = resolvedSessionId2;
+      if (normalizedMode) {
+        for (const event of normalizeChunkToEvents(nextChunk.value, resolvedSessionId2, normalizerState, false)) {
+          yield event;
+        }
+      } else {
+        yield {
+          type: "session.message",
+          sessionId: resolvedSessionId2,
+          chunk: nextChunk.value
+        };
+      }
+    }
+    const result = await session.waitForCompletion();
+    const resolvedSessionId = currentSessionId ?? session.sessionId;
+    if (normalizedMode) {
+      yield {
+        type: "session.completed",
+        sessionId: resolvedSessionId,
+        success: result.success,
+        exitCode: result.exitCode
+      };
+    } else {
+      yield {
+        type: "session.completed",
+        sessionId: resolvedSessionId,
+        result
+      };
+    }
+  } catch (error) {
+    yield {
+      type: "session.error",
+      sessionId: currentSessionId,
+      error: toError(error)
+    };
+  } finally {
+    await normalized.cleanup();
+  }
+}
+async function* toNormalizedEvents(chunks) {
+  const state = createNormalizerState();
+  let fallbackSessionId = "unknown-session";
+  for await (const chunk of chunks) {
+    fallbackSessionId = resolveSessionId(fallbackSessionId, chunk);
+    for (const event of normalizeChunkToEvents(chunk, fallbackSessionId, state, true)) {
+      yield event;
+    }
+  }
+}
+async function startFromRequest(runner, request, imagePaths) {
+  if (isResumeRequest(request)) {
+    const session = await runner.resumeSession(request.sessionId, request.prompt, {
+      cwd: request.cwd,
+      model: request.model,
+      sandbox: request.sandbox,
+      approvalMode: request.approvalMode,
+      fullAuto: request.fullAuto,
+      additionalArgs: request.additionalArgs,
+      images: imagePaths,
+      streamGranularity: request.streamGranularity
+    });
+    return session;
+  }
+  const config = {
+    prompt: request.prompt,
+    cwd: request.cwd,
+    model: request.model,
+    sandbox: request.sandbox,
+    approvalMode: request.approvalMode,
+    fullAuto: request.fullAuto,
+    additionalArgs: request.additionalArgs,
+    images: imagePaths,
+    streamGranularity: request.streamGranularity
+  };
+  return await runner.startSession(config);
+}
+async function normalizeAttachments(attachments) {
+  if (attachments === undefined || attachments.length === 0) {
+    return {
+      imagePaths: [],
+      cleanup: async () => {
+        return;
+      }
+    };
+  }
+  const paths = [];
+  const tempDirs = [];
+  for (const attachment of attachments) {
+    if (attachment.type === "path") {
+      paths.push(attachment.path);
+      continue;
+    }
+    const tempDir = await mkdtemp(join10(tmpdir(), "codex-agent-attachment-"));
+    tempDirs.push(tempDir);
+    const parsed = parseBase64Input(attachment.data);
+    const mediaType = attachment.mediaType ?? parsed.mediaType;
+    const ext = extensionForMediaType(mediaType);
+    const fileName = sanitizeFileName(attachment.filename, ext);
+    const filePath = join10(tempDir, fileName);
+    const body = parsed.body;
+    const content = Uint8Array.from(Buffer.from(body, "base64"));
+    await writeFile7(filePath, content);
+    paths.push(filePath);
+  }
+  return {
+    imagePaths: paths,
+    cleanup: async () => {
+      await Promise.all(tempDirs.map(async (dir) => {
+        await rm(dir, { recursive: true, force: true });
+      }));
+    }
+  };
+}
+function parseBase64Input(data) {
+  if (!data.startsWith("data:")) {
+    return { body: data };
+  }
+  const marker = ";base64,";
+  const markerIndex = data.indexOf(marker);
+  if (markerIndex < 0) {
+    return { body: data };
+  }
+  const mediaType = data.slice(5, markerIndex);
+  const body = data.slice(markerIndex + marker.length);
+  if (mediaType.length === 0) {
+    return { body };
+  }
+  return { body, mediaType };
+}
+function extensionForMediaType(mediaType) {
+  if (mediaType === undefined) {
+    return ".img";
+  }
+  switch (mediaType.toLowerCase()) {
+    case "image/png":
+      return ".png";
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/gif":
+      return ".gif";
+    default:
+      return ".img";
+  }
+}
+function sanitizeFileName(filename, defaultExt) {
+  if (filename === undefined || filename.trim().length === 0) {
+    return `${randomUUID8()}${defaultExt}`;
+  }
+  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  if (safe.length === 0) {
+    return `${randomUUID8()}${defaultExt}`;
+  }
+  if (extname(safe).length > 0) {
+    return safe;
+  }
+  return `${safe}${defaultExt}`;
+}
+function resolveSessionId(fallbackSessionId, chunk) {
+  if (isCharChunk(chunk)) {
+    return chunk.sessionId;
+  }
+  if (chunk.type === "session_meta" && typeof chunk.payload === "object" && chunk.payload !== null && "meta" in chunk.payload) {
+    const payload = chunk.payload;
+    const candidate = payload.meta?.id;
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return fallbackSessionId;
+}
+function isCharChunk(chunk) {
+  return chunk.kind === "char";
+}
+function toError(value) {
+  if (value instanceof Error) {
+    return value;
+  }
+  return new Error(typeof value === "string" ? value : "Unknown runAgent error");
+}
+function isResumeRequest(request) {
+  return typeof request.sessionId === "string";
+}
+function createNormalizerState() {
+  return {
+    startedSessionIds: new Set,
+    assistantSnapshots: new Map,
+    toolNamesByCallId: new Map
+  };
+}
+function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionStarted) {
+  const sessionId = resolveSessionId(fallbackSessionId, chunk);
+  const events = [];
+  if (isCharChunk(chunk)) {
+    events.push(...toAssistantTextEvents(sessionId, chunk.char, state));
+    return events;
+  }
+  if (chunk.type === "session_meta") {
+    if (includeSessionStarted && !state.startedSessionIds.has(sessionId)) {
+      state.startedSessionIds.add(sessionId);
+      events.push({
+        type: "session.started",
+        sessionId,
+        resumed: false
+      });
+    }
+    return events;
+  }
+  if (chunk.type === "event_msg") {
+    const payload2 = toRecord4(chunk.payload);
+    if (payload2 === null) {
+      return events;
+    }
+    const payloadType = readString3(payload2["type"]);
+    if (payloadType === "AgentMessage") {
+      const message = readString3(payload2["message"]);
+      if (message !== undefined) {
+        events.push(...toAssistantTextEvents(sessionId, message, state));
+      }
+      return events;
+    }
+    if (payloadType === "AgentReasoning") {
+      const message = readString3(payload2["text"]);
+      events.push({
+        type: "activity",
+        sessionId,
+        ...message !== undefined ? { message } : {}
+      });
+      return events;
+    }
+    if (payloadType === "ExecCommandBegin") {
+      const callId = readString3(payload2["call_id"]);
+      const command = readStringArray(payload2["command"]);
+      const input = {
+        callId,
+        turnId: readString3(payload2["turn_id"]),
+        cwd: readString3(payload2["cwd"]),
+        command
+      };
+      events.push({
+        type: "tool.call",
+        sessionId,
+        name: "local_shell",
+        input
+      });
+      return events;
+    }
+    if (payloadType === "ExecCommandEnd") {
+      const callId = readString3(payload2["call_id"]);
+      const exitCode = readNumber(payload2["exit_code"]);
+      const output = {
+        callId,
+        turnId: readString3(payload2["turn_id"]),
+        cwd: readString3(payload2["cwd"]),
+        command: readStringArray(payload2["command"]),
+        exitCode,
+        aggregatedOutput: payload2["aggregated_output"]
+      };
+      events.push({
+        type: "tool.result",
+        sessionId,
+        name: "local_shell",
+        isError: exitCode !== undefined ? exitCode !== 0 : false,
+        output
+      });
+      return events;
+    }
+    if (payloadType === "Error") {
+      events.push({
+        type: "session.error",
+        sessionId,
+        error: new Error(readString3(payload2["message"]) ?? "Unknown rollout error")
+      });
+      return events;
+    }
+    events.push({
+      type: "activity",
+      sessionId,
+      message: payloadType ?? "event_msg"
+    });
+    return events;
+  }
+  if (chunk.type !== "response_item") {
+    return events;
+  }
+  const payload = toRecord4(chunk.payload);
+  if (payload === null) {
+    return events;
+  }
+  const itemType = readString3(payload["type"]);
+  if (itemType === "function_call") {
+    const name = readString3(payload["name"]) ?? "unknown-tool";
+    const callId = readString3(payload["call_id"]);
+    if (callId !== undefined) {
+      state.toolNamesByCallId.set(callId, name);
+    }
+    events.push({
+      type: "tool.call",
+      sessionId,
+      name,
+      input: parseMaybeJson(readString3(payload["arguments"]))
+    });
+    return events;
+  }
+  if (itemType === "function_call_output") {
+    const callId = readString3(payload["call_id"]);
+    const output = payload["output"];
+    const outputRecord = toRecord4(output);
+    const isError = outputRecord?.["is_error"] === true || readString3(outputRecord?.["status"]) === "error";
+    events.push({
+      type: "tool.result",
+      sessionId,
+      name: (callId !== undefined ? state.toolNamesByCallId.get(callId) : undefined) ?? "unknown-tool",
+      isError,
+      output
+    });
+    return events;
+  }
+  if (itemType === "local_shell_call") {
+    const status = readString3(payload["status"]);
+    const action = payload["action"];
+    const output = payload["output"];
+    const callId = readString3(payload["call_id"]);
+    const isTerminalStatus = status === "completed" || status === "failed" || status === "error";
+    if (isTerminalStatus) {
+      events.push({
+        type: "tool.result",
+        sessionId,
+        name: "local_shell",
+        isError: status !== "completed",
+        output: {
+          callId,
+          status,
+          action,
+          output
+        }
+      });
+      return events;
+    }
+    events.push({
+      type: "tool.call",
+      sessionId,
+      name: "local_shell",
+      input: {
+        callId,
+        status,
+        action
+      }
+    });
+    return events;
+  }
+  if (itemType === "message" && readString3(payload["role"]) === "assistant" && Array.isArray(payload["content"])) {
+    for (const item of payload["content"]) {
+      const content = toRecord4(item);
+      if (content === null) {
+        continue;
+      }
+      const contentType = readString3(content["type"]);
+      if (contentType !== "output_text" && contentType !== "input_text") {
+        continue;
+      }
+      const text = readString3(content["text"]);
+      if (text !== undefined && text.length > 0) {
+        events.push(...toAssistantTextEvents(sessionId, text, state));
+      }
+    }
+    return events;
+  }
+  return events;
+}
+function toAssistantTextEvents(sessionId, text, state) {
+  const previous = state.assistantSnapshots.get(sessionId) ?? "";
+  const content = `${previous}${text}`;
+  state.assistantSnapshots.set(sessionId, content);
+  return [
+    {
+      type: "assistant.delta",
+      sessionId,
+      text
+    },
+    {
+      type: "assistant.snapshot",
+      sessionId,
+      content
+    }
+  ];
+}
+function toRecord4(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+function readString3(value) {
+  return typeof value === "string" ? value : undefined;
+}
+function readNumber(value) {
+  return typeof value === "number" ? value : undefined;
+}
+function readStringArray(value) {
+  if (!Array.isArray(value)) {
+    return;
+  }
+  const strings = value.filter((item) => typeof item === "string");
+  return strings.length > 0 ? strings : undefined;
+}
+function parseMaybeJson(value) {
+  if (value === undefined) {
+    return;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+// src/sdk/tool-versions.ts
+import { spawn as spawn3 } from "child_process";
+var DEFAULT_TIMEOUT_MS2 = 5000;
+async function getCodexCliVersion(options) {
+  return await readToolVersion(options?.codexBinary ?? "codex", options?.timeoutMs);
+}
+async function getToolVersions(options) {
+  const codex = await getCodexCliVersion(options);
+  if (options?.includeGit !== true) {
+    return { codex };
+  }
+  const git = await readToolVersion(options.gitBinary ?? "git", options.timeoutMs);
+  return { codex, git };
+}
+async function readToolVersion(binary, timeoutMs) {
+  const effectiveTimeout = timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS2;
+  return await new Promise((resolve3) => {
+    const child = spawn3(binary, ["--version"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env }
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const settle = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve3(result);
+    };
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      settle({ version: null, error: message });
+    });
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        const line = firstLine(stdout);
+        if (line !== null) {
+          settle({ version: line, error: null });
+          return;
+        }
+        settle({
+          version: null,
+          error: "version command succeeded but produced no output"
+        });
+        return;
+      }
+      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+      const details = firstLine(stderr);
+      const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
+      settle({ version: null, error: message });
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      settle({
+        version: null,
+        error: `version command timed out after ${effectiveTimeout}ms`
+      });
+    }, effectiveTimeout);
+  });
+}
+function firstLine(value) {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return trimmed.split(/\r?\n/u)[0] ?? null;
+}
+// src/sdk/usage-stats.ts
+import { readdir as readdir2 } from "fs/promises";
+import { join as join11 } from "path";
+var ROLLOUT_PREFIX3 = "rollout-";
+var ROLLOUT_EXT3 = ".jsonl";
+var DEFAULT_RECENT_DAYS = 14;
+var DEFAULT_CACHE_TTL_MS = 5000;
+var usageStatsCache = null;
+async function getCodexUsageStats(options) {
+  const sessionsDir = options?.codexSessionsDir ?? join11(resolveCodexHome(), "sessions");
+  const recentDays = normalizeRecentDays(options?.recentDays);
+  const now = Date.now();
+  const cacheKey = `${sessionsDir}::${String(recentDays)}`;
+  if (usageStatsCache !== null && usageStatsCache.key === cacheKey && usageStatsCache.expiresAt > now) {
+    return usageStatsCache.value;
+  }
+  const rolloutFiles = await listRolloutFiles(sessionsDir);
+  if (rolloutFiles === null) {
+    cacheUsageStats(cacheKey, now, null);
+    return null;
+  }
+  const lastComputedDate = dateKeyFromEpochMs(now);
+  const firstRecentDayEpochMs = dayStartEpochMs(now) - (recentDays - 1) * 86400000;
+  let totalSessions = 0;
+  let totalMessages = 0;
+  let firstSessionDate = null;
+  const modelUsageMap = new Map;
+  const dailyActivityMap = new Map;
+  const tokenCountStateByKey = new Map;
+  for (const rolloutFile of rolloutFiles) {
+    let hadParsableLine = false;
+    let sessionDateForFile = null;
+    try {
+      for await (const line of streamEvents(rolloutFile)) {
+        hadParsableLine = true;
+        const lineDate = dateKeyFromTimestamp(line.timestamp);
+        if (lineDate !== null && (sessionDateForFile === null || lineDate < sessionDateForFile)) {
+          sessionDateForFile = lineDate;
+        }
+        if (isSessionMeta(line)) {
+          const sessionMetaTimestamp = extractSessionMetaTimestamp(line.payload);
+          if (sessionMetaTimestamp !== undefined) {
+            const sessionMetaDate = dateKeyFromTimestamp(sessionMetaTimestamp);
+            if (sessionMetaDate !== null && (sessionDateForFile === null || sessionMetaDate < sessionDateForFile)) {
+              sessionDateForFile = sessionMetaDate;
+            }
+          }
+        }
+        if (isUserOrAssistantMessage(line)) {
+          totalMessages += 1;
+          if (lineDate !== null) {
+            getOrCreateDailyActivity(dailyActivityMap, lineDate).messageCount += 1;
+          }
+        }
+        const toolCalls = extractToolCallCount(line);
+        if (toolCalls > 0 && lineDate !== null) {
+          getOrCreateDailyActivity(dailyActivityMap, lineDate).toolCallCount += toolCalls;
+        }
+        const rawUsageEvent = extractUsageEvent(line);
+        const usageEvent = normalizeUsageEventForAggregation(rawUsageEvent, tokenCountStateByKey);
+        if (usageEvent === null || usageEvent.totalTokens <= 0) {
+          continue;
+        }
+        const model = usageEvent.model;
+        const modelUsage = getOrCreateModelUsage(modelUsageMap, model);
+        modelUsage.inputTokens += usageEvent.inputTokens;
+        modelUsage.outputTokens += usageEvent.outputTokens;
+        modelUsage.cacheReadInputTokens += usageEvent.cacheReadInputTokens;
+        modelUsage.cacheCreationInputTokens += usageEvent.cacheCreationInputTokens;
+        if (lineDate !== null) {
+          const daily = getOrCreateDailyActivity(dailyActivityMap, lineDate);
+          const prev = daily.tokensByModel.get(model) ?? 0;
+          daily.tokensByModel.set(model, prev + usageEvent.totalTokens);
+        }
+      }
+    } catch {
+      continue;
+    }
+    if (!hadParsableLine) {
+      continue;
+    }
+    totalSessions += 1;
+    if (sessionDateForFile !== null) {
+      if (firstSessionDate === null || sessionDateForFile < firstSessionDate) {
+        firstSessionDate = sessionDateForFile;
+      }
+      getOrCreateDailyActivity(dailyActivityMap, sessionDateForFile).sessionCount += 1;
+    }
+  }
+  const recentDailyActivity = [];
+  for (let offset = 0;offset < recentDays; offset += 1) {
+    const epochMs = firstRecentDayEpochMs + offset * 86400000;
+    const date = dateKeyFromEpochMs(epochMs);
+    const activity = dailyActivityMap.get(date);
+    if (activity === undefined) {
+      recentDailyActivity.push({ date });
+      continue;
+    }
+    const tokensByModel = mapToRecord(activity.tokensByModel);
+    recentDailyActivity.push({
+      date,
+      ...activity.messageCount > 0 ? { messageCount: activity.messageCount } : {},
+      ...activity.sessionCount > 0 ? { sessionCount: activity.sessionCount } : {},
+      ...activity.toolCallCount > 0 ? { toolCallCount: activity.toolCallCount } : {},
+      ...Object.keys(tokensByModel).length > 0 ? { tokensByModel } : {}
+    });
+  }
+  const result = {
+    totalSessions,
+    totalMessages,
+    firstSessionDate,
+    lastComputedDate,
+    modelUsage: mapToRecord(modelUsageMap),
+    recentDailyActivity
+  };
+  cacheUsageStats(cacheKey, now, result);
+  return result;
+}
+function normalizeRecentDays(value) {
+  if (value === undefined) {
+    return DEFAULT_RECENT_DAYS;
+  }
+  if (!Number.isFinite(value)) {
+    return DEFAULT_RECENT_DAYS;
+  }
+  const floored = Math.floor(value);
+  return floored > 0 ? floored : DEFAULT_RECENT_DAYS;
+}
+async function listRolloutFiles(sessionsDir) {
+  try {
+    const files = [];
+    await collectRolloutFilesRecursive(sessionsDir, files);
+    files.sort();
+    return files;
+  } catch {
+    return null;
+  }
+}
+async function collectRolloutFilesRecursive(dirPath, out) {
+  const entries = await readdir2(dirPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = join11(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      await collectRolloutFilesRecursive(fullPath, out);
+      continue;
+    }
+    if (entry.isFile() && entry.name.startsWith(ROLLOUT_PREFIX3) && entry.name.endsWith(ROLLOUT_EXT3)) {
+      out.push(fullPath);
+    }
+  }
+}
+function cacheUsageStats(key, nowEpochMs, value) {
+  usageStatsCache = {
+    key,
+    expiresAt: nowEpochMs + DEFAULT_CACHE_TTL_MS,
+    value
+  };
+}
+function getOrCreateModelUsage(modelUsageMap, model) {
+  const existing = modelUsageMap.get(model);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0
+  };
+  modelUsageMap.set(model, created);
+  return created;
+}
+function getOrCreateDailyActivity(activityMap, date) {
+  const existing = activityMap.get(date);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = {
+    messageCount: 0,
+    sessionCount: 0,
+    toolCallCount: 0,
+    tokensByModel: new Map
+  };
+  activityMap.set(date, created);
+  return created;
+}
+function mapToRecord(value) {
+  const result = {};
+  for (const [key, entry] of value.entries()) {
+    result[key] = entry;
+  }
+  return result;
+}
+function isUserOrAssistantMessage(line) {
+  if (isEventMsg(line)) {
+    const payload = toRecord5(line.payload);
+    const eventType = readString4(payload, "type");
+    return eventType === "UserMessage" || eventType === "AgentMessage";
+  }
+  if (isResponseItem(line)) {
+    const payload = toRecord5(line.payload);
+    if (readString4(payload, "type") !== "message") {
+      return false;
+    }
+    const role = readString4(payload, "role");
+    return role === "user" || role === "assistant";
+  }
+  return false;
+}
+function extractToolCallCount(line) {
+  if (isEventMsg(line)) {
+    const payload = toRecord5(line.payload);
+    if (readString4(payload, "type") === "ExecCommandBegin") {
+      return 1;
+    }
+  }
+  if (isResponseItem(line)) {
+    const payload = toRecord5(line.payload);
+    const itemType = readString4(payload, "type");
+    if (itemType === "function_call" || itemType === "local_shell_call") {
+      return 1;
+    }
+  }
+  return 0;
+}
+function extractUsageEvent(line) {
+  if (!isEventMsg(line)) {
+    return null;
+  }
+  const payload = toRecord5(line.payload);
+  if (payload === null) {
+    return null;
+  }
+  const eventType = readString4(payload, "type");
+  let usage = null;
+  let modelFromInfo;
+  let source = null;
+  let isCumulative = false;
+  let aggregationKey;
+  let model;
+  if (eventType === "TurnComplete") {
+    source = "turn_complete";
+    usage = toRecord5(payload["usage"]);
+  } else if (eventType === "token_count" || eventType === "TokenCount") {
+    const info = toRecord5(payload["info"]);
+    if (info === null) {
+      return null;
+    }
+    source = "token_count";
+    modelFromInfo = readString4(info, "model");
+    const lastTokenUsage = toRecord5(info["last_token_usage"]) ?? toRecord5(payload["last_token_usage"]);
+    const totalTokenUsage = toRecord5(info["total_token_usage"]) ?? toRecord5(payload["total_token_usage"]);
+    if (lastTokenUsage !== null) {
+      usage = lastTokenUsage;
+      isCumulative = false;
+    } else if (totalTokenUsage !== null) {
+      usage = totalTokenUsage;
+      isCumulative = true;
+    } else {
+      usage = toRecord5(info["usage"]) ?? toRecord5(payload["usage"]) ?? payload;
+      isCumulative = false;
+    }
+    model = resolveTokenCountModel(payload, usage, info, modelFromInfo);
+    aggregationKey = extractTokenCountAggregationKey(payload, info, model);
+  }
+  if (source === null || usage === null) {
+    return null;
+  }
+  const inputTokens = readNumber2(usage, "input_tokens") ?? readNumber2(usage, "inputTokens") ?? 0;
+  const outputTokens = readNumber2(usage, "output_tokens") ?? readNumber2(usage, "outputTokens") ?? 0;
+  const cacheReadInputTokens = readNumber2(usage, "cache_read_input_tokens") ?? readNumber2(usage, "cacheReadInputTokens") ?? readNumber2(usage, "cached_input_tokens") ?? 0;
+  const cacheCreationInputTokens = readNumber2(usage, "cache_creation_input_tokens") ?? readNumber2(usage, "cacheCreationInputTokens") ?? 0;
+  const computedTotal = inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+  const totalTokens = readNumber2(usage, "total_tokens") ?? readNumber2(usage, "totalTokens") ?? computedTotal;
+  model = model ?? modelFromInfo ?? readString4(usage, "model") ?? readString4(usage, "model_id") ?? readString4(payload, "model") ?? "unknown";
+  return {
+    source,
+    model,
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    totalTokens,
+    isCumulative,
+    ...aggregationKey !== undefined ? { aggregationKey } : {}
+  };
+}
+function normalizeUsageEventForAggregation(usageEvent, tokenCountStateByKey) {
+  if (usageEvent === null || usageEvent.source !== "token_count") {
+    return usageEvent;
+  }
+  const key = usageEvent.aggregationKey ?? usageEvent.model;
+  const state = getOrCreateTokenCountState(tokenCountStateByKey, key);
+  if (!usageEvent.isCumulative) {
+    return usageEvent;
+  }
+  if (state.lastTotalTokens !== undefined && usageEvent.totalTokens < state.lastTotalTokens) {
+    setTokenCountState(state, usageEvent);
+    return {
+      ...usageEvent,
+      isCumulative: false
+    };
+  }
+  const deltaInputTokens = positiveDelta(usageEvent.inputTokens, state.lastInputTokens);
+  const deltaOutputTokens = positiveDelta(usageEvent.outputTokens, state.lastOutputTokens);
+  const deltaCacheReadInputTokens = positiveDelta(usageEvent.cacheReadInputTokens, state.lastCacheReadInputTokens);
+  const deltaCacheCreationInputTokens = positiveDelta(usageEvent.cacheCreationInputTokens, state.lastCacheCreationInputTokens);
+  const deltaTotalTokens = positiveDelta(usageEvent.totalTokens, state.lastTotalTokens);
+  setTokenCountStateMax(state, usageEvent);
+  if (deltaTotalTokens <= 0) {
+    return null;
+  }
+  return {
+    ...usageEvent,
+    inputTokens: deltaInputTokens,
+    outputTokens: deltaOutputTokens,
+    cacheReadInputTokens: deltaCacheReadInputTokens,
+    cacheCreationInputTokens: deltaCacheCreationInputTokens,
+    totalTokens: deltaTotalTokens,
+    isCumulative: false
+  };
+}
+function getOrCreateTokenCountState(stateByKey, key) {
+  const existing = stateByKey.get(key);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = {};
+  stateByKey.set(key, created);
+  return created;
+}
+function setTokenCountState(state, usageEvent) {
+  state.lastInputTokens = usageEvent.inputTokens;
+  state.lastOutputTokens = usageEvent.outputTokens;
+  state.lastCacheReadInputTokens = usageEvent.cacheReadInputTokens;
+  state.lastCacheCreationInputTokens = usageEvent.cacheCreationInputTokens;
+  state.lastTotalTokens = usageEvent.totalTokens;
+}
+function setTokenCountStateMax(state, usageEvent) {
+  state.lastInputTokens = maxDefined(state.lastInputTokens, usageEvent.inputTokens);
+  state.lastOutputTokens = maxDefined(state.lastOutputTokens, usageEvent.outputTokens);
+  state.lastCacheReadInputTokens = maxDefined(state.lastCacheReadInputTokens, usageEvent.cacheReadInputTokens);
+  state.lastCacheCreationInputTokens = maxDefined(state.lastCacheCreationInputTokens, usageEvent.cacheCreationInputTokens);
+  state.lastTotalTokens = maxDefined(state.lastTotalTokens, usageEvent.totalTokens);
+}
+function positiveDelta(current, previous) {
+  if (previous === undefined) {
+    return current;
+  }
+  const delta = current - previous;
+  return delta > 0 ? delta : 0;
+}
+function maxDefined(previous, current) {
+  if (previous === undefined) {
+    return current;
+  }
+  return current > previous ? current : previous;
+}
+function extractTokenCountAggregationKey(payload, info, model) {
+  const parts = [];
+  const infoStreamId = readString4(info, "stream_id");
+  if (infoStreamId !== undefined) {
+    parts.push(`stream:${infoStreamId}`);
+  }
+  const infoTurnId = readString4(info, "turn_id");
+  if (infoTurnId !== undefined) {
+    parts.push(`info_turn:${infoTurnId}`);
+  }
+  const payloadTurnId = readString4(payload, "turn_id");
+  if (payloadTurnId !== undefined) {
+    parts.push(`payload_turn:${payloadTurnId}`);
+  }
+  const responseId = readString4(info, "response_id");
+  if (responseId !== undefined) {
+    parts.push(`response:${responseId}`);
+  }
+  const messageId = readString4(info, "message_id");
+  if (messageId !== undefined) {
+    parts.push(`message:${messageId}`);
+  }
+  parts.push(`model:${model}`);
+  return parts.join("|");
+}
+function resolveTokenCountModel(payload, usage, info, modelFromInfo) {
+  const explicitModel = modelFromInfo ?? readString4(usage, "model") ?? readString4(usage, "model_id") ?? readString4(payload, "model");
+  if (explicitModel !== undefined) {
+    return explicitModel;
+  }
+  const payloadRateLimitsModel = extractModelFromRateLimits(toRecord5(payload["rate_limits"]));
+  if (payloadRateLimitsModel !== undefined) {
+    return payloadRateLimitsModel;
+  }
+  const infoRateLimitsModel = extractModelFromRateLimits(toRecord5(info["rate_limits"]));
+  if (infoRateLimitsModel !== undefined) {
+    return infoRateLimitsModel;
+  }
+  return "unknown";
+}
+function extractModelFromRateLimits(rateLimits) {
+  const limitName = readString4(rateLimits, "limit_name");
+  const normalizedLimitName = normalizeRateLimitModel(limitName);
+  if (normalizedLimitName !== undefined) {
+    return normalizedLimitName;
+  }
+  const limitId = readString4(rateLimits, "limit_id");
+  return normalizeRateLimitModel(limitId);
+}
+function normalizeRateLimitModel(modelName) {
+  if (modelName === undefined) {
+    return;
+  }
+  const normalized = modelName.trim().toLowerCase().replace(/[\s_]+/g, "-").replace(/[^a-z0-9.-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return normalized.length > 0 ? normalized : undefined;
+}
+function extractSessionMetaTimestamp(payloadValue) {
+  const payload = toRecord5(payloadValue);
+  if (payload === null) {
+    return;
+  }
+  const payloadTimestamp = readString4(payload, "timestamp");
+  if (payloadTimestamp !== undefined) {
+    return payloadTimestamp;
+  }
+  const meta = toRecord5(payload["meta"]);
+  return readString4(meta, "timestamp");
+}
+function toRecord5(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+function readString4(value, key) {
+  if (value === null) {
+    return;
+  }
+  const candidate = value[key];
+  return typeof candidate === "string" ? candidate : undefined;
+}
+function readNumber2(value, key) {
+  if (value === null) {
+    return;
+  }
+  const candidate = value[key];
+  if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
+    return;
+  }
+  return candidate;
+}
+function dateKeyFromTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  const epochMs = date.getTime();
+  if (Number.isNaN(epochMs)) {
+    return null;
+  }
+  return dateKeyFromEpochMs(epochMs);
+}
+function dayStartEpochMs(epochMs) {
+  const date = new Date(epochMs);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+function dateKeyFromEpochMs(epochMs) {
+  return new Date(epochMs).toISOString().slice(0, 10);
 }
 // src/cli/format.ts
 function formatSessionTable(sessions) {
@@ -7123,6 +7296,7 @@ export {
   stopDaemon,
   startServer,
   startDaemon,
+  sseResponse,
   sessionsWatchDir,
   searchSessions,
   searchSessionTranscript,
@@ -7153,7 +7327,6 @@ export {
   parseRolloutLine,
   parsePermissionList,
   parseMarkdown,
-  openCodexDb,
   normalizePermissions,
   moveQueueCommand,
   loadTokenConfig,
@@ -7161,7 +7334,6 @@ export {
   loadGroups,
   loadBookmarks,
   listTokens,
-  listSessionsSqlite,
   listSessions,
   listQueues,
   listGroups,
@@ -7175,6 +7347,7 @@ export {
   isBookmarkType,
   hasPermission,
   getToolVersions,
+  getSessionMessages,
   getSessionActivity,
   getDaemonStatus,
   getCodexUsageStats,
@@ -7182,29 +7355,32 @@ export {
   getChangedFiles,
   getBookmark,
   findSessionsByFile,
-  findSessionSqlite,
   findSession,
   findQueue,
-  findLatestSessionSqlite,
   findLatestSession,
   findGroup,
   extractMarkdownTasks,
   extractFirstUserMessage,
   extractChangedFiles,
+  ensurePermission,
   discoverRolloutPaths,
   deriveActivityEntry,
   deleteBookmark,
   createToken,
   createQueue,
   createAppServerClient,
+  checkAuth,
   buildSession,
+  authenticateRequest,
   addSessionToGroup,
   addPrompt,
   addGroup,
   addBookmark,
+  WebSocketManager,
   ToolRegistry,
   SessionRunner,
   RunningSession,
+  Router,
   RolloutWatcher,
   ProcessManager,
   PERMISSIONS,
