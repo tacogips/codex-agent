@@ -4,16 +4,19 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { readRollout } from "../rollout/reader";
 import { findSession, listSessions } from "../session/index";
-import { extractChangedFiles } from "./extractor";
+import { extractChangedFiles, extractFileChangeDetails } from "./extractor";
 import type {
   ChangedFile,
   ChangedFilesSummary,
   FileChangeIndex,
+  FileChangeDetail,
   FileHistory,
   FileHistoryEntry,
   FindOptions,
   GetFilesOptions,
   IndexStats,
+  SessionFileHistory,
+  SessionFilePatchHistory,
   SessionFileIndexEntry,
 } from "./types";
 
@@ -41,7 +44,10 @@ async function loadIndex(configDir?: string): Promise<FileChangeIndex> {
   }
 }
 
-async function saveIndex(index: FileChangeIndex, configDir?: string): Promise<void> {
+async function saveIndex(
+  index: FileChangeIndex,
+  configDir?: string,
+): Promise<void> {
   const dir = resolveConfigDir(configDir);
   await mkdir(dir, { recursive: true });
   const path = fileIndexPath(configDir);
@@ -51,11 +57,74 @@ async function saveIndex(index: FileChangeIndex, configDir?: string): Promise<vo
   await rename(tmpPath, path);
 }
 
-function toSummary(sessionId: string, files: readonly ChangedFile[]): ChangedFilesSummary {
+function toSummary(
+  sessionId: string,
+  files: readonly ChangedFile[],
+): ChangedFilesSummary {
   return {
     sessionId,
     files,
     totalFiles: files.length,
+  };
+}
+
+function toPatchHistory(
+  sessionId: string,
+  changes: readonly FileChangeDetail[],
+): SessionFilePatchHistory {
+  const grouped = new Map<string, FileChangeDetail[]>();
+
+  function addChange(path: string, change: FileChangeDetail): void {
+    const existing = grouped.get(path);
+    const entry =
+      path === change.path
+        ? change
+        : {
+            ...change,
+            path,
+            operation: "deleted" as const,
+          };
+
+    if (existing === undefined) {
+      grouped.set(path, [entry]);
+      return;
+    }
+
+    existing.push(entry);
+  }
+
+  for (const change of changes) {
+    addChange(change.path, change);
+    if (
+      change.previousPath !== undefined &&
+      change.previousPath !== change.path
+    ) {
+      addChange(change.previousPath, change);
+    }
+  }
+
+  const files: SessionFileHistory[] = Array.from(grouped.entries())
+    .map(([path, entries]) => {
+      entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+      const last = entries[entries.length - 1];
+      if (last === undefined) {
+        throw new Error(`missing file change entries for path: ${path}`);
+      }
+      return {
+        path,
+        operation: last.operation,
+        changeCount: entries.length,
+        lastModified: last.timestamp,
+        changes: entries,
+      };
+    })
+    .sort((a, b) => a.path.localeCompare(b.path));
+
+  return {
+    sessionId,
+    files,
+    totalFiles: files.length,
+    totalChanges: files.reduce((count, file) => count + file.changeCount, 0),
   };
 }
 
@@ -70,6 +139,19 @@ export async function getChangedFiles(
   const lines = await readRollout(session.rolloutPath);
   const files = extractChangedFiles(lines);
   return toSummary(sessionId, files);
+}
+
+export async function getSessionFilePatchHistory(
+  sessionId: string,
+  options?: GetFilesOptions,
+): Promise<SessionFilePatchHistory> {
+  const session = await findSession(sessionId, options?.codexHome);
+  if (session === null) {
+    throw new Error(`session not found: ${sessionId}`);
+  }
+  const lines = await readRollout(session.rolloutPath);
+  const changes = extractFileChangeDetails(lines);
+  return toPatchHistory(sessionId, changes);
 }
 
 export async function findSessionsByFile(
@@ -100,7 +182,10 @@ export async function findSessionsByFile(
   return { path: target, sessions };
 }
 
-export async function rebuildFileIndex(configDir?: string, codexHome?: string): Promise<IndexStats> {
+export async function rebuildFileIndex(
+  configDir?: string,
+  codexHome?: string,
+): Promise<IndexStats> {
   const sessions = await listSessions({
     limit: Number.MAX_SAFE_INTEGER,
     ...(codexHome !== undefined ? { codexHome } : {}),

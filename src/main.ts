@@ -12,6 +12,7 @@ export * from "./queue/index";
 export * from "./bookmark/index";
 export * from "./auth/index";
 export * from "./file-changes/index";
+export * from "./graphql/index";
 export * from "./server/index";
 export * from "./daemon/index";
 export * from "./process/index";

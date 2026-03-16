@@ -30,7 +30,6 @@
     "type": "git",
     "url": "https://github.com/user/repo"
   },
-
   "license": "MIT",
   "trustedDependencies": [],
   "devDependencies": {
@@ -38,5 +37,9 @@
     "typescript": "5.7.2",
     "prettier": "3.4.2",
     "vitest": "2.1.8"
+  },
+  "dependencies": {
+    "graphql": "16.13.1",
+    "graphql-yoga": "5.18.1"
   }
 }

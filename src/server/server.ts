@@ -1,10 +1,12 @@
 /**
  * HTTP server using Bun.serve().
  *
- * Registers all REST routes, handles auth, CORS, 404.
+ * Registers REST routes plus a Yoga-backed GraphQL endpoint, handles auth,
+ * CORS, 404.
  * WebSocket upgrade at /ws.
  */
 
+import { createYoga } from "graphql-yoga";
 import { Router } from "./router";
 import { authenticateRequest, ensurePermission } from "./auth";
 import { WebSocketManager } from "./websocket";
@@ -45,16 +47,23 @@ import {
 } from "./handlers/queues";
 import {
   handleGetChangedFiles,
+  handleGetSessionFilePatches,
   handleFindSessionsByFile,
   handleRebuildFileIndex,
 } from "./handlers/files";
+import { getGraphqlSchema } from "../graphql/index";
 import type { ServerConfig, ServerHandle } from "./types";
 import type { ServerWebSocket } from "bun";
 import type { Permission } from "../auth/index";
+import type { AuthContext } from "./auth";
 
 interface WsData {
   subscribedSessions: Set<string>;
   subscribedNewSessions: boolean;
+}
+
+interface GraphqlServerContext {
+  readonly authContext?: AuthContext | undefined;
 }
 
 function corsHeaders(): Record<string, string> {
@@ -65,7 +74,10 @@ function corsHeaders(): Record<string, string> {
   };
 }
 
-function requiredPermission(method: string, path: string): Permission | undefined {
+function requiredPermission(
+  method: string,
+  path: string,
+): Permission | undefined {
   if (path === "/health" || path === "/status" || path === "/ws") {
     return undefined;
   }
@@ -127,6 +139,25 @@ export function startServer(config: ServerConfig): ServerHandle {
     );
   }
 
+  const yoga = createYoga<GraphqlServerContext>({
+    schema: getGraphqlSchema(),
+    graphqlEndpoint: "/graphql",
+    landingPage: false,
+    graphiql: false,
+    maskedErrors: false,
+    cors: {
+      origin: "*",
+      methods: ["GET", "POST", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization"],
+    },
+    context: ({ authContext }) => ({
+      codexHome: config.codexHome,
+      configDir: config.configDir,
+      authContext,
+      serverMode: true,
+    }),
+  });
+
   // Health
   router.add("GET", "/health", handleHealth);
   router.add("GET", "/status", handleStatus);
@@ -163,14 +194,27 @@ export function startServer(config: ServerConfig): ServerHandle {
   router.add("POST", "/api/queues/:id/pause", handlePauseQueue);
   router.add("POST", "/api/queues/:id/resume", handleResumeQueue);
   router.add("DELETE", "/api/queues/:id", handleDeleteQueue);
-  router.add("PATCH", "/api/queues/:id/commands/:cid", handleUpdateQueueCommand);
-  router.add("DELETE", "/api/queues/:id/commands/:cid", handleRemoveQueueCommand);
+  router.add(
+    "PATCH",
+    "/api/queues/:id/commands/:cid",
+    handleUpdateQueueCommand,
+  );
+  router.add(
+    "DELETE",
+    "/api/queues/:id/commands/:cid",
+    handleRemoveQueueCommand,
+  );
   router.add("POST", "/api/queues/:id/commands/move", handleMoveQueueCommand);
-  router.add("POST", "/api/queues/:id/commands/:cid/mode", handleToggleQueueCommandMode);
+  router.add(
+    "POST",
+    "/api/queues/:id/commands/:cid/mode",
+    handleToggleQueueCommandMode,
+  );
 
   // File-change index
   router.add("GET", "/api/files/find", handleFindSessionsByFile);
   router.add("GET", "/api/files/:id", handleGetChangedFiles);
+  router.add("GET", "/api/files/:id/patches", handleGetSessionFilePatches);
   router.add("POST", "/api/files/rebuild", handleRebuildFileIndex);
 
   const startedAt = new Date();
@@ -194,6 +238,16 @@ export function startServer(config: ServerConfig): ServerHandle {
         });
         if (upgraded) return undefined as unknown as Response;
         return new Response("WebSocket upgrade failed", { status: 400 });
+      }
+
+      if (url.pathname === "/graphql") {
+        const authResult = await authenticateRequest(req, config);
+        if (authResult.error !== null) {
+          return authResult.error;
+        }
+        return yoga.fetch(req, {
+          authContext: authResult.context ?? undefined,
+        });
       }
 
       // Auth + permission checks
