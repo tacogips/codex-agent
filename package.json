@@ -19,7 +19,6 @@
     "start": "bun run src/main.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:ui": "vitest --ui",
     "typecheck": "tsc --noEmit",
     "lint": "bun run typecheck",
     "format": "prettier --write \"src/**/*.ts\"",
@@ -36,7 +35,6 @@
   "trustedDependencies": [],
   "devDependencies": {
     "@types/bun": "1.1.14",
-    "@vitest/ui": "2.1.8",
     "typescript": "5.7.2",
     "prettier": "3.4.2",
     "vitest": "2.1.8"
