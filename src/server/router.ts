@@ -5,25 +5,42 @@
  * and captures `{ id: "abc123" }`.
  */
 
+import type { Permission } from "../auth/index";
 import type { RouteHandler, RouteParams } from "./types";
 
 interface Route {
   readonly method: string;
   readonly segments: readonly string[];
   readonly handler: RouteHandler;
+  readonly requiredPermission?: Permission | undefined;
+}
+
+export interface RouteOptions {
+  readonly requiredPermission?: Permission | undefined;
 }
 
 export interface RouteMatch {
   readonly handler: RouteHandler;
   readonly params: RouteParams;
+  readonly requiredPermission?: Permission | undefined;
 }
 
 export class Router {
   private readonly routes: Route[] = [];
 
-  add(method: string, pattern: string, handler: RouteHandler): void {
+  add(
+    method: string,
+    pattern: string,
+    handler: RouteHandler,
+    options?: RouteOptions,
+  ): void {
     const segments = pattern.split("/").filter((s) => s !== "");
-    this.routes.push({ method: method.toUpperCase(), segments, handler });
+    this.routes.push({
+      method: method.toUpperCase(),
+      segments,
+      handler,
+      requiredPermission: options?.requiredPermission,
+    });
   }
 
   match(method: string, path: string): RouteMatch | null {
@@ -49,7 +66,11 @@ export class Router {
       }
 
       if (matched) {
-        return { handler: route.handler, params };
+        return {
+          handler: route.handler,
+          params,
+          requiredPermission: route.requiredPermission,
+        };
       }
     }
 

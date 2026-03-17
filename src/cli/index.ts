@@ -97,6 +97,7 @@ import {
   isBookmarkType,
 } from "../bookmark/index";
 import {
+  DEFAULT_TOKEN_PERMISSIONS,
   PERMISSIONS,
   createToken,
   listTokens,
@@ -1229,7 +1230,7 @@ async function handleTokenCreate(args: readonly string[]): Promise<void> {
   const permissions =
     permissionsCsv !== undefined
       ? parsePermissionList(permissionsCsv)
-      : (["session:read"] as const);
+      : DEFAULT_TOKEN_PERMISSIONS;
 
   if (permissions.length === 0) {
     console.error(

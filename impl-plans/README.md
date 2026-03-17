@@ -5,6 +5,7 @@ This directory contains implementation plans that translate design documents int
 ## Purpose
 
 Implementation plans bridge design documents (what to build) and actual code (how to build). They provide:
+
 - Clear deliverables without code
 - Interface and function specifications
 - Dependency mapping for concurrent execution
@@ -29,6 +30,7 @@ impl-plans/
 **CRITICAL**: `PROGRESS.json` is the central task status index used by `impl-exec-auto`.
 
 Reading all plan files at once causes context overflow (>200K tokens). Instead:
+
 1. `impl-exec-auto` reads only `PROGRESS.json` (~2K tokens)
 2. Identifies executable tasks from this index
 3. Reads specific plan files only when executing tasks
@@ -48,8 +50,16 @@ Reading all plan files at once causes context overflow (>200K tokens). Instead:
       "phase": 2,
       "status": "Ready",
       "tasks": {
-        "TASK-001": { "status": "Not Started", "parallelizable": true, "deps": [] },
-        "TASK-002": { "status": "Completed", "parallelizable": true, "deps": [] }
+        "TASK-001": {
+          "status": "Not Started",
+          "parallelizable": true,
+          "deps": []
+        },
+        "TASK-002": {
+          "status": "Completed",
+          "parallelizable": true,
+          "deps": []
+        }
       }
     }
   }
@@ -59,6 +69,7 @@ Reading all plan files at once causes context overflow (>200K tokens). Instead:
 ### Keeping PROGRESS.json in Sync
 
 After ANY task status change:
+
 1. Edit the task status in `PROGRESS.json`
 2. Update `lastUpdated` timestamp
 3. Edit the task status in the plan file
@@ -67,25 +78,26 @@ After ANY task status change:
 
 **IMPORTANT**: Implementation plan files must stay under 400 lines to prevent OOM errors.
 
-| Metric | Limit |
-|--------|-------|
-| Line count | MAX 400 lines |
+| Metric           | Limit         |
+| ---------------- | ------------- |
+| Line count       | MAX 400 lines |
 | Modules per plan | MAX 8 modules |
-| Tasks per plan | MAX 10 tasks |
+| Tasks per plan   | MAX 10 tasks  |
 
 Large features are split into multiple related plans with cross-references.
 
 ## Active Plans
 
-| Plan | Status | Design Reference | Last Updated |
-|------|--------|------------------|--------------|
-| (No active plans yet) | - | - | - |
+| Plan                               | Status      | Design Reference                                    | Last Updated |
+| ---------------------------------- | ----------- | --------------------------------------------------- | ------------ |
+| `issue22-normalized-stream-events` | In Progress | `https://github.com/tacogips/codex-agent/issues/22` | 2026-03-01   |
 
 ## Completed Plans
 
-| Plan | Completed | Design Reference |
-|------|-----------|------------------|
-| (No completed plans yet) | - | - |
+| Plan                         | Completed  | Design Reference                                                            |
+| ---------------------------- | ---------- | --------------------------------------------------------------------------- |
+| `session-file-patch-history` | 2026-03-15 | `design-docs/specs/design-codex-session-management.md#22-persistence-modes` |
+| `source-refactor-auth-server-cleanup` | 2026-03-17 | `design-docs/specs/architecture.md#overview` |
 
 ## Phase Dependencies (for impl-exec-auto)
 
@@ -94,12 +106,12 @@ Only plans from eligible phases should be read to minimize context loading.
 
 ### Phase Status
 
-| Phase | Status | Depends On |
-|-------|--------|------------|
-| 1 | READY | - |
-| 2 | BLOCKED | Phase 1 |
-| 3 | BLOCKED | Phase 2 |
-| 4 | BLOCKED | Phase 3 |
+| Phase | Status  | Depends On |
+| ----- | ------- | ---------- |
+| 1     | READY   | -          |
+| 2     | BLOCKED | Phase 1    |
+| 3     | BLOCKED | Phase 2    |
+| 4     | BLOCKED | Phase 3    |
 
 ### Phase to Plans Mapping
 

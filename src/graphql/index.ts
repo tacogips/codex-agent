@@ -51,6 +51,7 @@ import {
 } from "../bookmark/index";
 import {
   createToken,
+  DEFAULT_TOKEN_PERMISSIONS,
   hasPermission,
   listTokens,
   normalizePermissions,
@@ -1253,7 +1254,7 @@ async function handleTokenCreate(
   const rawPermissions = readStringArray(input, "permissions");
   const permissions =
     rawPermissions === undefined
-      ? (["session:read"] satisfies readonly Permission[])
+      ? DEFAULT_TOKEN_PERMISSIONS
       : normalizePermissions(rawPermissions);
   if (permissions.length === 0) {
     throw new GraphQLError(

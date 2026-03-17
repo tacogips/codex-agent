@@ -81,6 +81,15 @@ describe("Router", () => {
     router.add("GET", "/api/sessions", async () => new Response("ok"));
     expect(router.match("GET", "/api/sessions/extra/path")).toBeNull();
   });
+
+  it("preserves required permission metadata on matches", () => {
+    const router = new Router();
+    router.add("GET", "/api/sessions", async () => new Response("ok"), {
+      requiredPermission: "session:read",
+    });
+    const match = router.match("GET", "/api/sessions");
+    expect(match?.requiredPermission).toBe("session:read");
+  });
 });
 
 // ---------------------------------------------------------------------------

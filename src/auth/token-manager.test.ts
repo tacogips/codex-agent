@@ -8,8 +8,8 @@ import {
   revokeToken,
   rotateToken,
   verifyToken,
-  parsePermissionList,
 } from "./token-manager";
+import { parsePermissionList } from "./index";
 
 describe("TokenManager", () => {
   let configDir: string;
@@ -89,4 +89,3 @@ describe("TokenManager", () => {
     ]);
   });
 });
-
