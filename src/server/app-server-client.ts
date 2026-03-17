@@ -66,7 +66,9 @@ class DefaultAppServerClient implements AppServerClient {
   private readonly config: AppServerClientConfig;
   private readonly wsFactory: WebSocketFactory;
   private ws: WebSocketLike | null = null;
-  private readonly listeners = new Set<(event: AppServerSessionEvent) => void>();
+  private readonly listeners = new Set<
+    (event: AppServerSessionEvent) => void
+  >();
   private readonly pending = new Map<
     string,
     {
@@ -128,7 +130,10 @@ class DefaultAppServerClient implements AppServerClient {
     this.rejectAllPending(new Error("App-server client closed"));
   }
 
-  async request<TResponse>(method: string, params?: unknown): Promise<TResponse> {
+  async request<TResponse>(
+    method: string,
+    params?: unknown,
+  ): Promise<TResponse> {
     if (this.ws === null) {
       throw new Error("App-server is not connected");
     }
