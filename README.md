@@ -72,6 +72,7 @@ Top-level command groups:
 - `files`: list/find/rebuild
 - `server`: start
 - `daemon`: start/stop/status
+- `model`: verify Codex auth state and a requested model with an active probe
 - `gql`: execute a GraphQL document or shorthand command
 - `version`: inspect installed tool versions as human-readable text or JSON
 
@@ -99,6 +100,9 @@ bun run src/bin.ts server start --host 127.0.0.1 --port 3100
 curl http://127.0.0.1:3100/graphql \
   -H 'Content-Type: application/json' \
   -d '{"query":"query { ping }"}'
+
+# Actively verify auth + model availability
+bun run src/bin.ts model check --model gpt-5.4 --json
 
 # Execute a shorthand GraphQL command locally
 bun run src/bin.ts gql session.list --param '{"limit": 5}'
@@ -218,6 +222,28 @@ const versions = await getToolVersions({ includeGit: true });
 //   codex: { version: "codex 0.x.y", error: null },
 //   git: { version: "git version 2.x.y", error: null }
 // }
+```
+
+Model/auth preflight is also available as a library API and a CLI command.
+It performs an active ephemeral `codex exec` probe for the requested model, so
+the result reflects real auth + model usability rather than only static config.
+
+```ts
+import { checkCodexModelAvailability } from "codex-agent";
+
+const result = await checkCodexModelAvailability({
+  model: "gpt-5.4",
+});
+
+if (!result.ok) {
+  console.error(result.auth.error ?? result.probe.error);
+}
+```
+
+CLI equivalent:
+
+```bash
+bun run src/bin.ts model check --model gpt-5.4
 ```
 
 ## Testing

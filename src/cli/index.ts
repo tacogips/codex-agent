@@ -54,6 +54,8 @@
  *   daemon stop
  *   daemon status
  *
+ *   model check --model <model> [--json] [--timeout-ms <ms>]
+ *
  *   gql <query|command> [--param <json|path>] [--variables <json|path>]
  *
  *   version [--json] [--include-git]
@@ -132,6 +134,7 @@ import type { DaemonConfig } from "../daemon/types";
 import type { ServerConfig } from "../server/types";
 import type { BookmarkType } from "../bookmark/types";
 import { getToolVersions } from "../sdk/tool-versions";
+import { checkCodexModelAvailability } from "../sdk/model-availability";
 import { SessionRunner } from "../sdk/session-runner";
 import { runGraphqlCli } from "./graphql";
 
@@ -189,6 +192,8 @@ Usage:
   codex-agent daemon start [--port N] [--host H] [--token T] [--mode http|app-server] [--app-server-url ws://...]
   codex-agent daemon stop
   codex-agent daemon status
+
+  codex-agent model check --model <model> [--json] [--timeout-ms <ms>]
 
   codex-agent gql <query|command> [--param <json|path>] [--variables <json|path>]
 
@@ -254,6 +259,9 @@ export async function run(argv: readonly string[]): Promise<void> {
     case "daemon":
       await handleDaemon(action, rest);
       break;
+    case "model":
+      await handleModel(action, rest);
+      break;
     case "version":
       await handleVersion(args.slice(1));
       break;
@@ -301,6 +309,82 @@ function printToolVersion(
     return;
   }
   console.log(`${name}: unavailable (${info.error})`);
+}
+
+// ---------------------------------------------------------------------------
+// Model commands
+// ---------------------------------------------------------------------------
+
+export interface ModelCheckArgs {
+  readonly model?: string;
+  readonly asJson: boolean;
+  readonly timeoutMs?: number;
+}
+
+async function handleModel(
+  action: string | undefined,
+  args: readonly string[],
+): Promise<void> {
+  if (action !== "check") {
+    console.error(`Unknown model action: ${action ?? "(none)"}`);
+    console.log(USAGE);
+    process.exitCode = 1;
+    return;
+  }
+
+  const parsed = parseModelCheckArgs(args);
+  if (parsed.model === undefined || parsed.model.trim().length === 0) {
+    console.error(
+      "Usage: codex-agent model check --model <model> [--json] [--timeout-ms <ms>]",
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const result = await checkCodexModelAvailability({
+    model: parsed.model,
+    ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
+  });
+
+  if (parsed.asJson) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`Overall: ${result.ok ? "available" : "unavailable"}`);
+    console.log(
+      `Auth:    ${result.auth.ok ? "available" : "unavailable"}${result.auth.status !== null ? ` (${result.auth.status})` : ""}`,
+    );
+    console.log(`Model:   ${result.model}`);
+    console.log(
+      `Probe:   ${result.probe.ok ? "available" : "unavailable"}${result.probe.error !== null ? ` (${result.probe.error})` : ""}`,
+    );
+  }
+
+  if (!result.ok) {
+    process.exitCode = 1;
+  }
+}
+
+export function parseModelCheckArgs(args: readonly string[]): ModelCheckArgs {
+  const timeoutRaw = getArgValue(args, "--timeout-ms");
+  const timeoutMs =
+    timeoutRaw !== undefined ? Number.parseInt(timeoutRaw, 10) : undefined;
+  const parsed: {
+    model?: string;
+    asJson: boolean;
+    timeoutMs?: number;
+  } = {
+    asJson: args.includes("--json"),
+  };
+
+  const model = getArgValue(args, "--model");
+  if (model !== undefined) {
+    parsed.model = model;
+  }
+  if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    parsed.timeoutMs = timeoutMs;
+  }
+
+  return parsed;
 }
 
 // ---------------------------------------------------------------------------
