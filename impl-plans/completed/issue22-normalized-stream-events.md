@@ -1,9 +1,9 @@
 # Issue #22 Normalized Stream Events Implementation Plan
 
-**Status**: In Progress
+**Status**: Completed
 **Design Reference**: https://github.com/tacogips/codex-agent/issues/22
 **Created**: 2026-03-01
-**Last Updated**: 2026-03-01
+**Last Updated**: 2026-03-30
 
 ---
 
@@ -103,7 +103,7 @@ test("toNormalizedEvents adapts raw chunks", ...)
 - [x] Tests added for event/char/tool/completion/error and adapter
 - [x] Full test suite passes
 - [x] Type checking passes
-- [ ] Dist sync check passes
+- [x] Dist sync check passes
 
 ## Progress Log
 
@@ -118,6 +118,12 @@ test("toNormalizedEvents adapts raw chunks", ...)
 **Tasks In Progress**: Dist sync finalization
 **Blockers**: `check:dist-sync` reports expected working-tree diff for updated `dist/main.js`
 **Notes**: `bun run test`, `bun run typecheck`, and `bun run build` all passed after implementation.
+
+### Session: 2026-03-30 11:20
+**Tasks Completed**: CI regression fix, dist sync validation
+**Tasks In Progress**: None
+**Blockers**: None
+**Notes**: Fixed the Yoga runtime test helper to invoke `bun` directly, added a deterministic `check:dist-sync` script, regenerated `dist/main.js`, and re-verified `bun run test`, `bun run typecheck`, and `bun run check:dist-sync`.
 
 ## Related Plans
 

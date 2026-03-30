@@ -1,5 +1,5 @@
 {
-  "lastUpdated": "2026-03-17T04:34:51Z",
+  "lastUpdated": "2026-03-30T02:20:34Z",
   "phases": {
     "1": { "status": "READY" },
     "2": { "status": "BLOCKED" },
@@ -7,6 +7,27 @@
     "4": { "status": "BLOCKED" }
   },
   "plans": {
+    "issue22-normalized-stream-events": {
+      "phase": 1,
+      "status": "Completed",
+      "tasks": {
+        "TASK-001": {
+          "status": "Completed",
+          "parallelizable": true,
+          "deps": []
+        },
+        "TASK-002": {
+          "status": "Completed",
+          "parallelizable": true,
+          "deps": []
+        },
+        "TASK-003": {
+          "status": "Completed",
+          "parallelizable": true,
+          "deps": []
+        }
+      }
+    },
     "session-file-patch-history": {
       "phase": 1,
       "status": "Completed",

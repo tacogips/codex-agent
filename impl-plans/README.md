@@ -88,14 +88,13 @@ Large features are split into multiple related plans with cross-references.
 
 ## Active Plans
 
-| Plan                               | Status      | Design Reference                                    | Last Updated |
-| ---------------------------------- | ----------- | --------------------------------------------------- | ------------ |
-| `issue22-normalized-stream-events` | In Progress | `https://github.com/tacogips/codex-agent/issues/22` | 2026-03-01   |
+None currently.
 
 ## Completed Plans
 
 | Plan                         | Completed  | Design Reference                                                            |
 | ---------------------------- | ---------- | --------------------------------------------------------------------------- |
+| `issue22-normalized-stream-events` | 2026-03-30 | `https://github.com/tacogips/codex-agent/issues/22` |
 | `session-file-patch-history` | 2026-03-15 | `design-docs/specs/design-codex-session-management.md#22-persistence-modes` |
 | `source-refactor-auth-server-cleanup` | 2026-03-17 | `design-docs/specs/architecture.md#overview` |
 

@@ -137,7 +137,7 @@ function runBunScript(source: string): {
   readonly status: number;
   readonly body: unknown;
 } {
-  const completed = spawnSync(process.execPath, ["-e", source], {
+  const completed = spawnSync("bun", ["-e", source], {
     cwd: WORKDIR,
     encoding: "utf-8",
   });
