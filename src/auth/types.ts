@@ -9,6 +9,14 @@ export const PERMISSIONS = [
 
 export type Permission = (typeof PERMISSIONS)[number];
 
+export const ALL_PERMISSIONS: readonly Permission[] = PERMISSIONS;
+
+export const DEFAULT_TOKEN_PERMISSIONS = [
+  "session:read",
+] as const satisfies readonly Permission[];
+
+const PERMISSION_SET: ReadonlySet<string> = new Set(PERMISSIONS);
+
 export interface ApiTokenMetadata {
   readonly id: string;
   readonly name: string;
@@ -38,17 +46,12 @@ export interface VerifyTokenResult {
 }
 
 export function isPermission(value: string): value is Permission {
-  return (
-    value === "session:create" ||
-    value === "session:read" ||
-    value === "session:cancel" ||
-    value === "group:*" ||
-    value === "queue:*" ||
-    value === "bookmark:*"
-  );
+  return PERMISSION_SET.has(value);
 }
 
-export function normalizePermissions(values: readonly string[]): readonly Permission[] {
+export function normalizePermissions(
+  values: readonly string[],
+): readonly Permission[] {
   const unique = new Set<Permission>();
   for (const value of values) {
     const trimmed = value.trim();
@@ -57,6 +60,10 @@ export function normalizePermissions(values: readonly string[]): readonly Permis
     }
   }
   return Array.from(unique);
+}
+
+export function parsePermissionList(input: string): readonly Permission[] {
+  return normalizePermissions(input.split(","));
 }
 
 export function hasPermission(
@@ -77,4 +84,3 @@ export function hasPermission(
   }
   return false;
 }
-

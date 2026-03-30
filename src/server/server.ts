@@ -1,10 +1,12 @@
 /**
  * HTTP server using Bun.serve().
  *
- * Registers all REST routes, handles auth, CORS, 404.
+ * Registers REST routes plus a Yoga-backed GraphQL endpoint, handles auth,
+ * CORS, 404.
  * WebSocket upgrade at /ws.
  */
 
+import { createYoga } from "graphql-yoga";
 import { Router } from "./router";
 import { authenticateRequest, ensurePermission } from "./auth";
 import { WebSocketManager } from "./websocket";
@@ -45,17 +47,222 @@ import {
 } from "./handlers/queues";
 import {
   handleGetChangedFiles,
+  handleGetSessionFilePatches,
   handleFindSessionsByFile,
   handleRebuildFileIndex,
 } from "./handlers/files";
-import type { ServerConfig, ServerHandle } from "./types";
+import { getGraphqlSchema } from "../graphql/index";
+import type { RouteHandler, ServerConfig, ServerHandle } from "./types";
 import type { ServerWebSocket } from "bun";
 import type { Permission } from "../auth/index";
+import type { AuthContext } from "./auth";
 
 interface WsData {
   subscribedSessions: Set<string>;
   subscribedNewSessions: boolean;
 }
+
+interface GraphqlServerContext {
+  readonly authContext?: AuthContext | undefined;
+}
+
+interface ServerRouteDefinition {
+  readonly method: string;
+  readonly pattern: string;
+  readonly handler: RouteHandler;
+  readonly requiredPermission?: Permission | undefined;
+}
+
+const REST_ROUTES: readonly ServerRouteDefinition[] = [
+  { method: "GET", pattern: "/health", handler: handleHealth },
+  { method: "GET", pattern: "/status", handler: handleStatus },
+  {
+    method: "GET",
+    pattern: "/api/sessions",
+    handler: handleListSessions,
+    requiredPermission: "session:read",
+  },
+  {
+    method: "GET",
+    pattern: "/api/sessions/search",
+    handler: handleSearchSessions,
+    requiredPermission: "session:read",
+  },
+  {
+    method: "GET",
+    pattern: "/api/sessions/:id",
+    handler: handleGetSession,
+    requiredPermission: "session:read",
+  },
+  {
+    method: "GET",
+    pattern: "/api/sessions/:id/search",
+    handler: handleSearchSessionTranscript,
+    requiredPermission: "session:read",
+  },
+  {
+    method: "GET",
+    pattern: "/api/sessions/:id/events",
+    handler: handleSessionEvents,
+    requiredPermission: "session:read",
+  },
+  {
+    method: "GET",
+    pattern: "/api/groups",
+    handler: handleListGroups,
+    requiredPermission: "group:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/groups",
+    handler: handleCreateGroup,
+    requiredPermission: "group:*",
+  },
+  {
+    method: "GET",
+    pattern: "/api/groups/:id",
+    handler: handleGetGroup,
+    requiredPermission: "group:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/groups/:id/sessions",
+    handler: handleAddSessionToGroup,
+    requiredPermission: "group:*",
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/groups/:id/sessions/:sid",
+    handler: handleRemoveSessionFromGroup,
+    requiredPermission: "group:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/groups/:id/run",
+    handler: handleRunGroup,
+    requiredPermission: "group:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/groups/:id/pause",
+    handler: handlePauseGroup,
+    requiredPermission: "group:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/groups/:id/resume",
+    handler: handleResumeGroup,
+    requiredPermission: "group:*",
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/groups/:id",
+    handler: handleDeleteGroup,
+    requiredPermission: "group:*",
+  },
+  {
+    method: "GET",
+    pattern: "/api/queues",
+    handler: handleListQueues,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/queues",
+    handler: handleCreateQueue,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "GET",
+    pattern: "/api/queues/:id",
+    handler: handleGetQueue,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/queues/:id/prompts",
+    handler: handleAddPrompt,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/queues/:id/run",
+    handler: handleRunQueue,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/queues/:id/stop",
+    handler: handleStopQueue,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/queues/:id/pause",
+    handler: handlePauseQueue,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/queues/:id/resume",
+    handler: handleResumeQueue,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/queues/:id",
+    handler: handleDeleteQueue,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/queues/:id/commands/:cid",
+    handler: handleUpdateQueueCommand,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/queues/:id/commands/:cid",
+    handler: handleRemoveQueueCommand,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/queues/:id/commands/move",
+    handler: handleMoveQueueCommand,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "POST",
+    pattern: "/api/queues/:id/commands/:cid/mode",
+    handler: handleToggleQueueCommandMode,
+    requiredPermission: "queue:*",
+  },
+  {
+    method: "GET",
+    pattern: "/api/files/find",
+    handler: handleFindSessionsByFile,
+    requiredPermission: "session:read",
+  },
+  {
+    method: "GET",
+    pattern: "/api/files/:id",
+    handler: handleGetChangedFiles,
+    requiredPermission: "session:read",
+  },
+  {
+    method: "GET",
+    pattern: "/api/files/:id/patches",
+    handler: handleGetSessionFilePatches,
+    requiredPermission: "session:read",
+  },
+  {
+    method: "POST",
+    pattern: "/api/files/rebuild",
+    handler: handleRebuildFileIndex,
+    requiredPermission: "session:read",
+  },
+];
 
 function corsHeaders(): Record<string, string> {
   return {
@@ -63,32 +270,6 @@ function corsHeaders(): Record<string, string> {
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
   };
-}
-
-function requiredPermission(method: string, path: string): Permission | undefined {
-  if (path === "/health" || path === "/status" || path === "/ws") {
-    return undefined;
-  }
-
-  if (path === "/api/sessions" && method === "GET") {
-    return "session:read";
-  }
-  if (path.startsWith("/api/sessions/") && method === "GET") {
-    return "session:read";
-  }
-  if (path.startsWith("/api/groups")) {
-    return "group:*";
-  }
-  if (path.startsWith("/api/queues")) {
-    return "queue:*";
-  }
-  if (path.startsWith("/api/files")) {
-    return "session:read";
-  }
-  if (path.startsWith("/api/bookmarks")) {
-    return "bookmark:*";
-  }
-  return undefined;
 }
 
 export function startServer(config: ServerConfig): ServerHandle {
@@ -127,51 +308,30 @@ export function startServer(config: ServerConfig): ServerHandle {
     );
   }
 
-  // Health
-  router.add("GET", "/health", handleHealth);
-  router.add("GET", "/status", handleStatus);
+  const yoga = createYoga<GraphqlServerContext>({
+    schema: getGraphqlSchema(),
+    graphqlEndpoint: "/graphql",
+    landingPage: false,
+    graphiql: false,
+    maskedErrors: false,
+    cors: {
+      origin: "*",
+      methods: ["GET", "POST", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization"],
+    },
+    context: ({ authContext }) => ({
+      codexHome: config.codexHome,
+      configDir: config.configDir,
+      authContext,
+      serverMode: true,
+    }),
+  });
 
-  // Sessions
-  router.add("GET", "/api/sessions", handleListSessions);
-  router.add("GET", "/api/sessions/search", handleSearchSessions);
-  router.add("GET", "/api/sessions/:id", handleGetSession);
-  router.add("GET", "/api/sessions/:id/search", handleSearchSessionTranscript);
-  router.add("GET", "/api/sessions/:id/events", handleSessionEvents);
-
-  // Groups
-  router.add("GET", "/api/groups", handleListGroups);
-  router.add("POST", "/api/groups", handleCreateGroup);
-  router.add("GET", "/api/groups/:id", handleGetGroup);
-  router.add("POST", "/api/groups/:id/sessions", handleAddSessionToGroup);
-  router.add(
-    "DELETE",
-    "/api/groups/:id/sessions/:sid",
-    handleRemoveSessionFromGroup,
-  );
-  router.add("POST", "/api/groups/:id/run", handleRunGroup);
-  router.add("POST", "/api/groups/:id/pause", handlePauseGroup);
-  router.add("POST", "/api/groups/:id/resume", handleResumeGroup);
-  router.add("DELETE", "/api/groups/:id", handleDeleteGroup);
-
-  // Queues
-  router.add("GET", "/api/queues", handleListQueues);
-  router.add("POST", "/api/queues", handleCreateQueue);
-  router.add("GET", "/api/queues/:id", handleGetQueue);
-  router.add("POST", "/api/queues/:id/prompts", handleAddPrompt);
-  router.add("POST", "/api/queues/:id/run", handleRunQueue);
-  router.add("POST", "/api/queues/:id/stop", handleStopQueue);
-  router.add("POST", "/api/queues/:id/pause", handlePauseQueue);
-  router.add("POST", "/api/queues/:id/resume", handleResumeQueue);
-  router.add("DELETE", "/api/queues/:id", handleDeleteQueue);
-  router.add("PATCH", "/api/queues/:id/commands/:cid", handleUpdateQueueCommand);
-  router.add("DELETE", "/api/queues/:id/commands/:cid", handleRemoveQueueCommand);
-  router.add("POST", "/api/queues/:id/commands/move", handleMoveQueueCommand);
-  router.add("POST", "/api/queues/:id/commands/:cid/mode", handleToggleQueueCommandMode);
-
-  // File-change index
-  router.add("GET", "/api/files/find", handleFindSessionsByFile);
-  router.add("GET", "/api/files/:id", handleGetChangedFiles);
-  router.add("POST", "/api/files/rebuild", handleRebuildFileIndex);
+  for (const route of REST_ROUTES) {
+    router.add(route.method, route.pattern, route.handler, {
+      requiredPermission: route.requiredPermission,
+    });
+  }
 
   const startedAt = new Date();
 
@@ -196,14 +356,15 @@ export function startServer(config: ServerConfig): ServerHandle {
         return new Response("WebSocket upgrade failed", { status: 400 });
       }
 
-      // Auth + permission checks
-      const authResult = await authenticateRequest(req, config);
-      if (authResult.error !== null) return authResult.error;
-      const permErr = ensurePermission(
-        authResult.context,
-        requiredPermission(req.method, url.pathname),
-      );
-      if (permErr !== null) return permErr;
+      if (url.pathname === "/graphql") {
+        const authResult = await authenticateRequest(req, config);
+        if (authResult.error !== null) {
+          return authResult.error;
+        }
+        return yoga.fetch(req, {
+          authContext: authResult.context ?? undefined,
+        });
+      }
 
       // Route matching
       const match = router.match(req.method, url.pathname);
@@ -216,6 +377,15 @@ export function startServer(config: ServerConfig): ServerHandle {
           },
         });
       }
+
+      // Auth + permission checks
+      const authResult = await authenticateRequest(req, config);
+      if (authResult.error !== null) return authResult.error;
+      const permErr = ensurePermission(
+        authResult.context,
+        match.requiredPermission,
+      );
+      if (permErr !== null) return permErr;
 
       try {
         const response = await match.handler(req, match.params, config);

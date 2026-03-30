@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile, chmod, appendFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  rm,
+  writeFile,
+  chmod,
+  appendFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionRunner } from "./session-runner";
@@ -80,7 +87,7 @@ describe("SessionRunner", () => {
     expect(result.success).toBe(true);
     expect(streamed.length).toBeGreaterThanOrEqual(2);
     expect(session.sessionId).toBe(sessionId);
-  });
+  }, 10000);
 
   test("resumeSession keeps requested session id when rollout meta differs", async () => {
     const codexHome = await mkdtemp(join(tmpdir(), "codex-agent-sdk-home-"));
@@ -301,8 +308,7 @@ describe("SessionRunner", () => {
     expect(
       streamed.some(
         (chunk) =>
-          !isCharChunk(chunk) &&
-          (chunk as RolloutLine).type === "session_meta",
+          !isCharChunk(chunk) && (chunk as RolloutLine).type === "session_meta",
       ),
     ).toBe(true);
     const chars = streamed

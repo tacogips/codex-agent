@@ -1,11 +1,15 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type {
   ApiTokenMetadata,
   CreateTokenInput,
-  Permission,
   TokenConfig,
   TokenRecord,
   VerifyTokenResult,
@@ -26,13 +30,20 @@ function hashSecret(secret: string): string {
   return createHash("sha256").update(secret).digest("hex");
 }
 
-function parseStoredToken(rawToken: string): { id: string; secret: string } | null {
+function parseStoredToken(
+  rawToken: string,
+): { id: string; secret: string } | null {
   const parts = rawToken.split(".");
   if (parts.length !== 2) {
     return null;
   }
   const [id, secret] = parts;
-  if (id === undefined || secret === undefined || id.length === 0 || secret.length === 0) {
+  if (
+    id === undefined ||
+    secret === undefined ||
+    id.length === 0 ||
+    secret.length === 0
+  ) {
     return null;
   }
   return { id, secret };
@@ -60,7 +71,9 @@ function isExpired(expiresAt?: string): boolean {
   return time <= Date.now();
 }
 
-export async function loadTokenConfig(configDir?: string): Promise<TokenConfig> {
+export async function loadTokenConfig(
+  configDir?: string,
+): Promise<TokenConfig> {
   const path = tokenFilePath(configDir);
   try {
     const raw = await readFile(path, "utf-8");
@@ -70,7 +83,10 @@ export async function loadTokenConfig(configDir?: string): Promise<TokenConfig> 
   }
 }
 
-export async function saveTokenConfig(config: TokenConfig, configDir?: string): Promise<void> {
+export async function saveTokenConfig(
+  config: TokenConfig,
+  configDir?: string,
+): Promise<void> {
   const dir = resolveConfigDir(configDir);
   await mkdir(dir, { recursive: true });
   const path = tokenFilePath(configDir);
@@ -109,14 +125,19 @@ export async function createToken(
   return token;
 }
 
-export async function listTokens(configDir?: string): Promise<readonly ApiTokenMetadata[]> {
+export async function listTokens(
+  configDir?: string,
+): Promise<readonly ApiTokenMetadata[]> {
   const config = await loadTokenConfig(configDir);
   return config.tokens
     .map(toMetadata)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export async function revokeToken(id: string, configDir?: string): Promise<boolean> {
+export async function revokeToken(
+  id: string,
+  configDir?: string,
+): Promise<boolean> {
   const config = await loadTokenConfig(configDir);
   let found = false;
   const now = new Date().toISOString();
@@ -140,7 +161,10 @@ export async function revokeToken(id: string, configDir?: string): Promise<boole
   return true;
 }
 
-export async function rotateToken(id: string, configDir?: string): Promise<string> {
+export async function rotateToken(
+  id: string,
+  configDir?: string,
+): Promise<string> {
   const config = await loadTokenConfig(configDir);
   const idx = config.tokens.findIndex((token) => token.id === id);
   if (idx === -1) {
@@ -188,18 +212,4 @@ export async function verifyToken(
   }
 
   return { ok: true, metadata: toMetadata(record) };
-}
-
-export function parsePermissionList(input: string): readonly Permission[] {
-  return input
-    .split(",")
-    .map((value) => value.trim())
-    .filter((value): value is Permission =>
-      value === "session:create" ||
-      value === "session:read" ||
-      value === "session:cancel" ||
-      value === "group:*" ||
-      value === "queue:*" ||
-      value === "bookmark:*",
-    );
 }

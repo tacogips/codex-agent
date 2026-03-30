@@ -51,6 +51,18 @@ export type {
 export { getCodexCliVersion, getToolVersions } from "./tool-versions";
 
 export type {
+  CodexLoginStatusInfo,
+  GetCodexLoginStatusOptions,
+  CodexModelProbeInfo,
+  CheckCodexModelAvailabilityOptions,
+  CodexModelAvailabilityResult,
+} from "./model-availability";
+export {
+  getCodexLoginStatus,
+  checkCodexModelAvailability,
+} from "./model-availability";
+
+export type {
   ModelUsageStats,
   DailyActivity,
   CodexUsageStats,

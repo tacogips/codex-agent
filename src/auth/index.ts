@@ -8,9 +8,12 @@ export type {
 } from "./types";
 
 export {
+  ALL_PERMISSIONS,
+  DEFAULT_TOKEN_PERMISSIONS,
   PERMISSIONS,
   isPermission,
   normalizePermissions,
+  parsePermissionList,
   hasPermission,
 } from "./types";
 
@@ -22,6 +25,4 @@ export {
   revokeToken,
   rotateToken,
   verifyToken,
-  parsePermissionList,
 } from "./token-manager";
-

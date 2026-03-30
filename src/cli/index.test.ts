@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseProcessOptions, parseServerStartArgs, parseVersionArgs } from "./index";
+import {
+  parseModelCheckArgs,
+  parseProcessOptions,
+  parseServerStartArgs,
+  parseVersionArgs,
+} from "./index";
 
 describe("parseServerStartArgs", () => {
   it("parses core server flags", () => {
@@ -46,6 +51,38 @@ describe("parseVersionArgs", () => {
     expect(parsed).toEqual({
       asJson: false,
       includeGit: false,
+    });
+  });
+});
+
+describe("parseModelCheckArgs", () => {
+  it("parses model-check flags", () => {
+    const parsed = parseModelCheckArgs([
+      "--model",
+      "gpt-5.4",
+      "--json",
+      "--timeout-ms",
+      "1200",
+    ]);
+
+    expect(parsed).toEqual({
+      model: "gpt-5.4",
+      asJson: true,
+      timeoutMs: 1200,
+    });
+  });
+
+  it("drops invalid timeout values", () => {
+    const parsed = parseModelCheckArgs([
+      "--model",
+      "gpt-5.4",
+      "--timeout-ms",
+      "nope",
+    ]);
+
+    expect(parsed).toEqual({
+      model: "gpt-5.4",
+      asJson: false,
     });
   });
 });

@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+} from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -33,7 +41,11 @@ describe("Router", () => {
 
   it("matches paths with multiple params", () => {
     const router = new Router();
-    router.add("DELETE", "/api/groups/:id/sessions/:sid", async () => new Response("ok"));
+    router.add(
+      "DELETE",
+      "/api/groups/:id/sessions/:sid",
+      async () => new Response("ok"),
+    );
     const match = router.match("DELETE", "/api/groups/g1/sessions/s2");
     expect(match).not.toBeNull();
     expect(match!.params).toEqual({ id: "g1", sid: "s2" });
@@ -68,6 +80,15 @@ describe("Router", () => {
     const router = new Router();
     router.add("GET", "/api/sessions", async () => new Response("ok"));
     expect(router.match("GET", "/api/sessions/extra/path")).toBeNull();
+  });
+
+  it("preserves required permission metadata on matches", () => {
+    const router = new Router();
+    router.add("GET", "/api/sessions", async () => new Response("ok"), {
+      requiredPermission: "session:read",
+    });
+    const match = router.match("GET", "/api/sessions");
+    expect(match?.requiredPermission).toBe("session:read");
   });
 });
 
@@ -216,17 +237,63 @@ describe("HTTP Server", () => {
     await mkdir(dateDir, { recursive: true });
 
     // Create a fake rollout file
-    const sessionMeta = JSON.stringify({
-      type: "session_meta",
-      session_id: "test-session-001",
-      model_provider: "openai",
-      cwd: "/tmp/test",
-      cli_version: "1.0.0",
-      title: "Test Session",
-    });
+    const sessionLines = [
+      JSON.stringify({
+        timestamp: "2026-03-15T00:00:00.000Z",
+        type: "session_meta",
+        payload: {
+          meta: {
+            id: "test-session-001",
+            timestamp: "2026-03-15T00:00:00.000Z",
+            cwd: "/tmp/test",
+            originator: "codex",
+            cli_version: "1.0.0",
+            source: "cli",
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-03-15T00:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "shell",
+          call_id: "patch-1",
+          arguments: JSON.stringify({
+            command: [
+              "bash",
+              "-lc",
+              [
+                "apply_patch <<'PATCH'",
+                "*** Begin Patch",
+                "*** Update File: src/server.ts",
+                "@@",
+                "-old();",
+                "+next();",
+                "*** End Patch",
+                "PATCH",
+              ].join("\n"),
+            ],
+            workdir: "/tmp/test",
+          }),
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-03-15T00:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "patch-1",
+          output: JSON.stringify({
+            output: "Success. Updated the following files:\nM src/server.ts\n",
+            metadata: { exit_code: 0 },
+          }),
+        },
+      }),
+    ];
     await writeFile(
       join(dateDir, "rollout-test-session-001.jsonl"),
-      sessionMeta + "\n",
+      sessionLines.join("\n") + "\n",
     );
 
     server = startServer({
@@ -444,6 +511,18 @@ describe("HTTP Server", () => {
     expect(body["indexedSessions"]).toBeTypeOf("number");
     expect(body["indexedFiles"]).toBeTypeOf("number");
   });
+
+  it("GET /api/files/:id/patches returns grouped patch history", async () => {
+    const resp = await fetch(`${baseUrl}/api/files/test-session-001/patches`);
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as Record<string, unknown>;
+    expect(body["sessionId"]).toBe("test-session-001");
+    expect(body["totalFiles"]).toBe(1);
+    expect(body["totalChanges"]).toBe(1);
+
+    const files = body["files"] as Array<Record<string, unknown>>;
+    expect(files[0]?.["path"]).toBe("src/server.ts");
+  });
 });
 
 describe("HTTP Session Search API", () => {
@@ -516,7 +595,9 @@ describe("HTTP Session Search API", () => {
   });
 
   it("GET /api/sessions/search returns matching session IDs", async () => {
-    const resp = await fetch(`${baseUrl}/api/sessions/search?q=performance&role=user`);
+    const resp = await fetch(
+      `${baseUrl}/api/sessions/search?q=performance&role=user`,
+    );
     expect(resp.status).toBe(200);
     const body = (await resp.json()) as Record<string, unknown>;
     expect(body["sessionIds"]).toEqual(["search-session-001"]);
@@ -691,7 +772,10 @@ describe("Group and Queue CRUD", () => {
     const addResp = await fetch(`${baseUrl}/api/queues/${queueId}/prompts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "Do something", images: ["./one.png", "./two.png"] }),
+      body: JSON.stringify({
+        prompt: "Do something",
+        images: ["./one.png", "./two.png"],
+      }),
     });
     expect(addResp.status).toBe(201);
     const prompt = (await addResp.json()) as Record<string, unknown>;
@@ -770,19 +854,25 @@ describe("Group and Queue CRUD", () => {
     const queue = (await createResp.json()) as Record<string, unknown>;
     const queueId = queue["id"] as string;
 
-    const promptRespA = await fetch(`${baseUrl}/api/queues/${queueId}/prompts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "A" }),
-    });
+    const promptRespA = await fetch(
+      `${baseUrl}/api/queues/${queueId}/prompts`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "A" }),
+      },
+    );
     const promptA = (await promptRespA.json()) as Record<string, unknown>;
     const commandA = promptA["id"] as string;
 
-    const promptRespB = await fetch(`${baseUrl}/api/queues/${queueId}/prompts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "B" }),
-    });
+    const promptRespB = await fetch(
+      `${baseUrl}/api/queues/${queueId}/prompts`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "B" }),
+      },
+    );
     const promptB = (await promptRespB.json()) as Record<string, unknown>;
     const commandB = promptB["id"] as string;
 
@@ -796,30 +886,42 @@ describe("Group and Queue CRUD", () => {
     });
     expect(resumeResp.status).toBe(200);
 
-    const patchResp = await fetch(`${baseUrl}/api/queues/${queueId}/commands/${commandA}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "A-updated" }),
-    });
+    const patchResp = await fetch(
+      `${baseUrl}/api/queues/${queueId}/commands/${commandA}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "A-updated" }),
+      },
+    );
     expect(patchResp.status).toBe(200);
 
-    const modeResp = await fetch(`${baseUrl}/api/queues/${queueId}/commands/${commandB}/mode`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "manual" }),
-    });
+    const modeResp = await fetch(
+      `${baseUrl}/api/queues/${queueId}/commands/${commandB}/mode`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "manual" }),
+      },
+    );
     expect(modeResp.status).toBe(200);
 
-    const moveResp = await fetch(`${baseUrl}/api/queues/${queueId}/commands/move`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ from: 0, to: 1 }),
-    });
+    const moveResp = await fetch(
+      `${baseUrl}/api/queues/${queueId}/commands/move`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: 0, to: 1 }),
+      },
+    );
     expect(moveResp.status).toBe(200);
 
-    const removeResp = await fetch(`${baseUrl}/api/queues/${queueId}/commands/${commandA}`, {
-      method: "DELETE",
-    });
+    const removeResp = await fetch(
+      `${baseUrl}/api/queues/${queueId}/commands/${commandA}`,
+      {
+        method: "DELETE",
+      },
+    );
     expect(removeResp.status).toBe(200);
 
     const delResp = await fetch(`${baseUrl}/api/queues/${queueId}`, {
@@ -842,7 +944,9 @@ describe("HTTP Server with managed token permissions", () => {
 
   beforeAll(async () => {
     codexHome = await mkdtemp(join(tmpdir(), "codex-agent-managed-auth-home-"));
-    configDir = await mkdtemp(join(tmpdir(), "codex-agent-managed-auth-config-"));
+    configDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-managed-auth-config-"),
+    );
     await mkdir(join(codexHome, "sessions"), { recursive: true });
 
     sessionReadToken = await createToken(

@@ -31,6 +31,7 @@
  *   token rotate <id>
  *
  *   files list <session-id> [--format json|table]
+ *   files patches <session-id> [--format json|table]
  *   files find <path> [--format json|table]
  *   files rebuild
  *
@@ -53,13 +54,14 @@
  *   daemon stop
  *   daemon status
  *
+ *   model check --model <model> [--json] [--timeout-ms <ms>]
+ *
+ *   gql <query|command> [--param <json|path>] [--variables <json|path>]
+ *
  *   version [--json] [--include-git]
  */
 
-import {
-  listSessions,
-  findSession,
-} from "../session/index";
+import { listSessions, findSession } from "../session/index";
 import { readRollout } from "../rollout/reader";
 import { RolloutWatcher } from "../rollout/watcher";
 import { ProcessManager } from "../process/manager";
@@ -97,6 +99,7 @@ import {
   isBookmarkType,
 } from "../bookmark/index";
 import {
+  DEFAULT_TOKEN_PERMISSIONS,
   PERMISSIONS,
   createToken,
   listTokens,
@@ -106,6 +109,7 @@ import {
 } from "../auth/index";
 import {
   getChangedFiles,
+  getSessionFilePatchHistory,
   findSessionsByFile,
   rebuildFileIndex,
 } from "../file-changes/index";
@@ -130,7 +134,9 @@ import type { DaemonConfig } from "../daemon/types";
 import type { ServerConfig } from "../server/types";
 import type { BookmarkType } from "../bookmark/types";
 import { getToolVersions } from "../sdk/tool-versions";
+import { checkCodexModelAvailability } from "../sdk/model-availability";
 import { SessionRunner } from "../sdk/session-runner";
+import { runGraphqlCli } from "./graphql";
 
 const USAGE = `codex-agent - Codex session manager
 
@@ -164,6 +170,7 @@ Usage:
   codex-agent token rotate <id>
 
   codex-agent files list <session-id> [--format json|table]
+  codex-agent files patches <session-id> [--format json|table]
   codex-agent files find <path> [--format json|table]
   codex-agent files rebuild
 
@@ -185,6 +192,10 @@ Usage:
   codex-agent daemon start [--port N] [--host H] [--token T] [--mode http|app-server] [--app-server-url ws://...]
   codex-agent daemon stop
   codex-agent daemon status
+
+  codex-agent model check --model <model> [--json] [--timeout-ms <ms>]
+
+  codex-agent gql <query|command> [--param <json|path>] [--variables <json|path>]
 
   codex-agent version [--json] [--include-git]
 
@@ -248,8 +259,14 @@ export async function run(argv: readonly string[]): Promise<void> {
     case "daemon":
       await handleDaemon(action, rest);
       break;
+    case "model":
+      await handleModel(action, rest);
+      break;
     case "version":
       await handleVersion(args.slice(1));
+      break;
+    case "gql":
+      await runGraphqlCli(args.slice(1));
       break;
     default:
       console.error(`Unknown command: ${subcommand}`);
@@ -292,6 +309,82 @@ function printToolVersion(
     return;
   }
   console.log(`${name}: unavailable (${info.error})`);
+}
+
+// ---------------------------------------------------------------------------
+// Model commands
+// ---------------------------------------------------------------------------
+
+export interface ModelCheckArgs {
+  readonly model?: string;
+  readonly asJson: boolean;
+  readonly timeoutMs?: number;
+}
+
+async function handleModel(
+  action: string | undefined,
+  args: readonly string[],
+): Promise<void> {
+  if (action !== "check") {
+    console.error(`Unknown model action: ${action ?? "(none)"}`);
+    console.log(USAGE);
+    process.exitCode = 1;
+    return;
+  }
+
+  const parsed = parseModelCheckArgs(args);
+  if (parsed.model === undefined || parsed.model.trim().length === 0) {
+    console.error(
+      "Usage: codex-agent model check --model <model> [--json] [--timeout-ms <ms>]",
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const result = await checkCodexModelAvailability({
+    model: parsed.model,
+    ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
+  });
+
+  if (parsed.asJson) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`Overall: ${result.ok ? "available" : "unavailable"}`);
+    console.log(
+      `Auth:    ${result.auth.ok ? "available" : "unavailable"}${result.auth.status !== null ? ` (${result.auth.status})` : ""}`,
+    );
+    console.log(`Model:   ${result.model}`);
+    console.log(
+      `Probe:   ${result.probe.ok ? "available" : "unavailable"}${result.probe.error !== null ? ` (${result.probe.error})` : ""}`,
+    );
+  }
+
+  if (!result.ok) {
+    process.exitCode = 1;
+  }
+}
+
+export function parseModelCheckArgs(args: readonly string[]): ModelCheckArgs {
+  const timeoutRaw = getArgValue(args, "--timeout-ms");
+  const timeoutMs =
+    timeoutRaw !== undefined ? Number.parseInt(timeoutRaw, 10) : undefined;
+  const parsed: {
+    model?: string;
+    asJson: boolean;
+    timeoutMs?: number;
+  } = {
+    asJson: args.includes("--json"),
+  };
+
+  const model = getArgValue(args, "--model");
+  if (model !== undefined) {
+    parsed.model = model;
+  }
+  if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    parsed.timeoutMs = timeoutMs;
+  }
+
+  return parsed;
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +436,9 @@ async function handleSessionList(args: readonly string[]): Promise<void> {
   } else {
     console.log(formatSessionTable(result.sessions));
     if (result.total > result.sessions.length) {
-      console.log(`\nShowing ${result.sessions.length} of ${result.total} sessions`);
+      console.log(
+        `\nShowing ${result.sessions.length} of ${result.total} sessions`,
+      );
     }
   }
 }
@@ -467,7 +562,9 @@ async function handleSessionRun(args: readonly string[]): Promise<void> {
   }
 
   const result = await session.waitForCompletion();
-  console.log(`Session ${session.sessionId} exited with code ${result.exitCode}`);
+  console.log(
+    `Session ${session.sessionId} exited with code ${result.exitCode}`,
+  );
 }
 
 async function handleSessionResume(args: readonly string[]): Promise<void> {
@@ -578,14 +675,26 @@ async function handleGroupList(args: readonly string[]): Promise<void> {
     created: g.createdAt.toISOString().slice(0, 19).replace("T", " "),
   }));
 
-  const headers = { id: "ID", name: "NAME", sessions: "SESSIONS", created: "CREATED" };
+  const headers = {
+    id: "ID",
+    name: "NAME",
+    sessions: "SESSIONS",
+    created: "CREATED",
+  };
   const cols = Object.keys(headers) as (keyof typeof headers)[];
   const widths = Object.fromEntries(
-    cols.map((col) => [col, Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)]),
+    cols.map((col) => [
+      col,
+      Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0),
+    ]),
   );
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const headerLine = cols
+    .map((c) => headers[c].padEnd(widths[c] ?? 0))
+    .join("  ");
   const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+  const dataLines = rows.map((row) =>
+    cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "),
+  );
   console.log([headerLine, separator, ...dataLines].join("\n"));
 }
 
@@ -699,7 +808,9 @@ async function handleGroupDelete(args: readonly string[]): Promise<void> {
 async function handleGroupRun(args: readonly string[]): Promise<void> {
   const name = args[0];
   if (name === undefined) {
-    console.error("Usage: codex-agent group run <name> --prompt <P> [--max-concurrent N]");
+    console.error(
+      "Usage: codex-agent group run <name> --prompt <P> [--max-concurrent N]",
+    );
     process.exitCode = 1;
     return;
   }
@@ -719,12 +830,18 @@ async function handleGroupRun(args: readonly string[]): Promise<void> {
   }
 
   const maxConcurrentStr = getArgValue(args, "--max-concurrent");
-  const maxConcurrent = maxConcurrentStr !== undefined ? parseInt(maxConcurrentStr, 10) : undefined;
+  const maxConcurrent =
+    maxConcurrentStr !== undefined ? parseInt(maxConcurrentStr, 10) : undefined;
   const opts = parseProcessOptions(args.slice(1));
 
-  console.log(`Running prompt across ${group.sessionIds.length} sessions in group "${group.name}"...`);
+  console.log(
+    `Running prompt across ${group.sessionIds.length} sessions in group "${group.name}"...`,
+  );
 
-  for await (const event of runGroup(group, prompt, { ...opts, maxConcurrent })) {
+  for await (const event of runGroup(group, prompt, {
+    ...opts,
+    maxConcurrent,
+  })) {
     switch (event.type) {
       case "session_started":
         console.log(`  [started] ${event.sessionId}`);
@@ -736,7 +853,9 @@ async function handleGroupRun(args: readonly string[]): Promise<void> {
         console.log(`  [failed]  ${event.sessionId} (exit: ${event.exitCode})`);
         break;
       case "group_completed":
-        console.log(`\nGroup run complete: ${event.completed.length} completed, ${event.failed.length} failed`);
+        console.log(
+          `\nGroup run complete: ${event.completed.length} completed, ${event.failed.length} failed`,
+        );
         break;
     }
   }
@@ -783,7 +902,11 @@ async function handleBookmarkAdd(args: readonly string[]): Promise<void> {
   const fromMessageId = getArgValue(args, "--from");
   const toMessageId = getArgValue(args, "--to");
 
-  if (typeValue === undefined || sessionId === undefined || name === undefined) {
+  if (
+    typeValue === undefined ||
+    sessionId === undefined ||
+    name === undefined
+  ) {
     console.error(
       "Usage: codex-agent bookmark add --type <session|message|range> --session <id> --name <name> [--description <text>] [--tag <tag>] [--message <id>] [--from <id>] [--to <id>]",
     );
@@ -846,18 +969,34 @@ async function handleBookmarkList(args: readonly string[]): Promise<void> {
     id: bookmark.id.slice(0, 8),
     type: bookmark.type,
     session: bookmark.sessionId.slice(0, 12),
-    name: bookmark.name.length > 28 ? bookmark.name.slice(0, 25) + "..." : bookmark.name,
+    name:
+      bookmark.name.length > 28
+        ? bookmark.name.slice(0, 25) + "..."
+        : bookmark.name,
     tags: bookmark.tags.join(","),
   }));
 
-  const headers = { id: "ID", type: "TYPE", session: "SESSION", name: "NAME", tags: "TAGS" };
+  const headers = {
+    id: "ID",
+    type: "TYPE",
+    session: "SESSION",
+    name: "NAME",
+    tags: "TAGS",
+  };
   const cols = Object.keys(headers) as (keyof typeof headers)[];
   const widths = Object.fromEntries(
-    cols.map((col) => [col, Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)]),
+    cols.map((col) => [
+      col,
+      Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0),
+    ]),
   );
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const headerLine = cols
+    .map((c) => headers[c].padEnd(widths[c] ?? 0))
+    .join("  ");
   const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+  const dataLines = rows.map((row) =>
+    cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "),
+  );
   console.log([headerLine, separator, ...dataLines].join("\n"));
 }
 
@@ -898,7 +1037,9 @@ async function handleBookmarkDelete(args: readonly string[]): Promise<void> {
 async function handleBookmarkSearch(args: readonly string[]): Promise<void> {
   const query = args[0];
   if (query === undefined) {
-    console.error("Usage: codex-agent bookmark search <query> [--limit <n>] [--format json|table]");
+    console.error(
+      "Usage: codex-agent bookmark search <query> [--limit <n>] [--format json|table]",
+    );
     process.exitCode = 1;
     return;
   }
@@ -929,11 +1070,18 @@ async function handleBookmarkSearch(args: readonly string[]): Promise<void> {
   const headers = { score: "SCORE", id: "ID", type: "TYPE", name: "NAME" };
   const cols = Object.keys(headers) as (keyof typeof headers)[];
   const widths = Object.fromEntries(
-    cols.map((col) => [col, Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)]),
+    cols.map((col) => [
+      col,
+      Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0),
+    ]),
   );
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const headerLine = cols
+    .map((c) => headers[c].padEnd(widths[c] ?? 0))
+    .join("  ");
   const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+  const dataLines = rows.map((row) =>
+    cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "),
+  );
   console.log([headerLine, separator, ...dataLines].join("\n"));
 }
 
@@ -948,6 +1096,9 @@ async function handleFiles(
   switch (action) {
     case "list":
       await handleFilesList(args);
+      break;
+    case "patches":
+      await handleFilesPatches(args);
       break;
     case "find":
       await handleFilesFind(args);
@@ -965,7 +1116,9 @@ async function handleFiles(
 async function handleFilesList(args: readonly string[]): Promise<void> {
   const sessionId = args[0];
   if (sessionId === undefined) {
-    console.error("Usage: codex-agent files list <session-id> [--format json|table]");
+    console.error(
+      "Usage: codex-agent files list <session-id> [--format json|table]",
+    );
     process.exitCode = 1;
     return;
   }
@@ -989,17 +1142,77 @@ async function handleFilesList(args: readonly string[]): Promise<void> {
       count: String(file.changeCount),
       last: file.lastModified,
     }));
-    const headers = { path: "PATH", op: "OP", count: "COUNT", last: "LAST_MODIFIED" };
+    const headers = {
+      path: "PATH",
+      op: "OP",
+      count: "COUNT",
+      last: "LAST_MODIFIED",
+    };
     const cols = Object.keys(headers) as (keyof typeof headers)[];
     const widths = Object.fromEntries(
-      cols.map((col) => [col, Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)]),
+      cols.map((col) => [
+        col,
+        Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0),
+      ]),
     );
-    const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+    const headerLine = cols
+      .map((c) => headers[c].padEnd(widths[c] ?? 0))
+      .join("  ");
     const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-    const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+    const dataLines = rows.map((row) =>
+      cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "),
+    );
     console.log([headerLine, separator, ...dataLines].join("\n"));
   } catch (err: unknown) {
-    console.error(`Failed to list file changes: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(
+      `Failed to list file changes: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    process.exitCode = 1;
+  }
+}
+
+async function handleFilesPatches(args: readonly string[]): Promise<void> {
+  const sessionId = args[0];
+  if (sessionId === undefined) {
+    console.error(
+      "Usage: codex-agent files patches <session-id> [--format json|table]",
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const format = getArgValue(args, "--format") ?? "table";
+  try {
+    const history = await getSessionFilePatchHistory(sessionId);
+    if (format === "json") {
+      console.log(JSON.stringify(history, null, 2));
+      return;
+    }
+
+    if (history.files.length === 0) {
+      console.log("No file patch history found.");
+      return;
+    }
+
+    for (const file of history.files) {
+      console.log(
+        `${file.path} (${file.changeCount} changes, latest ${file.lastModified})`,
+      );
+      for (const change of file.changes) {
+        const summary =
+          change.patch !== undefined
+            ? (change.patch.split("\n")[0] ?? change.operation)
+            : (change.command ?? change.operation);
+        console.log(
+          `  ${change.timestamp}  ${change.operation}  ${change.source}  ${summary}`,
+        );
+      }
+      console.log("");
+    }
+  } catch (err: unknown) {
+    console.error(
+      `Failed to get file patch history: ${err instanceof Error ? err.message : String(err)}`,
+    );
     process.exitCode = 1;
   }
 }
@@ -1029,14 +1242,25 @@ async function handleFilesFind(args: readonly string[]): Promise<void> {
     operation: entry.operation,
     last: entry.lastModified,
   }));
-  const headers = { session: "SESSION", operation: "OP", last: "LAST_MODIFIED" };
+  const headers = {
+    session: "SESSION",
+    operation: "OP",
+    last: "LAST_MODIFIED",
+  };
   const cols = Object.keys(headers) as (keyof typeof headers)[];
   const widths = Object.fromEntries(
-    cols.map((col) => [col, Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)]),
+    cols.map((col) => [
+      col,
+      Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0),
+    ]),
   );
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const headerLine = cols
+    .map((c) => headers[c].padEnd(widths[c] ?? 0))
+    .join("  ");
   const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+  const dataLines = rows.map((row) =>
+    cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "),
+  );
   console.log([headerLine, separator, ...dataLines].join("\n"));
 }
 
@@ -1078,7 +1302,9 @@ async function handleToken(
 async function handleTokenCreate(args: readonly string[]): Promise<void> {
   const name = getArgValue(args, "--name");
   if (name === undefined || name.trim().length === 0) {
-    console.error("Usage: codex-agent token create --name <name> [--permissions <csv>] [--expires-at <iso8601>]");
+    console.error(
+      "Usage: codex-agent token create --name <name> [--permissions <csv>] [--expires-at <iso8601>]",
+    );
     process.exitCode = 1;
     return;
   }
@@ -1088,10 +1314,12 @@ async function handleTokenCreate(args: readonly string[]): Promise<void> {
   const permissions =
     permissionsCsv !== undefined
       ? parsePermissionList(permissionsCsv)
-      : (["session:read"] as const);
+      : DEFAULT_TOKEN_PERMISSIONS;
 
   if (permissions.length === 0) {
-    console.error(`No valid permissions provided. Allowed: ${PERMISSIONS.join(", ")}`);
+    console.error(
+      `No valid permissions provided. Allowed: ${PERMISSIONS.join(", ")}`,
+    );
     process.exitCode = 1;
     return;
   }
@@ -1105,7 +1333,9 @@ async function handleTokenCreate(args: readonly string[]): Promise<void> {
     console.log("Token created:");
     console.log(token);
   } catch (err: unknown) {
-    console.error(`Failed to create token: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(
+      `Failed to create token: ${err instanceof Error ? err.message : String(err)}`,
+    );
     process.exitCode = 1;
   }
 }
@@ -1141,11 +1371,18 @@ async function handleTokenList(args: readonly string[]): Promise<void> {
   };
   const cols = Object.keys(headers) as (keyof typeof headers)[];
   const widths = Object.fromEntries(
-    cols.map((col) => [col, Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)]),
+    cols.map((col) => [
+      col,
+      Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0),
+    ]),
   );
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const headerLine = cols
+    .map((c) => headers[c].padEnd(widths[c] ?? 0))
+    .join("  ");
   const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+  const dataLines = rows.map((row) =>
+    cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "),
+  );
   console.log([headerLine, separator, ...dataLines].join("\n"));
 }
 
@@ -1179,7 +1416,9 @@ async function handleTokenRotate(args: readonly string[]): Promise<void> {
     console.log("Token rotated:");
     console.log(token);
   } catch (err: unknown) {
-    console.error(`Failed to rotate token: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(
+      `Failed to rotate token: ${err instanceof Error ? err.message : String(err)}`,
+    );
     process.exitCode = 1;
   }
 }
@@ -1258,7 +1497,9 @@ async function handleQueueCreate(args: readonly string[]): Promise<void> {
 async function handleQueueAdd(args: readonly string[]): Promise<void> {
   const name = args[0];
   if (name === undefined) {
-    console.error("Usage: codex-agent queue add <name> --prompt <prompt> [--image <path>]...");
+    console.error(
+      "Usage: codex-agent queue add <name> --prompt <prompt> [--image <path>]...",
+    );
     process.exitCode = 1;
     return;
   }
@@ -1283,7 +1524,9 @@ async function handleQueueAdd(args: readonly string[]): Promise<void> {
     prompt,
     images.length > 0 ? images : undefined,
   );
-  console.log(`Prompt added to queue ${queue.name}: ${queuePrompt.id.slice(0, 8)}`);
+  console.log(
+    `Prompt added to queue ${queue.name}: ${queuePrompt.id.slice(0, 8)}`,
+  );
 }
 
 async function handleQueueShow(args: readonly string[]): Promise<void> {
@@ -1320,20 +1563,37 @@ async function handleQueueList(args: readonly string[]): Promise<void> {
   const rows = queues.map((q) => ({
     id: q.id.slice(0, 8),
     name: q.name,
-    project: q.projectPath.length > 40 ? "..." + q.projectPath.slice(-37) : q.projectPath,
+    project:
+      q.projectPath.length > 40
+        ? "..." + q.projectPath.slice(-37)
+        : q.projectPath,
     prompts: String(q.prompts.length),
     pending: String(q.prompts.filter((p) => p.status === "pending").length),
     created: q.createdAt.toISOString().slice(0, 19).replace("T", " "),
   }));
 
-  const headers = { id: "ID", name: "NAME", project: "PROJECT", prompts: "PROMPTS", pending: "PENDING", created: "CREATED" };
+  const headers = {
+    id: "ID",
+    name: "NAME",
+    project: "PROJECT",
+    prompts: "PROMPTS",
+    pending: "PENDING",
+    created: "CREATED",
+  };
   const cols = Object.keys(headers) as (keyof typeof headers)[];
   const widths = Object.fromEntries(
-    cols.map((col) => [col, Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)]),
+    cols.map((col) => [
+      col,
+      Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0),
+    ]),
   );
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const headerLine = cols
+    .map((c) => headers[c].padEnd(widths[c] ?? 0))
+    .join("  ");
   const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+  const dataLines = rows.map((row) =>
+    cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "),
+  );
   console.log([headerLine, separator, ...dataLines].join("\n"));
 }
 
@@ -1392,7 +1652,9 @@ async function handleQueueUpdate(args: readonly string[]): Promise<void> {
   const name = args[0];
   const commandId = args[1];
   if (name === undefined || commandId === undefined) {
-    console.error("Usage: codex-agent queue update <name> <command-id> [--prompt <text>] [--status <status>]");
+    console.error(
+      "Usage: codex-agent queue update <name> <command-id> [--prompt <text>] [--status <status>]",
+    );
     process.exitCode = 1;
     return;
   }
@@ -1420,7 +1682,9 @@ async function handleQueueUpdate(args: readonly string[]): Promise<void> {
   console.log(`Updated command ${commandId} in queue ${queue.name}`);
 }
 
-async function handleQueueRemoveCommand(args: readonly string[]): Promise<void> {
+async function handleQueueRemoveCommand(
+  args: readonly string[],
+): Promise<void> {
   const name = args[0];
   const commandId = args[1];
   if (name === undefined || commandId === undefined) {
@@ -1478,8 +1742,14 @@ async function handleQueueMode(args: readonly string[]): Promise<void> {
   const name = args[0];
   const commandId = args[1];
   const modeRaw = getArgValue(args, "--mode");
-  if (name === undefined || commandId === undefined || (modeRaw !== "auto" && modeRaw !== "manual")) {
-    console.error("Usage: codex-agent queue mode <name> <command-id> --mode <auto|manual>");
+  if (
+    name === undefined ||
+    commandId === undefined ||
+    (modeRaw !== "auto" && modeRaw !== "manual")
+  ) {
+    console.error(
+      "Usage: codex-agent queue mode <name> <command-id> --mode <auto|manual>",
+    );
     process.exitCode = 1;
     return;
   }
@@ -1495,7 +1765,9 @@ async function handleQueueMode(args: readonly string[]): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  console.log(`Set mode ${modeRaw} for command ${commandId} in queue ${queue.name}`);
+  console.log(
+    `Set mode ${modeRaw} for command ${commandId} in queue ${queue.name}`,
+  );
 }
 
 async function handleQueueRun(args: readonly string[]): Promise<void> {
@@ -1513,8 +1785,12 @@ async function handleQueueRun(args: readonly string[]): Promise<void> {
     return;
   }
 
-  const pendingCount = queue.prompts.filter((p) => p.status === "pending").length;
-  console.log(`Running queue "${queue.name}" (${pendingCount} pending prompts)...`);
+  const pendingCount = queue.prompts.filter(
+    (p) => p.status === "pending",
+  ).length;
+  console.log(
+    `Running queue "${queue.name}" (${pendingCount} pending prompts)...`,
+  );
 
   const opts = parseProcessOptions(args.slice(1));
   const stopSignal = { stopped: false };
@@ -1531,16 +1807,24 @@ async function handleQueueRun(args: readonly string[]): Promise<void> {
         console.log(`  [started]   ${event.promptId?.slice(0, 8)}`);
         break;
       case "prompt_completed":
-        console.log(`  [completed] ${event.promptId?.slice(0, 8)} (exit: ${event.exitCode})`);
+        console.log(
+          `  [completed] ${event.promptId?.slice(0, 8)} (exit: ${event.exitCode})`,
+        );
         break;
       case "prompt_failed":
-        console.log(`  [failed]    ${event.promptId?.slice(0, 8)} (exit: ${event.exitCode})`);
+        console.log(
+          `  [failed]    ${event.promptId?.slice(0, 8)} (exit: ${event.exitCode})`,
+        );
         break;
       case "queue_completed":
-        console.log(`\nQueue complete: ${event.completed.length} completed, ${event.failed.length} failed`);
+        console.log(
+          `\nQueue complete: ${event.completed.length} completed, ${event.failed.length} failed`,
+        );
         break;
       case "queue_stopped":
-        console.log(`\nQueue stopped: ${event.completed.length} completed, ${event.pending.length} remaining`);
+        console.log(
+          `\nQueue stopped: ${event.completed.length} completed, ${event.pending.length} remaining`,
+        );
         break;
     }
   }
@@ -1575,9 +1859,7 @@ async function handleServer(
   }
 
   const handle = startServer(config);
-  console.log(
-    `Server listening on http://${handle.hostname}:${handle.port}`,
-  );
+  console.log(`Server listening on http://${handle.hostname}:${handle.port}`);
 
   // Keep alive until SIGINT/SIGTERM
   await new Promise<void>((resolve) => {
@@ -1699,7 +1981,9 @@ function parseDaemonStartArgs(args: readonly string[]): DaemonConfig {
     ...(portStr !== undefined ? { port: parseInt(portStr, 10) || 3100 } : {}),
     ...(host !== undefined ? { host } : {}),
     ...(token !== undefined ? { token } : {}),
-    ...(modeRaw === "http" || modeRaw === "app-server" ? { mode: modeRaw } : {}),
+    ...(modeRaw === "http" || modeRaw === "app-server"
+      ? { mode: modeRaw }
+      : {}),
     ...(appServerUrl !== undefined ? { appServerUrl } : {}),
   };
 }
@@ -1752,13 +2036,19 @@ function isSessionSource(s: string): s is SessionSource {
   return s === "cli" || s === "vscode" || s === "exec" || s === "unknown";
 }
 
-function getArgValue(args: readonly string[], flag: string): string | undefined {
+function getArgValue(
+  args: readonly string[],
+  flag: string,
+): string | undefined {
   const idx = args.indexOf(flag);
   if (idx === -1 || idx + 1 >= args.length) return undefined;
   return args[idx + 1];
 }
 
-function getArgValues(args: readonly string[], flag: string): readonly string[] {
+function getArgValues(
+  args: readonly string[],
+  flag: string,
+): readonly string[] {
   const values: string[] = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === flag) {
@@ -1771,7 +2061,9 @@ function getArgValues(args: readonly string[], flag: string): readonly string[] 
   return values;
 }
 
-export function parseProcessOptions(args: readonly string[]): CodexProcessOptions {
+export function parseProcessOptions(
+  args: readonly string[],
+): CodexProcessOptions {
   const opts: {
     model?: string;
     sandbox?: SandboxMode;
@@ -1834,8 +2126,11 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-function renderMarkdownTasks(lines: readonly { readonly type: string; readonly payload: unknown }[]): void {
-  const tasks: { sectionHeading: string; text: string; checked: boolean }[] = [];
+function renderMarkdownTasks(
+  lines: readonly { readonly type: string; readonly payload: unknown }[],
+): void {
+  const tasks: { sectionHeading: string; text: string; checked: boolean }[] =
+    [];
 
   for (const line of lines) {
     if (line.type === "event_msg") {
@@ -1866,7 +2161,8 @@ function renderMarkdownTasks(lines: readonly { readonly type: string; readonly p
         }
         const itemObj = item as Record<string, unknown>;
         if (
-          (itemObj["type"] === "input_text" || itemObj["type"] === "output_text") &&
+          (itemObj["type"] === "input_text" ||
+            itemObj["type"] === "output_text") &&
           typeof itemObj["text"] === "string"
         ) {
           tasks.push(...extractMarkdownTasks(itemObj["text"]));
@@ -1883,7 +2179,8 @@ function renderMarkdownTasks(lines: readonly { readonly type: string; readonly p
   console.log("\nMarkdown tasks:");
   for (const task of tasks) {
     const checkbox = task.checked ? "[x]" : "[ ]";
-    const sectionPrefix = task.sectionHeading.length > 0 ? `${task.sectionHeading}: ` : "";
+    const sectionPrefix =
+      task.sectionHeading.length > 0 ? `${task.sectionHeading}: ` : "";
     console.log(`  ${checkbox} ${sectionPrefix}${task.text}`);
   }
 }

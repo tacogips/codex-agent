@@ -2,7 +2,7 @@
  * Optional Bearer token authentication and permission checks.
  */
 
-import { hasPermission, verifyToken } from "../auth/index";
+import { ALL_PERMISSIONS, hasPermission, verifyToken } from "../auth/index";
 import type { Permission } from "../auth/index";
 import type { ServerConfig } from "./types";
 
@@ -11,15 +11,6 @@ export interface AuthContext {
   readonly tokenId?: string | undefined;
   readonly permissions: readonly Permission[];
 }
-
-const FULL_PERMISSIONS: readonly Permission[] = [
-  "session:create",
-  "session:read",
-  "session:cancel",
-  "group:*",
-  "queue:*",
-  "bookmark:*",
-];
 
 function unauthorizedResponse(): Response {
   return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -59,7 +50,7 @@ export async function authenticateRequest(
       return { context: null, error: unauthorizedResponse() };
     }
     return {
-      context: { source: "static", permissions: FULL_PERMISSIONS },
+      context: { source: "static", permissions: ALL_PERMISSIONS },
       error: null,
     };
   }
@@ -103,7 +94,10 @@ export function ensurePermission(
 }
 
 // Backward-compatible helper used by existing unit tests.
-export function checkAuth(req: Request, token: string | undefined): Response | null {
+export function checkAuth(
+  req: Request,
+  token: string | undefined,
+): Response | null {
   if (token === undefined) return null;
 
   const bearer = parseBearerToken(req);

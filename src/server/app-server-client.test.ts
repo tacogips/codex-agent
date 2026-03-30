@@ -6,12 +6,13 @@ interface FakeMessageEvent {
 }
 
 class FakeSocket {
-  private readonly listeners: Record<string, Array<(event: unknown) => void>> = {
-    open: [],
-    message: [],
-    close: [],
-    error: [],
-  };
+  private readonly listeners: Record<string, Array<(event: unknown) => void>> =
+    {
+      open: [],
+      message: [],
+      close: [],
+      error: [],
+    };
   sent: string[] = [];
 
   constructor() {
@@ -33,7 +34,10 @@ class FakeSocket {
     if (msg.id !== undefined) {
       setTimeout(() => {
         this.emit("message", {
-          data: JSON.stringify({ id: msg.id, result: { ok: true, method: msg.method } }),
+          data: JSON.stringify({
+            id: msg.id,
+            result: { ok: true, method: msg.method },
+          }),
         } satisfies FakeMessageEvent);
       }, 0);
     }
@@ -64,7 +68,9 @@ describe("createAppServerClient", () => {
     );
 
     await client.connect();
-    const result = await client.request<{ ok: boolean; method?: string }>("sessions.list");
+    const result = await client.request<{ ok: boolean; method?: string }>(
+      "sessions.list",
+    );
     expect(result.ok).toBe(true);
     expect(result.method).toBe("sessions.list");
     await client.close();
@@ -72,7 +78,10 @@ describe("createAppServerClient", () => {
 
   it("forwards server events to subscribers", async () => {
     const fake = new FakeSocket();
-    const client = createAppServerClient({ url: "ws://example/ws" }, () => fake);
+    const client = createAppServerClient(
+      { url: "ws://example/ws" },
+      () => fake,
+    );
 
     const events: string[] = [];
     const unsubscribe = client.subscribe((evt) => {

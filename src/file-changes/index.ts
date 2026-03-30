@@ -4,6 +4,10 @@ export type {
   ChangedFilesSummary,
   FileHistory,
   FileHistoryEntry,
+  FileChangeSource,
+  FileChangeDetail,
+  SessionFileHistory,
+  SessionFilePatchHistory,
   IndexStats,
   GetFilesOptions,
   FindOptions,
@@ -11,6 +15,10 @@ export type {
   FileChangeIndex,
 } from "./types";
 
-export { extractChangedFiles } from "./extractor";
-export { getChangedFiles, findSessionsByFile, rebuildFileIndex } from "./service";
-
+export { extractChangedFiles, extractFileChangeDetails } from "./extractor";
+export {
+  getChangedFiles,
+  getSessionFilePatchHistory,
+  findSessionsByFile,
+  rebuildFileIndex,
+} from "./service";
