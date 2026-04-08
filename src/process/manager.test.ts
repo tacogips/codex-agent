@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -121,6 +121,39 @@ describe("ProcessManager", () => {
     const command = pm.list()[0]?.command;
     expect(command).toContain("--skip-git-repo-check");
     expect(command).toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
+  test("spawnExec passes configured environment variables to the child process", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-process-manager-env-"));
+    try {
+      const envLogPath = join(fixtureDir, "env.log");
+      const fakeCodexPath = join(fixtureDir, "fake-codex-env.sh");
+      await writeFile(
+        fakeCodexPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -eu",
+          `printf '%s' \"\${CODEX_AGENT_TEST_ENV:-}\" > '${envLogPath}'`,
+          "exit 0",
+        ].join("\n"),
+        "utf-8",
+      );
+      await chmod(fakeCodexPath, 0o755);
+
+      const pm = new ProcessManager(fakeCodexPath);
+      const result = await pm.spawnExec("test prompt", {
+        codexBinary: fakeCodexPath,
+        environmentVariables: {
+          CODEX_AGENT_TEST_ENV: "typed-env-value",
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      const envValue = await readFile(envLogPath, "utf-8");
+      expect(envValue).toBe("typed-env-value");
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
   });
 
   test("spawnExecStream returns streaming handle and completion", async () => {

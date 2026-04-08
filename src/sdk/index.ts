@@ -9,6 +9,7 @@ export { BasicSdkEventEmitter } from "./events";
 
 export type { ToolContext, ToolConfig, RegisteredTool } from "./tool-registry";
 export { tool, ToolRegistry } from "./tool-registry";
+export type { CodexEnvironmentVariables } from "../process/types";
 
 export type {
   SessionRunnerOptions,

@@ -2,6 +2,7 @@ export { ProcessManager } from "./manager";
 export type {
   CodexProcess,
   CodexProcessOptions,
+  CodexEnvironmentVariables,
   ExecResult,
   ExecStreamResult,
   ProcessStatus,

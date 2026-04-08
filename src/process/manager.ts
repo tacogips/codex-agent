@@ -64,7 +64,7 @@ export class ProcessManager {
     const child = spawn(binary, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: buildSpawnEnvironment(options),
     });
     drainPipe(child.stderr);
 
@@ -120,7 +120,7 @@ export class ProcessManager {
     const child = spawn(binary, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: buildSpawnEnvironment(options),
     });
     drainPipe(child.stderr);
 
@@ -253,7 +253,7 @@ export class ProcessManager {
     const child = spawn(binary, args, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env },
+      env: buildSpawnEnvironment(options),
     });
     drainPipe(child.stdout);
     drainPipe(child.stderr);
@@ -325,6 +325,15 @@ function buildCommonArgs(options?: CodexProcessOptions): string[] {
     args.push(...options.additionalArgs);
   }
   return args;
+}
+
+function buildSpawnEnvironment(
+  options?: CodexProcessOptions,
+): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...options?.environmentVariables,
+  };
 }
 
 // ---------------------------------------------------------------------------

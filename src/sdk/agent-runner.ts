@@ -10,7 +10,12 @@ import type {
   SessionStreamChunk,
 } from "./session-runner";
 import type { SessionConfig } from "./session-runner";
-import type { ApprovalMode, SandboxMode, StreamGranularity } from "../process/types";
+import type {
+  ApprovalMode,
+  CodexEnvironmentVariables,
+  SandboxMode,
+  StreamGranularity,
+} from "../process/types";
 
 export interface AgentRunnerOptions extends SessionRunnerOptions {}
 
@@ -24,6 +29,7 @@ interface AgentRequestBase {
   readonly model?: string | undefined;
   readonly additionalArgs?: readonly string[] | undefined;
   readonly streamGranularity?: StreamGranularity | undefined;
+  readonly environmentVariables?: CodexEnvironmentVariables | undefined;
   readonly streamMode?: AgentStreamMode | undefined;
   readonly attachments?: readonly AgentAttachment[] | undefined;
 }
@@ -294,6 +300,7 @@ async function startFromRequest(
       additionalArgs: request.additionalArgs,
       images: imagePaths,
       streamGranularity: request.streamGranularity,
+      environmentVariables: request.environmentVariables,
     });
     return session;
   }
@@ -308,6 +315,7 @@ async function startFromRequest(
     additionalArgs: request.additionalArgs,
     images: imagePaths,
     streamGranularity: request.streamGranularity,
+    environmentVariables: request.environmentVariables,
   };
   return await runner.startSession(config);
 }

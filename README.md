@@ -143,6 +143,10 @@ import { runAgent, type AgentEvent } from "codex-agent";
 const events: AgentEvent[] = [];
 for await (const event of runAgent({
   prompt: "Summarize the latest test failures",
+  environmentVariables: {
+    OPENAI_API_KEY: process.env["OPENAI_API_KEY"] ?? "",
+    CODEX_HOME: "/tmp/codex-home",
+  },
   attachments: [
     { type: "path", path: "./screenshots/failure.png" },
     { type: "base64", data: "iVBORw0KGgoAAA...", mediaType: "image/png" },
@@ -151,6 +155,9 @@ for await (const event of runAgent({
   events.push(event);
 }
 ```
+
+`environmentVariables` lets you pass the subprocess environment as a typed
+object instead of assembling ad hoc shell prefixes at the call site.
 
 Request routing (`exec` vs `resume`) and attachment normalization are handled
 inside `codex-agent` internals.

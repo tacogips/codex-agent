@@ -130,6 +130,43 @@ describe("runAgent", () => {
     expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
+  test("forwards environment variables for new sessions", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-new-env-"));
+    createdDirs.push(fixtureDir);
+
+    const envLogPath = join(fixtureDir, "new-env.log");
+    const fakeCodexPath = join(fixtureDir, "fake-codex-new-env.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        `printf '%s' \"\${CODEX_AGENT_TEST_ENV:-}\" > '${envLogPath}'`,
+        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"meta\":{\"id\":\"new-session-env-001\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"codex\",\"cli_version\":\"1.0.0\",\"source\":\"exec\"}}}'",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    for await (const _event of runAgent(
+      {
+        prompt: "say hello",
+        environmentVariables: {
+          CODEX_AGENT_TEST_ENV: "typed-env-value",
+        },
+      },
+      {
+        codexBinary: fakeCodexPath,
+      },
+    )) {
+      // Drain stream.
+    }
+
+    const envValue = await readFile(envLogPath, "utf-8");
+    expect(envValue).toBe("typed-env-value");
+  });
+
   test("uses the same API for resume flow while keeping command details internal", async () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-resume-"));
     createdDirs.push(fixtureDir);

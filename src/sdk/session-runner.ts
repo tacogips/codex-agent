@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { ProcessManager } from "../process/manager";
 import type {
   ApprovalMode,
+  CodexEnvironmentVariables,
   CodexProcessOptions,
   ExecStreamResult,
   SandboxMode,
@@ -31,6 +32,7 @@ export interface SessionConfig {
   readonly additionalArgs?: readonly string[] | undefined;
   readonly images?: readonly string[] | undefined;
   readonly streamGranularity?: StreamGranularity | undefined;
+  readonly environmentVariables?: CodexEnvironmentVariables | undefined;
 }
 
 export interface SessionResult {
@@ -222,6 +224,7 @@ export class SessionRunner {
         additionalArgs: config.additionalArgs,
         images: config.images,
         streamGranularity: config.streamGranularity,
+        environmentVariables: config.environmentVariables,
       });
     }
 
@@ -246,7 +249,8 @@ export class SessionRunner {
     prompt?: string,
     options?: Omit<CodexProcessOptions, "codexBinary">,
   ): Promise<RunningSession> {
-    const sessionInfo = await findSession(sessionId, this.options.codexHome);
+    const codexHome = this.resolveCodexHome(options);
+    const sessionInfo = await findSession(sessionId, codexHome);
     const includeExisting = this.options.includeExistingOnResume === true;
     const preResumeRolloutOffset =
       sessionInfo !== null ? await getRolloutSize(sessionInfo.rolloutPath) : undefined;
@@ -297,6 +301,7 @@ export class SessionRunner {
     } else {
       attachPromise = this.attachWatchWhenSessionAppears(
         sessionId,
+        codexHome,
         watcher,
         includeExisting,
       );
@@ -324,6 +329,7 @@ export class SessionRunner {
 
   private async attachWatchWhenSessionAppears(
     sessionId: string,
+    codexHome: string | undefined,
     watcher: RolloutWatcher,
     includeExisting: boolean,
   ): Promise<void> {
@@ -331,7 +337,7 @@ export class SessionRunner {
       if (watcher.isClosed) {
         return;
       }
-      const discovered = await findSession(sessionId, this.options.codexHome);
+      const discovered = await findSession(sessionId, codexHome);
       if (discovered !== null) {
         if (includeExisting) {
           const existing = await readRollout(discovered.rolloutPath);
@@ -374,7 +380,14 @@ export class SessionRunner {
       additionalArgs: config.additionalArgs,
       images: config.images,
       streamGranularity: config.streamGranularity,
+      environmentVariables: config.environmentVariables,
     };
+  }
+
+  private resolveCodexHome(
+    options?: Pick<CodexProcessOptions, "environmentVariables">,
+  ): string | undefined {
+    return options?.environmentVariables?.["CODEX_HOME"] ?? this.options.codexHome;
   }
 
   private forwardExecStream(

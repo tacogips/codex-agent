@@ -317,6 +317,68 @@ describe("SessionRunner", () => {
       .join("");
     expect(chars).toBe("hello");
   });
+
+  test("resumeSession discovers sessions from request-scoped CODEX_HOME", async () => {
+    const runnerHome = await mkdtemp(join(tmpdir(), "codex-agent-sdk-runner-home-"));
+    const requestHome = await mkdtemp(join(tmpdir(), "codex-agent-sdk-request-home-"));
+    createdDirs.push(runnerHome, requestHome);
+
+    const sessionId = "resume-env-home-session-001";
+    const now = new Date();
+    const dir = join(
+      requestHome,
+      "sessions",
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    );
+    await mkdir(dir, { recursive: true });
+
+    const rolloutPath = join(dir, `rollout-${sessionId}.jsonl`);
+    await writeFile(
+      rolloutPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-01-01T00:00:00Z",
+          type: "session_meta",
+          payload: {
+            meta: {
+              id: sessionId,
+              timestamp: "2026-01-01T00:00:00Z",
+              cwd: "/tmp/project",
+              originator: "codex",
+              cli_version: "1.0.0",
+              source: "cli",
+            },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const runner = new SessionRunner({
+      codexBinary: "echo",
+      codexHome: runnerHome,
+      includeExistingOnResume: true,
+    });
+
+    const session = await runner.resumeSession(sessionId, undefined, {
+      environmentVariables: {
+        CODEX_HOME: requestHome,
+      },
+    });
+
+    const streamed: RolloutLine[] = [];
+    for await (const line of session.messages()) {
+      if ("type" in line) {
+        streamed.push(line as RolloutLine);
+      }
+    }
+    const result = await session.waitForCompletion();
+
+    expect(result.success).toBe(true);
+    expect(streamed.some((line) => line.type === "session_meta")).toBe(true);
+    expect(session.sessionId).toBe(sessionId);
+  });
 });
 
 function isCharChunk(
