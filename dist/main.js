@@ -14265,7 +14265,7 @@ async function runGraphqlCli(args, options) {
 async function parseGraphqlCliArgs(args) {
   const documentArg = args[0];
   if (documentArg === undefined || documentArg.trim().length === 0) {
-    throw new Error("Usage: codex-agent graphql|gql <query|command> [--param <json|path>] [--variables <json|path>]");
+    throw new Error("Usage: codex-agent graphql <query|command> [--param <json|path>] [--variables <json|path>]");
   }
   const variables = await readVariables(args);
   return {
@@ -14368,60 +14368,61 @@ var MUTATION_COMMANDS = new Set([
 ]);
 
 // src/cli/index.ts
-var USAGE = `codex-agent - Codex session manager
+var CLI_NAME = "codex-agent";
+var USAGE = `${CLI_NAME} - Codex session manager
 
 Usage:
-  codex-agent session list [options]
-  codex-agent session show <id> [--tasks]
-  codex-agent session watch <id>
-  codex-agent session run --prompt <P> [options]
-  codex-agent session resume <id> [options]
-  codex-agent session fork <id> [--nth-message N] [options]
+  ${CLI_NAME} session list [options]
+  ${CLI_NAME} session show <id> [--tasks]
+  ${CLI_NAME} session watch <id>
+  ${CLI_NAME} session run --prompt <P> [options]
+  ${CLI_NAME} session resume <id> [options]
+  ${CLI_NAME} session fork <id> [--nth-message N] [options]
 
-  codex-agent group create <name> [--description D]
-  codex-agent group list [--format json|table]
-  codex-agent group show <group>
-  codex-agent group add <group> <session>
-  codex-agent group remove <group> <session>
-  codex-agent group pause <group>
-  codex-agent group resume <group>
-  codex-agent group delete <group>
-  codex-agent group run <name> --prompt <P> [--max-concurrent N] [--image FILE]...
+  ${CLI_NAME} group create <name> [--description D]
+  ${CLI_NAME} group list [--format json|table]
+  ${CLI_NAME} group show <group>
+  ${CLI_NAME} group add <group> <session>
+  ${CLI_NAME} group remove <group> <session>
+  ${CLI_NAME} group pause <group>
+  ${CLI_NAME} group resume <group>
+  ${CLI_NAME} group delete <group>
+  ${CLI_NAME} group run <name> --prompt <P> [--max-concurrent N] [--image FILE]...
 
-  codex-agent bookmark add --type <session|message|range> --session <id> --name <name> [options]
-  codex-agent bookmark list [--format json|table] [--session <id>] [--type <type>] [--tag <tag>]
-  codex-agent bookmark get <id>
-  codex-agent bookmark delete <id>
-  codex-agent bookmark search <query> [--limit <n>] [--format json|table]
+  ${CLI_NAME} bookmark add --type <session|message|range> --session <id> --name <name> [options]
+  ${CLI_NAME} bookmark list [--format json|table] [--session <id>] [--type <type>] [--tag <tag>]
+  ${CLI_NAME} bookmark get <id>
+  ${CLI_NAME} bookmark delete <id>
+  ${CLI_NAME} bookmark search <query> [--limit <n>] [--format json|table]
 
-  codex-agent token create --name <name> [--permissions <csv>] [--expires-at <iso8601>]
-  codex-agent token list [--format json|table]
-  codex-agent token revoke <id>
-  codex-agent token rotate <id>
+  ${CLI_NAME} token create --name <name> [--permissions <csv>] [--expires-at <iso8601>]
+  ${CLI_NAME} token list [--format json|table]
+  ${CLI_NAME} token revoke <id>
+  ${CLI_NAME} token rotate <id>
 
-  codex-agent files list <session-id> [--format json|table]
-  codex-agent files patches <session-id> [--format json|table]
-  codex-agent files find <path> [--format json|table]
-  codex-agent files rebuild
+  ${CLI_NAME} files list <session-id> [--format json|table]
+  ${CLI_NAME} files patches <session-id> [--format json|table]
+  ${CLI_NAME} files find <path> [--format json|table]
+  ${CLI_NAME} files rebuild
 
-  codex-agent queue create <name> --project <path>
-  codex-agent queue add <name> --prompt <prompt> [--image FILE]...
-  codex-agent queue show <name>
-  codex-agent queue list [--format json|table]
-  codex-agent queue pause <name>
-  codex-agent queue resume <name>
-  codex-agent queue delete <name>
-  codex-agent queue update <name> <command-id> [--prompt <text>] [--status <status>]
-  codex-agent queue remove <name> <command-id>
-  codex-agent queue move <name> --from <n> --to <n>
-  codex-agent queue mode <name> <command-id> --mode <auto|manual>
-  codex-agent queue run <name> [--image FILE]...
+  ${CLI_NAME} queue create <name> --project <path>
+  ${CLI_NAME} queue add <name> --prompt <prompt> [--image FILE]...
+  ${CLI_NAME} queue show <name>
+  ${CLI_NAME} queue list [--format json|table]
+  ${CLI_NAME} queue pause <name>
+  ${CLI_NAME} queue resume <name>
+  ${CLI_NAME} queue delete <name>
+  ${CLI_NAME} queue update <name> <command-id> [--prompt <text>] [--status <status>]
+  ${CLI_NAME} queue remove <name> <command-id>
+  ${CLI_NAME} queue move <name> --from <n> --to <n>
+  ${CLI_NAME} queue mode <name> <command-id> --mode <auto|manual>
+  ${CLI_NAME} queue run <name> [--image FILE]...
 
-  codex-agent model check --model <model> [--json] [--timeout-ms <ms>]
+  ${CLI_NAME} model check --model <model> [--json] [--timeout-ms <ms>]
 
-  codex-agent graphql|gql <query|command> [--param <json|path>] [--variables <json|path>]
+  ${CLI_NAME} graphql <query|command> [--param <json|path>] [--variables <json|path>]
 
-  codex-agent version [--json] [--include-git]
+  ${CLI_NAME} version [--json] [--include-git]
 
 Session list options:
   --source <cli|vscode|exec>  Filter by session source
@@ -14475,7 +14476,6 @@ async function run(argv) {
       await handleVersion(args.slice(1));
       break;
     case "graphql":
-    case "gql":
       await runGraphqlCli(args.slice(1));
       break;
     default:

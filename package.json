@@ -6,6 +6,9 @@
   "main": "dist/main.js",
   "module": "dist/main.js",
   "types": "dist/main.d.ts",
+  "bin": {
+    "codex-agent": "./src/bin.ts"
+  },
   "exports": {
     ".": {
       "types": "./dist/main.d.ts",

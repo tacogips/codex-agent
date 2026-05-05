@@ -71,7 +71,7 @@ Top-level command groups:
 - `token`: create/list/revoke/rotate
 - `files`: list/find/rebuild
 - `model`: verify Codex auth state and a requested model with an active probe
-- `graphql` / `gql`: execute a GraphQL document or shorthand command
+- `graphql`: execute a GraphQL document or shorthand command
 - `version`: inspect installed tool versions as human-readable text or JSON
 
 Examples:
@@ -95,9 +95,7 @@ bun run src/bin.ts queue run nightly --model gpt-5
 bun run src/bin.ts model check --model gpt-5.4 --json
 
 # Execute a shorthand GraphQL command locally
-bun run src/bin.ts graphql session.list --param '{"limit": 5}'
-# Backward-compatible alias
-bun run src/bin.ts gql session.list --param '{"limit": 5}'
+codex-agent graphql session.list --param '{"limit": 5}'
 
 # Tool versions for system status UI
 bun run src/bin.ts version --json

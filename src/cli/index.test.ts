@@ -11,16 +11,26 @@ afterEach(() => {
 });
 
 describe("run", () => {
-  it.each(["graphql", "gql"])("dispatches the %s command", async (command) => {
+  it("dispatches the graphql command", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    await run(["bun", "src/bin.ts", command, "query { ping }"]);
+    await run(["bun", "src/bin.ts", "graphql", "query { ping }"]);
 
     const rendered = logSpy.mock.calls[0]?.[0];
     expect(typeof rendered).toBe("string");
     expect(JSON.parse(rendered as string)).toEqual({
       data: { ping: true },
     });
+  });
+
+  it("documents codex-agent graphql in help output", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await run(["bun", "codex-agent", "--help"]);
+
+    const rendered = logSpy.mock.calls[0]?.[0];
+    expect(typeof rendered).toBe("string");
+    expect(rendered as string).toContain("codex-agent graphql <query|command>");
   });
 });
 
