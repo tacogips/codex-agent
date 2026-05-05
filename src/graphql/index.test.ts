@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { executeGraphqlDocument, executeGraphqlOperation } from "./index";
@@ -84,6 +91,61 @@ describe("executeGraphqlDocument", () => {
     const payload = data["command"] as Record<string, unknown>;
     expect(payload["name"]).toBe("demo-group");
     expect(payload["id"]).toBeTypeOf("string");
+  });
+
+  it("passes validated environment variables to session.run", async () => {
+    const fixtureDir = await makeTempDir("codex-agent-graphql-env-");
+    const envLogPath = join(fixtureDir, "env.log");
+    const fakeCodexPath = join(fixtureDir, "fake-codex-env.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        `printf '%s' "\${CODEX_AGENT_GRAPHQL_ENV:-}" > '${envLogPath}'`,
+        'printf \'%s\\n\' \'{"timestamp":"2026-03-16T00:00:00.000Z","type":"session_meta","payload":{"meta":{"id":"graphql-env-session","timestamp":"2026-03-16T00:00:00.000Z","cwd":"/tmp/demo","originator":"codex","cli_version":"1.0.0","source":"exec"}}}\'',
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    const result = await executeGraphqlDocument({
+      document:
+        'mutation ($param: JSON) { command(name: "session.run", params: $param) }',
+      variables: {
+        param: {
+          prompt: "hello",
+          codexBinary: fakeCodexPath,
+          environmentVariables: {
+            CODEX_AGENT_GRAPHQL_ENV: "graphql-env-value",
+          },
+        },
+      },
+    });
+
+    expect(result.errors).toBeUndefined();
+    const envValue = await readFile(envLogPath, "utf-8");
+    expect(envValue).toBe("graphql-env-value");
+  });
+
+  it("rejects non-string environment variable values", async () => {
+    const result = await executeGraphqlDocument({
+      document:
+        'mutation ($param: JSON) { command(name: "session.run", params: $param) }',
+      variables: {
+        param: {
+          prompt: "hello",
+          environmentVariables: {
+            CODEX_AGENT_GRAPHQL_ENV: 123,
+          },
+        },
+      },
+    });
+
+    expect(result.errors?.[0]?.message).toBe(
+      "environmentVariables.CODEX_AGENT_GRAPHQL_ENV must be a string",
+    );
   });
 
   it("streams rollout lines through a session.watch subscription", async () => {

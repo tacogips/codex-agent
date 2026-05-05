@@ -57,11 +57,11 @@ describe("MockCodexSessionRunner", () => {
     const running = await runner.startSession({ prompt: "start" });
     const emittedMessages: MockCodexSessionStreamChunk[] = [];
     const completion = new Promise<MockCodexSessionResult>((resolve) => {
-      running.once("complete", (result: unknown) => {
-        resolve(result as MockCodexSessionResult);
+      running.once("complete", (result: MockCodexSessionResult) => {
+        resolve(result);
       });
     });
-    running.on("message", (message: unknown) => {
+    running.on("message", (message: MockCodexSessionStreamChunk) => {
       emittedMessages.push(message);
     });
 

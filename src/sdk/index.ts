@@ -21,8 +21,10 @@ export type {
 export { SessionRunner, RunningSession } from "./session-runner";
 export type {
   MockCodexSessionConfig,
+  MockCodexProcessOptions,
   MockCodexResumeOptions,
   MockCodexSessionResult,
+  MockCodexSessionCharStreamChunk,
   MockCodexSessionStreamChunk,
   MockCodexSessionResultInput,
   MockCodexRunningSessionOptions,

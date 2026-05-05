@@ -11837,6 +11837,9 @@ class MockCodexRunningSession extends EventEmitter3 {
   get sessionId() {
     return this.#sessionId;
   }
+  getState() {
+    return { status: this.#closed ? "completed" : "running" };
+  }
   pushMessage(message) {
     this.#flushInitialMessages();
     this.#pushMessage(message);
@@ -13434,6 +13437,21 @@ function readStringArray3(record, key) {
   }
   return value;
 }
+function readStringRecord(record, key) {
+  const value = record[key];
+  if (value === undefined) {
+    return;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new GraphQLError(`${key} must be a string-keyed JSON object`);
+  }
+  const entries = Object.entries(value);
+  const invalid = entries.find(([, entryValue]) => typeof entryValue !== "string");
+  if (invalid !== undefined) {
+    throw new GraphQLError(`${key}.${invalid[0]} must be a string`);
+  }
+  return Object.fromEntries(entries);
+}
 function requireString(record, key) {
   const value = readString7(record, key);
   if (value === undefined || value.trim().length === 0) {
@@ -13497,6 +13515,10 @@ function readProcessOptions(record) {
       throw new GraphQLError("streamGranularity must be event or char");
     }
     options.streamGranularity = streamGranularity;
+  }
+  const environmentVariables = readStringRecord(record, "environmentVariables");
+  if (environmentVariables !== undefined) {
+    options.environmentVariables = environmentVariables;
   }
   const codexBinary = readString7(record, "codexBinary");
   if (codexBinary !== undefined)
@@ -13633,8 +13655,9 @@ async function handleSessionSearchTranscript(params, context) {
 async function handleSessionRun(params) {
   const input = toRecord7(params);
   const prompt = requireString(input, "prompt");
-  const pm = new ProcessManager(readProcessOptions(input).codexBinary);
-  const result = await pm.spawnExec(prompt, readProcessOptions(input));
+  const options = readProcessOptions(input);
+  const pm = new ProcessManager(options.codexBinary);
+  const result = await pm.spawnExec(prompt, options);
   return {
     sessionId: extractSessionId(result.lines),
     exitCode: result.exitCode,
@@ -13643,13 +13666,15 @@ async function handleSessionRun(params) {
 }
 async function handleSessionResume(params) {
   const input = toRecord7(params);
-  const pm = new ProcessManager(readProcessOptions(input).codexBinary);
-  return pm.spawnResume(requireString(input, "id"), readProcessOptions(input), readString7(input, "prompt"));
+  const options = readProcessOptions(input);
+  const pm = new ProcessManager(options.codexBinary);
+  return pm.spawnResume(requireString(input, "id"), options, readString7(input, "prompt"));
 }
 async function handleSessionFork(params) {
   const input = toRecord7(params);
-  const pm = new ProcessManager(readProcessOptions(input).codexBinary);
-  return pm.spawnFork(requireString(input, "id"), readNumber5(input, "nthMessage"), readProcessOptions(input));
+  const options = readProcessOptions(input);
+  const pm = new ProcessManager(options.codexBinary);
+  return pm.spawnFork(requireString(input, "id"), readNumber5(input, "nthMessage"), options);
 }
 async function handleSessionWatch(params, context) {
   const input = toRecord7(params);

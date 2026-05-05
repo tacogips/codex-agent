@@ -68,6 +68,7 @@ import { ProcessManager } from "../process/index";
 import { getToolVersions } from "../sdk/index";
 import type {
   ApprovalMode,
+  CodexEnvironmentVariables,
   CodexProcessOptions,
   SandboxMode,
   StreamGranularity,
@@ -403,6 +404,28 @@ function readStringArray(
   return value as readonly string[];
 }
 
+function readStringRecord(
+  record: RecordLike,
+  key: string,
+): Readonly<Record<string, string>> | undefined {
+  const value = record[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new GraphQLError(`${key} must be a string-keyed JSON object`);
+  }
+
+  const entries = Object.entries(value);
+  const invalid = entries.find(
+    ([, entryValue]) => typeof entryValue !== "string",
+  );
+  if (invalid !== undefined) {
+    throw new GraphQLError(`${key}.${invalid[0]} must be a string`);
+  }
+  return Object.fromEntries(entries) as Readonly<Record<string, string>>;
+}
+
 function requireString(record: RecordLike, key: string): string {
   const value = readString(record, key);
   if (value === undefined || value.trim().length === 0) {
@@ -447,6 +470,7 @@ function readProcessOptions(record: RecordLike): CodexProcessOptions {
     images?: readonly string[];
     configOverrides?: readonly string[];
     streamGranularity?: StreamGranularity;
+    environmentVariables?: CodexEnvironmentVariables;
     codexBinary?: string;
   } = {};
   const model = readString(record, "model");
@@ -483,6 +507,10 @@ function readProcessOptions(record: RecordLike): CodexProcessOptions {
       throw new GraphQLError("streamGranularity must be event or char");
     }
     options.streamGranularity = streamGranularity;
+  }
+  const environmentVariables = readStringRecord(record, "environmentVariables");
+  if (environmentVariables !== undefined) {
+    options.environmentVariables = environmentVariables;
   }
   const codexBinary = readString(record, "codexBinary");
   if (codexBinary !== undefined) options.codexBinary = codexBinary;
@@ -672,8 +700,9 @@ async function handleSessionSearchTranscript(
 async function handleSessionRun(params: unknown): Promise<unknown> {
   const input = toRecord(params);
   const prompt = requireString(input, "prompt");
-  const pm = new ProcessManager(readProcessOptions(input).codexBinary);
-  const result = await pm.spawnExec(prompt, readProcessOptions(input));
+  const options = readProcessOptions(input);
+  const pm = new ProcessManager(options.codexBinary);
+  const result = await pm.spawnExec(prompt, options);
   return {
     sessionId: extractSessionId(result.lines),
     exitCode: result.exitCode,
@@ -683,21 +712,23 @@ async function handleSessionRun(params: unknown): Promise<unknown> {
 
 async function handleSessionResume(params: unknown): Promise<unknown> {
   const input = toRecord(params);
-  const pm = new ProcessManager(readProcessOptions(input).codexBinary);
+  const options = readProcessOptions(input);
+  const pm = new ProcessManager(options.codexBinary);
   return pm.spawnResume(
     requireString(input, "id"),
-    readProcessOptions(input),
+    options,
     readString(input, "prompt"),
   );
 }
 
 async function handleSessionFork(params: unknown): Promise<unknown> {
   const input = toRecord(params);
-  const pm = new ProcessManager(readProcessOptions(input).codexBinary);
+  const options = readProcessOptions(input);
+  const pm = new ProcessManager(options.codexBinary);
   return pm.spawnFork(
     requireString(input, "id"),
     readNumber(input, "nthMessage"),
-    readProcessOptions(input),
+    options,
   );
 }
 

@@ -1,30 +1,33 @@
 import { EventEmitter } from "node:events";
+import type {
+  ApprovalMode,
+  CodexEnvironmentVariables,
+  SandboxMode,
+  StreamGranularity,
+} from "../process/types";
+import type { RolloutLine } from "../types/rollout";
 
-export interface MockCodexSessionConfig {
-  readonly prompt: string;
+export interface MockCodexProcessOptions {
   readonly resumeSessionId?: string;
   readonly cwd?: string;
-  readonly sandbox?: string;
-  readonly approvalMode?: string;
+  readonly sandbox?: SandboxMode;
+  readonly approvalMode?: ApprovalMode;
   readonly fullAuto?: boolean;
   readonly model?: string;
   readonly additionalArgs?: readonly string[];
   readonly images?: readonly string[];
-  readonly streamGranularity?: "event" | "char";
-  readonly environmentVariables?: Readonly<Record<string, string | undefined>>;
+  readonly streamGranularity?: StreamGranularity;
+  readonly environmentVariables?: CodexEnvironmentVariables;
 }
 
-export interface MockCodexResumeOptions {
-  readonly cwd?: string;
-  readonly sandbox?: string;
-  readonly approvalMode?: string;
-  readonly fullAuto?: boolean;
-  readonly model?: string;
-  readonly additionalArgs?: readonly string[];
-  readonly images?: readonly string[];
-  readonly streamGranularity?: "event" | "char";
-  readonly environmentVariables?: Readonly<Record<string, string | undefined>>;
+export interface MockCodexSessionConfig extends MockCodexProcessOptions {
+  readonly prompt: string;
 }
+
+export type MockCodexResumeOptions = Omit<
+  MockCodexProcessOptions,
+  "resumeSessionId"
+>;
 
 export interface MockCodexSessionResult {
   readonly success: boolean;
@@ -36,7 +39,18 @@ export interface MockCodexSessionResult {
   };
 }
 
-export type MockCodexSessionStreamChunk = unknown;
+export interface MockCodexSessionCharStreamChunk {
+  readonly kind: "char";
+  readonly char: string;
+  readonly sessionId: string;
+  readonly timestamp: string;
+  readonly sourceType: RolloutLine["type"];
+  readonly source: RolloutLine;
+}
+
+export type MockCodexSessionStreamChunk =
+  | RolloutLine
+  | MockCodexSessionCharStreamChunk;
 
 export interface MockCodexSessionResultInput {
   readonly success?: boolean;
