@@ -33,9 +33,15 @@ export interface MockCodexResumeSessionCall {
 
 export class MockCodexRunningSession extends EventEmitter {
   readonly #sessionId: string;
+  readonly #initialMessages: SessionStreamChunk[];
+  readonly #autoComplete: boolean;
+  readonly #autoCompleteResult: MockCodexSessionResultInput | undefined;
   readonly #queue: SessionStreamChunk[] = [];
   #closed = false;
   #messageCount = 0;
+  #activationScheduled = false;
+  #activated = false;
+  #initialMessagesFlushed = false;
   #waiter: (() => void) | undefined;
   #completionResolver: ((result: SessionResult) => void) | undefined;
   readonly #completion: Promise<SessionResult>;
@@ -43,17 +49,17 @@ export class MockCodexRunningSession extends EventEmitter {
   constructor(options: MockCodexRunningSessionOptions) {
     super();
     this.#sessionId = options.sessionId;
+    this.#initialMessages = [...(options.messages ?? [])];
+    this.#autoComplete = options.autoComplete !== false;
+    this.#autoCompleteResult = options.result;
     this.#completion = new Promise<SessionResult>((resolve) => {
       this.#completionResolver = resolve;
     });
-    for (const message of options.messages ?? []) {
-      this.pushMessage(message);
-    }
-    if (options.autoComplete !== false) {
-      queueMicrotask(() => {
-        this.complete(options.result);
-      });
-    }
+    this.on("newListener", (eventName) => {
+      if (eventName === "message" || eventName === "complete") {
+        this.#scheduleActivation();
+      }
+    });
   }
 
   get sessionId(): string {
@@ -61,28 +67,17 @@ export class MockCodexRunningSession extends EventEmitter {
   }
 
   pushMessage(message: SessionStreamChunk): void {
-    if (this.#closed) {
-      throw new Error(`mock codex session '${this.#sessionId}' is closed`);
-    }
-    this.#messageCount += 1;
-    this.#queue.push(message);
-    this.emit("message", message);
-    this.#wake();
+    this.#flushInitialMessages();
+    this.#pushMessage(message);
   }
 
   complete(result: MockCodexSessionResultInput = {}): void {
-    if (this.#closed) {
-      return;
-    }
-    this.#closed = true;
-    const completed = buildSessionResult(result, this.#messageCount);
-    this.emit("complete", completed);
-    this.#completionResolver?.(completed);
-    this.#completionResolver = undefined;
-    this.#wake();
+    this.#flushInitialMessages();
+    this.#complete(result);
   }
 
   async *messages(): AsyncGenerator<SessionStreamChunk, void, undefined> {
+    this.#activate();
     while (!this.#closed || this.#queue.length > 0) {
       while (this.#queue.length > 0) {
         const message = this.#queue.shift();
@@ -100,11 +95,69 @@ export class MockCodexRunningSession extends EventEmitter {
   }
 
   async waitForCompletion(): Promise<SessionResult> {
+    this.#activate();
     return await this.#completion;
   }
 
   async cancel(): Promise<void> {
     this.complete({ success: false, exitCode: 130 });
+  }
+
+  #scheduleActivation(): void {
+    if (this.#activated || this.#activationScheduled) {
+      return;
+    }
+    this.#activationScheduled = true;
+    queueMicrotask(() => {
+      this.#activationScheduled = false;
+      this.#activate();
+    });
+  }
+
+  #activate(): void {
+    if (this.#activated) {
+      return;
+    }
+    this.#activated = true;
+    this.#flushInitialMessages();
+    if (this.#autoComplete) {
+      this.#complete(this.#autoCompleteResult);
+    }
+  }
+
+  #flushInitialMessages(): void {
+    if (this.#initialMessagesFlushed) {
+      return;
+    }
+    this.#initialMessagesFlushed = true;
+    for (const message of this.#initialMessages) {
+      if (this.#closed) {
+        return;
+      }
+      this.#pushMessage(message);
+    }
+  }
+
+  #pushMessage(message: SessionStreamChunk): void {
+    if (this.#closed) {
+      throw new Error(`mock codex session '${this.#sessionId}' is closed`);
+    }
+    this.#messageCount += 1;
+    this.#queue.push(message);
+    this.emit("message", message);
+    this.#wake();
+  }
+
+  #complete(result: MockCodexSessionResultInput = {}): void {
+    if (this.#closed) {
+      return;
+    }
+    this.#closed = true;
+    const completed = buildSessionResult(result, this.#messageCount);
+    this.emit("complete", completed);
+    this.#completionResolver?.(completed);
+    this.#completionResolver = undefined;
+    this.#wake();
   }
 
   #wake(): void {

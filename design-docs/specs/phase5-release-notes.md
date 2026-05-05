@@ -10,7 +10,7 @@ Phase 5 closes major parity gaps with `claude-code-agent` across bookmark manage
 - Token/permission subsystem: `src/auth/*`
 - File-change index subsystem: `src/file-changes/*`
 - Activity + markdown subsystem: `src/activity/*`, `src/markdown/*`
-- Group/queue control-surface expansion: `src/group/*`, `src/queue/*`, `src/server/handlers/*`, `src/cli/index.ts`
+- Group/queue control-surface expansion: `src/group/*`, `src/queue/*`, `src/cli/index.ts`
 - SDK compatibility layer: `src/sdk/*`
 
 ## API and CLI Changes
@@ -22,11 +22,9 @@ Phase 5 closes major parity gaps with `claude-code-agent` across bookmark manage
 - Expanded CLI controls:
   - `group show/pause/resume/delete`
   - `queue show/pause/resume/delete/update/remove/move/mode`
-- New REST routes:
-  - `/api/files/*`
-  - `/api/groups/:id/pause|resume`
-  - `/api/queues/:id/pause|resume`
-  - `/api/queues/:id/commands/*`
+- Local GraphQL command execution:
+  - `codex-agent graphql <query|command>`
+  - `codex-agent gql <query|command>` remains available as a compatibility alias
 
 ## Validation
 

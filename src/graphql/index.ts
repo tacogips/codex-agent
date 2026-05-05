@@ -52,7 +52,6 @@ import {
 import {
   createToken,
   DEFAULT_TOKEN_PERMISSIONS,
-  hasPermission,
   listTokens,
   normalizePermissions,
   revokeToken,
@@ -64,26 +63,19 @@ import {
   getSessionFilePatchHistory,
   rebuildFileIndex,
 } from "../file-changes/index";
-import { startDaemon, stopDaemon, getDaemonStatus } from "../daemon/index";
 import { RolloutWatcher } from "../rollout/index";
 import { ProcessManager } from "../process/index";
 import { getToolVersions } from "../sdk/index";
-import type { ServerHandle } from "../server/types";
-import { resolveServerConfig } from "../server/types";
 import type {
   ApprovalMode,
   CodexProcessOptions,
   SandboxMode,
   StreamGranularity,
 } from "../process/types";
-import type { Permission } from "../auth/index";
-import type { AuthContext } from "../server/auth";
 
 export interface GraphqlExecutionContext {
   readonly codexHome?: string | undefined;
   readonly configDir?: string | undefined;
-  readonly authContext?: AuthContext | undefined;
-  readonly serverMode?: boolean | undefined;
 }
 
 export interface GraphqlExecutionRequest {
@@ -182,35 +174,6 @@ export function getGraphqlSchema(): GraphQLSchema {
   return SCHEMA;
 }
 
-const activeServerHandles = new Set<ServerHandle>();
-let hasServerShutdownHooks = false;
-
-function ensureServerShutdownHooks(): void {
-  if (hasServerShutdownHooks) {
-    return;
-  }
-
-  const shutdown = (): void => {
-    for (const handle of activeServerHandles) {
-      try {
-        handle.stop();
-      } catch {
-        // Best-effort cleanup during process shutdown.
-      }
-    }
-    activeServerHandles.clear();
-  };
-
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-  hasServerShutdownHooks = true;
-}
-
-function trackServerHandle(handle: ServerHandle): void {
-  activeServerHandles.add(handle);
-  ensureServerShutdownHooks();
-}
-
 function toErrorResult(error: GraphQLError): ExecutionResult {
   return {
     errors: [error],
@@ -271,9 +234,6 @@ async function executeCommand(
   params: unknown,
   context: CommandContext,
 ): Promise<unknown> {
-  assertCommandAvailable(name, context);
-  assertPermission(name, context.authContext);
-
   switch (name) {
     case "version.get":
       return handleVersionGet(params);
@@ -359,14 +319,6 @@ async function executeCommand(
       return handleFilesFind(params, context);
     case "files.rebuild":
       return rebuildFileIndex(context.configDir, context.codexHome);
-    case "daemon.start":
-      return handleDaemonStart(params, context);
-    case "daemon.stop":
-      return stopDaemon(context.configDir);
-    case "daemon.status":
-      return getDaemonStatus(context.configDir);
-    case "server.start":
-      return handleServerStart(params, context);
     default:
       throw new GraphQLError(`Unknown GraphQL command: ${name}`);
   }
@@ -377,9 +329,6 @@ async function subscribeCommand(
   params: unknown,
   context: CommandContext,
 ): Promise<AsyncIterable<unknown>> {
-  assertCommandAvailable(name, context);
-  assertPermission(name, context.authContext);
-
   switch (name) {
     case "session.watch":
       return handleSessionWatch(params, context);
@@ -389,105 +338,6 @@ async function subscribeCommand(
       );
   }
 }
-
-function assertCommandAvailable(name: string, context: CommandContext): void {
-  if (!context.serverMode) {
-    return;
-  }
-
-  if (SERVER_EXPOSED_COMMANDS.has(name)) {
-    return;
-  }
-
-  throw new GraphQLError(
-    `Command is not available over the GraphQL server: ${name}`,
-  );
-}
-
-function assertPermission(
-  name: string,
-  authContext: AuthContext | undefined,
-): void {
-  const required = requiredPermissionForCommand(name);
-  if (required === undefined || authContext === undefined) {
-    return;
-  }
-  if (!hasPermission(authContext.permissions, required)) {
-    throw new GraphQLError(`Forbidden: missing permission ${required}`);
-  }
-}
-
-function requiredPermissionForCommand(name: string): Permission | undefined {
-  if (
-    name === "session.list" ||
-    name === "session.show" ||
-    name === "session.search" ||
-    name === "session.searchTranscript" ||
-    name === "session.watch" ||
-    name.startsWith("files.")
-  ) {
-    return "session:read";
-  }
-  if (
-    name === "session.run" ||
-    name === "session.resume" ||
-    name === "session.fork"
-  ) {
-    return "session:create";
-  }
-  if (name.startsWith("group.")) {
-    return "group:*";
-  }
-  if (name.startsWith("queue.")) {
-    return "queue:*";
-  }
-  if (name.startsWith("bookmark.")) {
-    return "bookmark:*";
-  }
-  return undefined;
-}
-
-const SERVER_EXPOSED_COMMANDS = new Set<string>([
-  "version.get",
-  "session.list",
-  "session.show",
-  "session.search",
-  "session.searchTranscript",
-  "session.watch",
-  "session.run",
-  "session.resume",
-  "session.fork",
-  "group.list",
-  "group.create",
-  "group.show",
-  "group.add",
-  "group.remove",
-  "group.pause",
-  "group.resume",
-  "group.delete",
-  "group.run",
-  "queue.list",
-  "queue.create",
-  "queue.show",
-  "queue.add",
-  "queue.pause",
-  "queue.resume",
-  "queue.delete",
-  "queue.update",
-  "queue.remove",
-  "queue.move",
-  "queue.mode",
-  "queue.run",
-  "bookmark.add",
-  "bookmark.list",
-  "bookmark.get",
-  "bookmark.delete",
-  "bookmark.search",
-  "files.list",
-  "files.patches",
-  "files.find",
-  "files.rebuild",
-]);
 
 function parseJsonLiteral(ast: ValueNode): unknown {
   switch (ast.kind) {
@@ -1317,69 +1167,6 @@ async function handleFilesFind(
     configDir: context.configDir,
     codexHome: context.codexHome,
   });
-}
-
-async function handleDaemonStart(
-  params: unknown,
-  context: CommandContext,
-): Promise<unknown> {
-  const input = params === undefined ? {} : toRecord(params);
-  return startDaemon({
-    port: readNumber(input, "port"),
-    host: readString(input, "host"),
-    token: readString(input, "token"),
-    mode: readString(input, "mode") as "http" | "app-server" | undefined,
-    appServerUrl: readString(input, "appServerUrl"),
-    configDir: context.configDir,
-  });
-}
-
-async function handleServerStart(
-  params: unknown,
-  context: CommandContext,
-): Promise<unknown> {
-  const input = params === undefined ? {} : toRecord(params);
-  const transport = readString(input, "transport");
-  if (
-    transport !== undefined &&
-    transport !== "local-cli" &&
-    transport !== "app-server"
-  ) {
-    throw new GraphQLError("transport must be local-cli or app-server");
-  }
-
-  const overrides: Partial<{
-    port: number;
-    hostname: string;
-    token: string;
-    transport: "local-cli" | "app-server";
-    appServerUrl: string;
-    codexHome: string;
-    configDir: string;
-  }> = {};
-  const port = readNumber(input, "port");
-  if (port !== undefined) overrides.port = port;
-  const hostname = readString(input, "hostname");
-  if (hostname !== undefined) overrides.hostname = hostname;
-  const token = readString(input, "token");
-  if (token !== undefined) overrides.token = token;
-  if (transport !== undefined) overrides.transport = transport;
-  const appServerUrl = readString(input, "appServerUrl");
-  if (appServerUrl !== undefined) overrides.appServerUrl = appServerUrl;
-  if (context.codexHome !== undefined) overrides.codexHome = context.codexHome;
-  if (context.configDir !== undefined) overrides.configDir = context.configDir;
-
-  const config = resolveServerConfig(overrides);
-  const { startServer } = await import("../server/index");
-  const handle = startServer(config);
-  trackServerHandle(handle);
-  return {
-    hostname: handle.hostname,
-    port: handle.port,
-    startedAt: handle.startedAt.toISOString(),
-    transport: config.transport,
-    appServerUrl: config.appServerUrl,
-  };
 }
 
 function isAsyncIterable<T>(

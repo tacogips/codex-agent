@@ -3,7 +3,7 @@ import {
   MockCodexRunningSession,
   createMockCodexSessionRunner,
 } from "./mock-session-runner";
-import type { SessionStreamChunk } from "./session-runner";
+import type { SessionResult, SessionStreamChunk } from "./session-runner";
 import type { RolloutLine } from "../types/rollout";
 
 function assistantLine(message: string): RolloutLine {
@@ -26,6 +26,8 @@ describe("MockCodexSessionRunner", () => {
     const runner = createMockCodexSessionRunner({
       startSessions: [session],
     });
+    await Promise.resolve();
+    await Promise.resolve();
 
     const running = await runner.startSession({ prompt: "start" });
     const streamed: SessionStreamChunk[] = [];
@@ -38,6 +40,36 @@ describe("MockCodexSessionRunner", () => {
     expect(streamed).toEqual([assistantLine("hello")]);
     expect(result.success).toBe(true);
     expect(result.stats.messageCount).toBe(1);
+  });
+
+  test("emits queued messages and completion after session is returned", async () => {
+    const line = assistantLine("observable");
+    const session = new MockCodexRunningSession({
+      sessionId: "mock-codex-observable",
+      messages: [line],
+    });
+    const runner = createMockCodexSessionRunner({
+      startSessions: [session],
+    });
+
+    const running = await runner.startSession({ prompt: "start" });
+    const emittedMessages: SessionStreamChunk[] = [];
+    const completion = new Promise<SessionResult>((resolve) => {
+      running.once("complete", (result: unknown) => {
+        resolve(result as SessionResult);
+      });
+    });
+    running.on("message", (message: unknown) => {
+      emittedMessages.push(message as SessionStreamChunk);
+    });
+
+    await expect(completion).resolves.toMatchObject({
+      success: true,
+      stats: {
+        messageCount: 1,
+      },
+    });
+    expect(emittedMessages).toEqual([line]);
   });
 
   test("keeps stalled sessions open until completion is triggered", async () => {

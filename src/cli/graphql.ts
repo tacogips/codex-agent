@@ -45,7 +45,7 @@ export async function parseGraphqlCliArgs(
   const documentArg = args[0];
   if (documentArg === undefined || documentArg.trim().length === 0) {
     throw new Error(
-      "Usage: codex-agent gql <query|command> [--param <json|path>] [--variables <json|path>]",
+      "Usage: codex-agent graphql|gql <query|command> [--param <json|path>] [--variables <json|path>]",
     );
   }
 
@@ -184,7 +184,4 @@ const MUTATION_COMMANDS = new Set<string>([
   "token.revoke",
   "token.rotate",
   "files.rebuild",
-  "daemon.start",
-  "daemon.stop",
-  "server.start",
 ]);

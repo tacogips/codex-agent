@@ -64,7 +64,7 @@ describe("parseGraphqlCliArgs", () => {
   });
 
   it("loads variables from a JSON file path", async () => {
-    const dir = await makeTempDir("codex-agent-gql-vars-");
+    const dir = await makeTempDir("codex-agent-graphql-vars-");
     const path = join(dir, "vars.json");
     await writeFile(path, '{"limit":2}', "utf-8");
 
@@ -77,7 +77,7 @@ describe("parseGraphqlCliArgs", () => {
 
 describe("runGraphqlCli", () => {
   it("prints a GraphQL result for shorthand commands", async () => {
-    const codexHome = await makeTempDir("codex-agent-gql-home-");
+    const codexHome = await makeTempDir("codex-agent-graphql-home-");
     const sessionDir = join(codexHome, "sessions", "2026", "03", "16");
     await mkdir(sessionDir, { recursive: true });
     await writeFile(

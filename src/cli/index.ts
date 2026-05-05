@@ -48,15 +48,9 @@
  *   queue mode <name> <command-id> --mode <auto|manual>
  *   queue run <name> [--model M] [--sandbox S] [--full-auto] [--image FILE]...
  *
- *   server start [--port N] [--host H] [--token T] [--transport local-cli|app-server] [--app-server-url ws://...]
- *
- *   daemon start [--port N] [--host H] [--token T] [--mode http|app-server] [--app-server-url ws://...]
- *   daemon stop
- *   daemon status
- *
  *   model check --model <model> [--json] [--timeout-ms <ms>]
  *
- *   gql <query|command> [--param <json|path>] [--variables <json|path>]
+ *   graphql|gql <query|command> [--param <json|path>] [--variables <json|path>]
  *
  *   version [--json] [--include-git]
  */
@@ -113,9 +107,6 @@ import {
   findSessionsByFile,
   rebuildFileIndex,
 } from "../file-changes/index";
-import { startServer } from "../server/server";
-import { resolveServerConfig } from "../server/types";
-import { startDaemon, stopDaemon, getDaemonStatus } from "../daemon/manager";
 import {
   formatSessionTable,
   formatSessionDetail,
@@ -130,8 +121,6 @@ import type {
   ApprovalMode,
   StreamGranularity,
 } from "../process/types";
-import type { DaemonConfig } from "../daemon/types";
-import type { ServerConfig } from "../server/types";
 import type { BookmarkType } from "../bookmark/types";
 import { getToolVersions } from "../sdk/tool-versions";
 import { checkCodexModelAvailability } from "../sdk/model-availability";
@@ -187,15 +176,9 @@ Usage:
   codex-agent queue mode <name> <command-id> --mode <auto|manual>
   codex-agent queue run <name> [--image FILE]...
 
-  codex-agent server start [--port N] [--host H] [--token T] [--transport local-cli|app-server] [--app-server-url ws://...]
-
-  codex-agent daemon start [--port N] [--host H] [--token T] [--mode http|app-server] [--app-server-url ws://...]
-  codex-agent daemon stop
-  codex-agent daemon status
-
   codex-agent model check --model <model> [--json] [--timeout-ms <ms>]
 
-  codex-agent gql <query|command> [--param <json|path>] [--variables <json|path>]
+  codex-agent graphql|gql <query|command> [--param <json|path>] [--variables <json|path>]
 
   codex-agent version [--json] [--include-git]
 
@@ -214,12 +197,6 @@ Common process options:
   --char-delay-ms <n>         Delay per rendered char in ms (session run only, default: 8)
   --image <path>              Attach image(s) to prompt (repeatable)
 
-Server options:
-  --port <n>                  Port number (default: 3100, env: CODEX_AGENT_PORT)
-  --host <host>               Hostname (default: 127.0.0.1, env: CODEX_AGENT_HOST)
-  --token <token>             Auth token (env: CODEX_AGENT_TOKEN)
-  --transport <mode>          local-cli | app-server (env: CODEX_AGENT_TRANSPORT)
-  --app-server-url <url>      WebSocket URL for app-server transport
 `;
 
 export async function run(argv: readonly string[]): Promise<void> {
@@ -253,18 +230,13 @@ export async function run(argv: readonly string[]): Promise<void> {
     case "files":
       await handleFiles(action, rest);
       break;
-    case "server":
-      await handleServer(action, rest);
-      break;
-    case "daemon":
-      await handleDaemon(action, rest);
-      break;
     case "model":
       await handleModel(action, rest);
       break;
     case "version":
       await handleVersion(args.slice(1));
       break;
+    case "graphql":
     case "gql":
       await runGraphqlCli(args.slice(1));
       break;
@@ -1833,106 +1805,6 @@ async function handleQueueRun(args: readonly string[]): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Server commands
-// ---------------------------------------------------------------------------
-
-async function handleServer(
-  action: string | undefined,
-  args: readonly string[],
-): Promise<void> {
-  if (action !== "start") {
-    console.error(`Unknown server action: ${action ?? "(none)"}`);
-    console.log(USAGE);
-    process.exitCode = 1;
-    return;
-  }
-
-  let config: ServerConfig;
-  try {
-    config = resolveServerConfig(parseServerStartArgs(args));
-  } catch (err: unknown) {
-    console.error(
-      `Invalid server options: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    process.exitCode = 1;
-    return;
-  }
-
-  const handle = startServer(config);
-  console.log(`Server listening on http://${handle.hostname}:${handle.port}`);
-
-  // Keep alive until SIGINT/SIGTERM
-  await new Promise<void>((resolve) => {
-    const shutdown = (): void => {
-      console.log("\nShutting down server...");
-      handle.stop();
-      resolve();
-    };
-    process.on("SIGINT", shutdown);
-    process.on("SIGTERM", shutdown);
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Daemon commands
-// ---------------------------------------------------------------------------
-
-async function handleDaemon(
-  action: string | undefined,
-  args: readonly string[],
-): Promise<void> {
-  switch (action) {
-    case "start": {
-      const daemonConfig = parseDaemonStartArgs(args);
-      try {
-        const info = await startDaemon(daemonConfig);
-        console.log(
-          `Daemon started (pid: ${info.pid}, port: ${info.port}, mode: ${info.mode})`,
-        );
-      } catch (err: unknown) {
-        console.error(
-          `Failed to start daemon: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        process.exitCode = 1;
-      }
-      break;
-    }
-    case "stop": {
-      const stopped = await stopDaemon();
-      if (stopped) {
-        console.log("Daemon stopped.");
-      } else {
-        console.log("No daemon is running.");
-      }
-      break;
-    }
-    case "status": {
-      const result = await getDaemonStatus();
-      switch (result.status) {
-        case "running":
-          console.log(
-            `Daemon is running (pid: ${result.info!.pid}, port: ${result.info!.port}, started: ${result.info!.startedAt})`,
-          );
-          break;
-        case "stopped":
-          console.log("Daemon is not running.");
-          break;
-        case "stale":
-          console.log(
-            `Daemon PID file is stale (pid: ${result.info!.pid} no longer running).`,
-          );
-          break;
-      }
-      break;
-    }
-    default:
-      console.error(`Unknown daemon action: ${action ?? "(none)"}`);
-      console.log(USAGE);
-      process.exitCode = 1;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Arg parsing helpers
 // ---------------------------------------------------------------------------
 
@@ -1942,50 +1814,6 @@ interface ListArgs {
   branch?: string | undefined;
   limit: number;
   format: "table" | "json";
-}
-
-export interface ServerStartArgs {
-  port?: number;
-  hostname?: string;
-  token?: string;
-  transport?: ServerConfig["transport"];
-  appServerUrl?: string;
-}
-
-export function parseServerStartArgs(args: readonly string[]): ServerStartArgs {
-  const portStr = getArgValue(args, "--port");
-  const host = getArgValue(args, "--host");
-  const token = getArgValue(args, "--token");
-  const transport = getArgValue(args, "--transport");
-  const appServerUrl = getArgValue(args, "--app-server-url");
-
-  const parsed: ServerStartArgs = {};
-  if (portStr !== undefined) parsed.port = parseInt(portStr, 10) || 3100;
-  if (host !== undefined) parsed.hostname = host;
-  if (token !== undefined) parsed.token = token;
-  if (transport === "local-cli" || transport === "app-server") {
-    parsed.transport = transport;
-  }
-  if (appServerUrl !== undefined) parsed.appServerUrl = appServerUrl;
-  return parsed;
-}
-
-function parseDaemonStartArgs(args: readonly string[]): DaemonConfig {
-  const portStr = getArgValue(args, "--port");
-  const host = getArgValue(args, "--host");
-  const token = getArgValue(args, "--token");
-  const modeRaw = getArgValue(args, "--mode");
-  const appServerUrl = getArgValue(args, "--app-server-url");
-
-  return {
-    ...(portStr !== undefined ? { port: parseInt(portStr, 10) || 3100 } : {}),
-    ...(host !== undefined ? { host } : {}),
-    ...(token !== undefined ? { token } : {}),
-    ...(modeRaw === "http" || modeRaw === "app-server"
-      ? { mode: modeRaw }
-      : {}),
-    ...(appServerUrl !== undefined ? { appServerUrl } : {}),
-  };
 }
 
 function parseListArgs(args: readonly string[]): ListArgs {

@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "vitest";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { runAgent as runAgentType, AgentEvent } from "./agent-runner";
@@ -24,11 +31,16 @@ describe("dist runtime runAgent", () => {
     expect(typeof distModule.getToolVersions).toBe("function");
     expect(typeof distModule.getCodexUsageStats).toBe("function");
     expect(typeof distModule.toNormalizedEvents).toBe("function");
+    expect(typeof distModule.MockCodexRunningSession).toBe("function");
+    expect(typeof distModule.MockCodexSessionRunner).toBe("function");
+    expect(typeof distModule.createMockCodexSessionRunner).toBe("function");
     expect(typeof distModule.runCli).toBe("function");
   });
 
   test("uses ExecCommandEnd aggregated_output from dist entrypoint", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-dist-exec-output-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-dist-exec-output-"),
+    );
     createdDirs.push(fixtureDir);
     const rolloutPath = join(fixtureDir, "rollout-exec-output.jsonl");
     await writeFile(
@@ -71,7 +83,9 @@ describe("dist runtime runAgent", () => {
   });
 
   test("emits session.message for exec-stream item.completed agent_message", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-dist-runtime-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-dist-runtime-"),
+    );
     createdDirs.push(fixtureDir);
 
     const fakeCodexPath = join(fixtureDir, "fake-codex-exec-stream.sh");
@@ -80,9 +94,9 @@ describe("dist runtime runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"exec-thread-001\"}'",
-        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"hello from dist runtime\"}}'",
-        "printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}'",
+        'printf \'%s\\n\' \'{"type":"thread.started","thread_id":"exec-thread-001"}\'',
+        'printf \'%s\\n\' \'{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"hello from dist runtime"}}\'',
+        'printf \'%s\\n\' \'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}\'',
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -129,7 +143,9 @@ describe("dist runtime runAgent", () => {
   });
 
   test("uses exec resume --json path from dist runtime", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-dist-runtime-resume-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-dist-runtime-resume-"),
+    );
     createdDirs.push(fixtureDir);
 
     const codexHome = join(fixtureDir, "codex-home");

@@ -10,7 +10,7 @@ It provides:
 - Bookmarking and search across sessions/messages
 - Token-based auth helpers
 - File-change indexing and lookup
-- HTTP server and daemon modes for integration
+- Local GraphQL command execution
 
 ## Requirements
 
@@ -70,10 +70,8 @@ Top-level command groups:
 - `bookmark`: add/list/get/delete/search
 - `token`: create/list/revoke/rotate
 - `files`: list/find/rebuild
-- `server`: start
-- `daemon`: start/stop/status
 - `model`: verify Codex auth state and a requested model with an active probe
-- `gql`: execute a GraphQL document or shorthand command
+- `graphql` / `gql`: execute a GraphQL document or shorthand command
 - `version`: inspect installed tool versions as human-readable text or JSON
 
 Examples:
@@ -93,18 +91,12 @@ bun run src/bin.ts queue create nightly --project /path/to/repo
 bun run src/bin.ts queue add nightly --prompt "Run checks and summarize failures"
 bun run src/bin.ts queue run nightly --model gpt-5
 
-# Start API server
-bun run src/bin.ts server start --host 127.0.0.1 --port 3100
-
-# Query the Yoga GraphQL endpoint exposed by the server
-curl http://127.0.0.1:3100/graphql \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"query { ping }"}'
-
 # Actively verify auth + model availability
 bun run src/bin.ts model check --model gpt-5.4 --json
 
 # Execute a shorthand GraphQL command locally
+bun run src/bin.ts graphql session.list --param '{"limit": 5}'
+# Backward-compatible alias
 bun run src/bin.ts gql session.list --param '{"limit": 5}'
 
 # Tool versions for system status UI
@@ -119,14 +111,12 @@ src/
   auth/          API token and permission handling
   bookmark/      Bookmark storage and search
   cli/           CLI parsing and text formatting
-  daemon/        Background daemon lifecycle
   file-changes/  Changed-file extraction and indexing
   group/         Session group orchestration
   markdown/      Markdown parsing and task extraction
   process/       Codex process execution management
   queue/         Prompt queue lifecycle and execution
   rollout/       Rollout log parsing and file watching
-  server/        HTTP/WebSocket server components
   session/       Session discovery and SQLite-backed lookup
   sdk/           Lightweight SDK/event abstractions
   types/         Shared strict TypeScript types
