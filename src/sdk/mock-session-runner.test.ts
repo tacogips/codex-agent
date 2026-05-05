@@ -2,8 +2,9 @@ import { describe, expect, test } from "vitest";
 import {
   MockCodexRunningSession,
   createMockCodexSessionRunner,
+  type MockCodexSessionResult,
+  type MockCodexSessionStreamChunk,
 } from "./mock-session-runner";
-import type { SessionResult, SessionStreamChunk } from "./session-runner";
 import type { RolloutLine } from "../types/rollout";
 
 function assistantLine(message: string): RolloutLine {
@@ -30,7 +31,7 @@ describe("MockCodexSessionRunner", () => {
     await Promise.resolve();
 
     const running = await runner.startSession({ prompt: "start" });
-    const streamed: SessionStreamChunk[] = [];
+    const streamed: MockCodexSessionStreamChunk[] = [];
     for await (const message of running.messages()) {
       streamed.push(message);
     }
@@ -53,14 +54,14 @@ describe("MockCodexSessionRunner", () => {
     });
 
     const running = await runner.startSession({ prompt: "start" });
-    const emittedMessages: SessionStreamChunk[] = [];
-    const completion = new Promise<SessionResult>((resolve) => {
+    const emittedMessages: MockCodexSessionStreamChunk[] = [];
+    const completion = new Promise<MockCodexSessionResult>((resolve) => {
       running.once("complete", (result: unknown) => {
-        resolve(result as SessionResult);
+        resolve(result as MockCodexSessionResult);
       });
     });
     running.on("message", (message: unknown) => {
-      emittedMessages.push(message as SessionStreamChunk);
+      emittedMessages.push(message);
     });
 
     await expect(completion).resolves.toMatchObject({
@@ -118,7 +119,7 @@ describe("MockCodexSessionRunner", () => {
         streamGranularity: "event",
       },
     );
-    const messages: SessionStreamChunk[] = [];
+    const messages: MockCodexSessionStreamChunk[] = [];
     for await (const message of running.messages()) {
       messages.push(message);
     }

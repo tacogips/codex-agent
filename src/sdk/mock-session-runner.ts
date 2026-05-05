@@ -1,10 +1,42 @@
 import { EventEmitter } from "node:events";
-import type { CodexProcessOptions } from "../process/types";
-import type {
-  SessionConfig,
-  SessionResult,
-  SessionStreamChunk,
-} from "./session-runner";
+
+export interface MockCodexSessionConfig {
+  readonly prompt: string;
+  readonly resumeSessionId?: string;
+  readonly cwd?: string;
+  readonly sandbox?: string;
+  readonly approvalMode?: string;
+  readonly fullAuto?: boolean;
+  readonly model?: string;
+  readonly additionalArgs?: readonly string[];
+  readonly images?: readonly string[];
+  readonly streamGranularity?: "event" | "char";
+  readonly environmentVariables?: Readonly<Record<string, string | undefined>>;
+}
+
+export interface MockCodexResumeOptions {
+  readonly cwd?: string;
+  readonly sandbox?: string;
+  readonly approvalMode?: string;
+  readonly fullAuto?: boolean;
+  readonly model?: string;
+  readonly additionalArgs?: readonly string[];
+  readonly images?: readonly string[];
+  readonly streamGranularity?: "event" | "char";
+  readonly environmentVariables?: Readonly<Record<string, string | undefined>>;
+}
+
+export interface MockCodexSessionResult {
+  readonly success: boolean;
+  readonly exitCode: number;
+  readonly stats: {
+    readonly startedAt: string;
+    readonly completedAt: string;
+    readonly messageCount: number;
+  };
+}
+
+export type MockCodexSessionStreamChunk = unknown;
 
 export interface MockCodexSessionResultInput {
   readonly success?: boolean;
@@ -16,35 +48,35 @@ export interface MockCodexSessionResultInput {
 
 export interface MockCodexRunningSessionOptions {
   readonly sessionId: string;
-  readonly messages?: readonly SessionStreamChunk[];
+  readonly messages?: readonly MockCodexSessionStreamChunk[];
   readonly result?: MockCodexSessionResultInput;
   readonly autoComplete?: boolean;
 }
 
 export interface MockCodexStartSessionCall {
-  readonly config: SessionConfig;
+  readonly config: MockCodexSessionConfig;
 }
 
 export interface MockCodexResumeSessionCall {
   readonly sessionId: string;
   readonly prompt?: string;
-  readonly options?: Omit<CodexProcessOptions, "codexBinary">;
+  readonly options?: MockCodexResumeOptions;
 }
 
 export class MockCodexRunningSession extends EventEmitter {
   readonly #sessionId: string;
-  readonly #initialMessages: SessionStreamChunk[];
+  readonly #initialMessages: MockCodexSessionStreamChunk[];
   readonly #autoComplete: boolean;
   readonly #autoCompleteResult: MockCodexSessionResultInput | undefined;
-  readonly #queue: SessionStreamChunk[] = [];
+  readonly #queue: MockCodexSessionStreamChunk[] = [];
   #closed = false;
   #messageCount = 0;
   #activationScheduled = false;
   #activated = false;
   #initialMessagesFlushed = false;
   #waiter: (() => void) | undefined;
-  #completionResolver: ((result: SessionResult) => void) | undefined;
-  readonly #completion: Promise<SessionResult>;
+  #completionResolver: ((result: MockCodexSessionResult) => void) | undefined;
+  readonly #completion: Promise<MockCodexSessionResult>;
 
   constructor(options: MockCodexRunningSessionOptions) {
     super();
@@ -52,7 +84,7 @@ export class MockCodexRunningSession extends EventEmitter {
     this.#initialMessages = [...(options.messages ?? [])];
     this.#autoComplete = options.autoComplete !== false;
     this.#autoCompleteResult = options.result;
-    this.#completion = new Promise<SessionResult>((resolve) => {
+    this.#completion = new Promise<MockCodexSessionResult>((resolve) => {
       this.#completionResolver = resolve;
     });
     this.on("newListener", (eventName) => {
@@ -66,7 +98,7 @@ export class MockCodexRunningSession extends EventEmitter {
     return this.#sessionId;
   }
 
-  pushMessage(message: SessionStreamChunk): void {
+  pushMessage(message: MockCodexSessionStreamChunk): void {
     this.#flushInitialMessages();
     this.#pushMessage(message);
   }
@@ -76,7 +108,11 @@ export class MockCodexRunningSession extends EventEmitter {
     this.#complete(result);
   }
 
-  async *messages(): AsyncGenerator<SessionStreamChunk, void, undefined> {
+  async *messages(): AsyncGenerator<
+    MockCodexSessionStreamChunk,
+    void,
+    undefined
+  > {
     this.#activate();
     while (!this.#closed || this.#queue.length > 0) {
       while (this.#queue.length > 0) {
@@ -94,7 +130,7 @@ export class MockCodexRunningSession extends EventEmitter {
     }
   }
 
-  async waitForCompletion(): Promise<SessionResult> {
+  async waitForCompletion(): Promise<MockCodexSessionResult> {
     this.#activate();
     return await this.#completion;
   }
@@ -138,7 +174,7 @@ export class MockCodexRunningSession extends EventEmitter {
     }
   }
 
-  #pushMessage(message: SessionStreamChunk): void {
+  #pushMessage(message: MockCodexSessionStreamChunk): void {
     if (this.#closed) {
       throw new Error(`mock codex session '${this.#sessionId}' is closed`);
     }
@@ -181,7 +217,9 @@ export class MockCodexSessionRunner {
     this.#resumeSessions.push(session);
   }
 
-  async startSession(config: SessionConfig): Promise<MockCodexRunningSession> {
+  async startSession(
+    config: MockCodexSessionConfig,
+  ): Promise<MockCodexRunningSession> {
     this.startSessionCalls.push({ config });
     return this.#shiftSession(this.#startSessions, "start");
   }
@@ -189,7 +227,7 @@ export class MockCodexSessionRunner {
   async resumeSession(
     sessionId: string,
     prompt?: string,
-    options?: Omit<CodexProcessOptions, "codexBinary">,
+    options?: MockCodexResumeOptions,
   ): Promise<MockCodexRunningSession> {
     this.resumeSessionCalls.push({
       sessionId,
@@ -230,7 +268,7 @@ export function createMockCodexSessionRunner(
 function buildSessionResult(
   input: MockCodexSessionResultInput,
   fallbackMessageCount: number,
-): SessionResult {
+): MockCodexSessionResult {
   return {
     success:
       input.success ?? (input.exitCode === undefined || input.exitCode === 0),
