@@ -41,6 +41,7 @@ describe("MockCodexSessionRunner", () => {
     expect(streamed).toEqual([assistantLine("hello")]);
     expect(result.success).toBe(true);
     expect(result.stats.messageCount).toBe(1);
+    expect(running.getState()).toEqual({ status: "completed" });
   });
 
   test("emits queued messages and completion after session is returned", async () => {
@@ -83,6 +84,7 @@ describe("MockCodexSessionRunner", () => {
     });
 
     const running = await runner.startSession({ prompt: "start" });
+    expect(running.getState()).toEqual({ status: "running" });
     const iterator = running.messages()[Symbol.asyncIterator]();
     const pending = iterator.next();
     session.pushMessage(assistantLine("after wait"));

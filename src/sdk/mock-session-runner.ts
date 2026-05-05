@@ -98,6 +98,10 @@ export class MockCodexRunningSession extends EventEmitter {
     return this.#sessionId;
   }
 
+  getState(): Readonly<Record<string, string>> {
+    return { status: this.#closed ? "completed" : "running" };
+  }
+
   pushMessage(message: MockCodexSessionStreamChunk): void {
     this.#flushInitialMessages();
     this.#pushMessage(message);
