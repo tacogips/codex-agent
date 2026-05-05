@@ -35,6 +35,8 @@ import {
   listQueues,
   moveQueueCommand,
   pauseQueue,
+  QUEUE_COMMAND_MODES,
+  QUEUE_PROMPT_STATUSES,
   removeQueue,
   removeQueueCommand,
   resumeQueue,
@@ -44,6 +46,7 @@ import {
 } from "../queue/index";
 import {
   addBookmark,
+  BOOKMARK_TYPES,
   deleteBookmark,
   getBookmark,
   listBookmarks,
@@ -72,6 +75,11 @@ import type {
   CodexProcessOptions,
   SandboxMode,
   StreamGranularity,
+} from "../process/types";
+import {
+  APPROVAL_MODES,
+  SANDBOX_MODES,
+  STREAM_GRANULARITIES,
 } from "../process/types";
 
 export interface GraphqlExecutionContext {
@@ -404,6 +412,48 @@ function readStringArray(
   return value as readonly string[];
 }
 
+function readStringUnion<const T extends readonly string[]>(
+  record: RecordLike,
+  key: string,
+  allowedValues: T,
+): T[number] | undefined {
+  const rawValue = record[key];
+  if (rawValue === undefined) {
+    return undefined;
+  }
+  if (typeof rawValue !== "string") {
+    throw new GraphQLError(`${key} must be a string`);
+  }
+  const value = rawValue;
+  if (!isAllowedString(value, allowedValues)) {
+    throw new GraphQLError(
+      `${key} must be one of: ${allowedValues.join(", ")}`,
+    );
+  }
+  return value;
+}
+
+function requireStringUnion<const T extends readonly string[]>(
+  record: RecordLike,
+  key: string,
+  allowedValues: T,
+): T[number] {
+  const value = requireString(record, key);
+  if (!isAllowedString(value, allowedValues)) {
+    throw new GraphQLError(
+      `${key} must be one of: ${allowedValues.join(", ")}`,
+    );
+  }
+  return value;
+}
+
+function isAllowedString<const T extends readonly string[]>(
+  value: string,
+  allowedValues: T,
+): value is T[number] {
+  return allowedValues.includes(value);
+}
+
 function readStringRecord(
   record: RecordLike,
   key: string,
@@ -442,23 +492,6 @@ function requireNumber(record: RecordLike, key: string): number {
   return value;
 }
 
-function isSandboxMode(value: string): value is SandboxMode {
-  return value === "full" || value === "network-only" || value === "none";
-}
-
-function isApprovalMode(value: string): value is ApprovalMode {
-  return (
-    value === "always" ||
-    value === "unless-allow-listed" ||
-    value === "never" ||
-    value === "on-failure"
-  );
-}
-
-function isStreamGranularity(value: string): value is StreamGranularity {
-  return value === "event" || value === "char";
-}
-
 function readProcessOptions(record: RecordLike): CodexProcessOptions {
   const options: {
     model?: string;
@@ -477,22 +510,10 @@ function readProcessOptions(record: RecordLike): CodexProcessOptions {
   if (model !== undefined) options.model = model;
   const cwd = readString(record, "cwd");
   if (cwd !== undefined) options.cwd = cwd;
-  const sandbox = readString(record, "sandbox");
-  if (sandbox !== undefined) {
-    if (!isSandboxMode(sandbox)) {
-      throw new GraphQLError("sandbox must be full, network-only, or none");
-    }
-    options.sandbox = sandbox;
-  }
-  const approvalMode = readString(record, "approvalMode");
-  if (approvalMode !== undefined) {
-    if (!isApprovalMode(approvalMode)) {
-      throw new GraphQLError(
-        "approvalMode must be always, unless-allow-listed, never, or on-failure",
-      );
-    }
-    options.approvalMode = approvalMode;
-  }
+  const sandbox = readStringUnion(record, "sandbox", SANDBOX_MODES);
+  if (sandbox !== undefined) options.sandbox = sandbox;
+  const approvalMode = readStringUnion(record, "approvalMode", APPROVAL_MODES);
+  if (approvalMode !== undefined) options.approvalMode = approvalMode;
   const fullAuto = readBoolean(record, "fullAuto");
   if (fullAuto !== undefined) options.fullAuto = fullAuto;
   const additionalArgs = readStringArray(record, "additionalArgs");
@@ -501,11 +522,12 @@ function readProcessOptions(record: RecordLike): CodexProcessOptions {
   if (images !== undefined) options.images = images;
   const configOverrides = readStringArray(record, "configOverrides");
   if (configOverrides !== undefined) options.configOverrides = configOverrides;
-  const streamGranularity = readString(record, "streamGranularity");
+  const streamGranularity = readStringUnion(
+    record,
+    "streamGranularity",
+    STREAM_GRANULARITIES,
+  );
   if (streamGranularity !== undefined) {
-    if (!isStreamGranularity(streamGranularity)) {
-      throw new GraphQLError("streamGranularity must be event or char");
-    }
     options.streamGranularity = streamGranularity;
   }
   const environmentVariables = readStringRecord(record, "environmentVariables");
@@ -961,12 +983,7 @@ async function handleQueueUpdate(
     requireString(input, "commandId"),
     {
       prompt: readString(input, "prompt"),
-      status: readString(input, "status") as
-        | "pending"
-        | "running"
-        | "completed"
-        | "failed"
-        | undefined,
+      status: readStringUnion(input, "status", QUEUE_PROMPT_STATUSES),
     },
     context.configDir,
   );
@@ -1014,10 +1031,7 @@ async function handleQueueMode(
   context: CommandContext,
 ): Promise<unknown> {
   const input = toRecord(params);
-  const mode = requireString(input, "mode");
-  if (mode !== "auto" && mode !== "manual") {
-    throw new GraphQLError("mode must be auto or manual");
-  }
+  const mode = requireStringUnion(input, "mode", QUEUE_COMMAND_MODES);
   const ok = await toggleQueueCommandMode(
     requireString(input, "id"),
     requireString(input, "commandId"),
@@ -1055,7 +1069,7 @@ async function handleBookmarkAdd(
   const input = toRecord(params);
   return addBookmark(
     {
-      type: requireString(input, "type") as "session" | "message" | "range",
+      type: requireStringUnion(input, "type", BOOKMARK_TYPES),
       sessionId: requireString(input, "sessionId"),
       name: requireString(input, "name"),
       description: readString(input, "description"),
@@ -1076,11 +1090,7 @@ async function handleBookmarkList(
   return listBookmarks(
     {
       sessionId: readString(input, "sessionId"),
-      type: readString(input, "type") as
-        | "session"
-        | "message"
-        | "range"
-        | undefined,
+      type: readStringUnion(input, "type", BOOKMARK_TYPES),
       tag: readString(input, "tag"),
     },
     context.configDir,

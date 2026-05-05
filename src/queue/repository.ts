@@ -13,6 +13,7 @@ import type {
   PromptQueue,
   PromptQueueData,
   QueuePrompt,
+  QueueCommandMode,
   QueuePromptData,
   QueueConfig,
 } from "./types";
@@ -94,7 +95,10 @@ export async function loadQueues(configDir?: string): Promise<QueueConfig> {
 /**
  * Persist queues to storage using atomic write.
  */
-export async function saveQueues(config: QueueConfig, configDir?: string): Promise<void> {
+export async function saveQueues(
+  config: QueueConfig,
+  configDir?: string,
+): Promise<void> {
   const dir = resolveConfigDir(configDir);
   await mkdir(dir, { recursive: true });
   const path = queueFilePath(configDir);
@@ -178,14 +182,18 @@ export async function findQueue(
   configDir?: string,
 ): Promise<PromptQueue | null> {
   const config = await loadQueues(configDir);
-  const data = config.queues.find((q) => q.id === idOrName || q.name === idOrName);
+  const data = config.queues.find(
+    (q) => q.id === idOrName || q.name === idOrName,
+  );
   return data ? toQueue(data) : null;
 }
 
 /**
  * List all queues.
  */
-export async function listQueues(configDir?: string): Promise<readonly PromptQueue[]> {
+export async function listQueues(
+  configDir?: string,
+): Promise<readonly PromptQueue[]> {
   const config = await loadQueues(configDir);
   return config.queues.map(toQueue);
 }
@@ -206,7 +214,10 @@ export async function updateQueuePrompts(
   await saveQueues({ queues: newQueues }, configDir);
 }
 
-export async function pauseQueue(queueId: string, configDir?: string): Promise<boolean> {
+export async function pauseQueue(
+  queueId: string,
+  configDir?: string,
+): Promise<boolean> {
   const config = await loadQueues(configDir);
   let found = false;
   const queues = config.queues.map((queue) => {
@@ -223,7 +234,10 @@ export async function pauseQueue(queueId: string, configDir?: string): Promise<b
   return true;
 }
 
-export async function resumeQueue(queueId: string, configDir?: string): Promise<boolean> {
+export async function resumeQueue(
+  queueId: string,
+  configDir?: string,
+): Promise<boolean> {
   const config = await loadQueues(configDir);
   let found = false;
   const queues = config.queues.map((queue) => {
@@ -341,7 +355,7 @@ export async function moveQueueCommand(
 export async function toggleQueueCommandMode(
   queueId: string,
   commandId: string,
-  mode: "auto" | "manual",
+  mode: QueueCommandMode,
   configDir?: string,
 ): Promise<boolean> {
   const config = await loadQueues(configDir);

@@ -2,14 +2,25 @@
  * Types for sequential prompt queue execution.
  */
 
-export type QueuePromptStatus = "pending" | "running" | "completed" | "failed";
+export const QUEUE_PROMPT_STATUSES = [
+  "pending",
+  "running",
+  "completed",
+  "failed",
+] as const;
+
+export type QueuePromptStatus = (typeof QUEUE_PROMPT_STATUSES)[number];
+
+export const QUEUE_COMMAND_MODES = ["auto", "manual"] as const;
+
+export type QueueCommandMode = (typeof QUEUE_COMMAND_MODES)[number];
 
 export interface QueuePrompt {
   readonly id: string;
   readonly prompt: string;
   readonly images?: readonly string[] | undefined;
   readonly status: QueuePromptStatus;
-  readonly mode?: "auto" | "manual" | undefined;
+  readonly mode?: QueueCommandMode | undefined;
   readonly result?: { exitCode: number } | undefined;
   readonly addedAt: Date;
   readonly startedAt?: Date | undefined;
@@ -51,7 +62,7 @@ export interface QueuePromptData {
   readonly prompt: string;
   readonly images?: readonly string[] | undefined;
   readonly status: QueuePromptStatus;
-  readonly mode?: "auto" | "manual" | undefined;
+  readonly mode?: QueueCommandMode | undefined;
   readonly result?: { exitCode: number } | undefined;
   readonly addedAt: string;
   readonly startedAt?: string | undefined;

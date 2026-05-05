@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -7,7 +7,6 @@ import { getCodexUsageStats } from "./usage-stats";
 const createdDirs: string[] = [];
 
 afterEach(async () => {
-  vi.useRealTimers();
   await Promise.all(
     createdDirs.splice(0).map(async (dir) => {
       await rm(dir, { recursive: true, force: true });
@@ -30,8 +29,7 @@ describe("getCodexUsageStats", () => {
   });
 
   it("aggregates usage, messages, and daily activity from rollout JSONL files", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-20T12:00:00.000Z"));
+    const now = new Date("2026-02-20T12:00:00.000Z");
 
     const sessionsDir = await createSessionsDir();
     await writeRollout(sessionsDir, "2026/02/18/rollout-aaa.jsonl", [
@@ -136,6 +134,7 @@ describe("getCodexUsageStats", () => {
     const stats = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 3,
+      now,
     });
 
     expect(stats).not.toBeNull();
@@ -195,8 +194,7 @@ describe("getCodexUsageStats", () => {
   });
 
   it("returns stable cached results within TTL", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-20T12:00:00.000Z"));
+    const now = new Date("2026-02-20T12:00:00.000Z");
 
     const sessionsDir = await createSessionsDir();
     const rolloutPath = await writeRollout(
@@ -228,6 +226,7 @@ describe("getCodexUsageStats", () => {
     const first = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 1,
+      now,
     });
     expect(first?.modelUsage["gpt-5"]?.inputTokens).toBe(1);
 
@@ -260,21 +259,20 @@ describe("getCodexUsageStats", () => {
     const cached = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 1,
+      now,
     });
     expect(cached?.modelUsage["gpt-5"]?.inputTokens).toBe(1);
-
-    vi.advanceTimersByTime(5001);
 
     const refreshed = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 1,
+      now: new Date("2026-02-20T12:00:05.001Z"),
     });
     expect(refreshed?.modelUsage["gpt-5"]?.inputTokens).toBe(99);
   });
 
   it("aggregates usage from event_msg token_count payloads", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-11T12:00:00.000Z"));
+    const now = new Date("2026-02-11T12:00:00.000Z");
 
     const sessionsDir = await createSessionsDir();
     await writeRollout(sessionsDir, "2026/02/10/rollout-token-count.jsonl", [
@@ -305,6 +303,7 @@ describe("getCodexUsageStats", () => {
     const stats = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 2,
+      now,
     });
 
     expect(stats).not.toBeNull();
@@ -330,8 +329,7 @@ describe("getCodexUsageStats", () => {
   });
 
   it("falls back to token_count rate_limits model when info.model is missing", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-11T12:00:00.000Z"));
+    const now = new Date("2026-02-11T12:00:00.000Z");
 
     const sessionsDir = await createSessionsDir();
     await writeRollout(
@@ -368,6 +366,7 @@ describe("getCodexUsageStats", () => {
     const stats = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 2,
+      now,
     });
 
     expect(stats).not.toBeNull();
@@ -393,8 +392,7 @@ describe("getCodexUsageStats", () => {
   });
 
   it("aggregates mixed TurnComplete and token_count usage and ignores partial token_count payloads", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-12T12:00:00.000Z"));
+    const now = new Date("2026-02-12T12:00:00.000Z");
 
     const sessionsDir = await createSessionsDir();
     await writeRollout(sessionsDir, "2026/02/12/rollout-mixed-usage.jsonl", [
@@ -438,6 +436,7 @@ describe("getCodexUsageStats", () => {
     const stats = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 1,
+      now,
     });
 
     expect(stats).not.toBeNull();
@@ -462,8 +461,7 @@ describe("getCodexUsageStats", () => {
   });
 
   it("uses stable token_count aggregation with cumulative deltas, last_token_usage, and null info", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-13T12:00:00.000Z"));
+    const now = new Date("2026-02-13T12:00:00.000Z");
 
     const sessionsDir = await createSessionsDir();
     await writeRollout(
@@ -538,6 +536,7 @@ describe("getCodexUsageStats", () => {
     const stats = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 1,
+      now,
     });
 
     expect(stats).not.toBeNull();
@@ -562,8 +561,7 @@ describe("getCodexUsageStats", () => {
   });
 
   it("counts repeated identical last_token_usage events additively", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-14T12:00:00.000Z"));
+    const now = new Date("2026-02-14T12:00:00.000Z");
 
     const sessionsDir = await createSessionsDir();
     await writeRollout(
@@ -608,6 +606,7 @@ describe("getCodexUsageStats", () => {
     const stats = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 1,
+      now,
     });
 
     expect(stats).not.toBeNull();
@@ -632,8 +631,7 @@ describe("getCodexUsageStats", () => {
   });
 
   it("treats lower cumulative total_token_usage as a new sequence for same model key", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-15T12:00:00.000Z"));
+    const now = new Date("2026-02-15T12:00:00.000Z");
 
     const sessionsDir = await createSessionsDir();
     await writeRollout(
@@ -678,6 +676,7 @@ describe("getCodexUsageStats", () => {
     const stats = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 1,
+      now,
     });
 
     expect(stats).not.toBeNull();
@@ -702,8 +701,7 @@ describe("getCodexUsageStats", () => {
   });
 
   it("tracks cumulative token_count deltas across rollout files", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-16T12:00:00.000Z"));
+    const now = new Date("2026-02-16T12:00:00.000Z");
 
     const sessionsDir = await createSessionsDir();
     await writeRollout(
@@ -764,6 +762,7 @@ describe("getCodexUsageStats", () => {
     const stats = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 1,
+      now,
     });
 
     expect(stats).not.toBeNull();
@@ -788,8 +787,7 @@ describe("getCodexUsageStats", () => {
   });
 
   it("supports both nested and legacy session_meta timestamp payload shapes", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-02T12:00:00.000Z"));
+    const now = new Date("2026-02-02T12:00:00.000Z");
 
     const sessionsDir = await createSessionsDir();
 
@@ -822,6 +820,7 @@ describe("getCodexUsageStats", () => {
     const stats = await getCodexUsageStats({
       codexSessionsDir: sessionsDir,
       recentDays: 2,
+      now,
     });
 
     expect(stats).not.toBeNull();
@@ -832,6 +831,30 @@ describe("getCodexUsageStats", () => {
       { date: "2026-02-01", sessionCount: 1 },
       { date: "2026-02-02", sessionCount: 1 },
     ]);
+  });
+
+  it("falls back to the system clock for invalid Date options", async () => {
+    const sessionsDir = await createSessionsDir();
+
+    await writeRollout(sessionsDir, "2026/02/01/rollout-invalid-now.jsonl", [
+      line("2026-02-01T00:00:00.000Z", "session_meta", {
+        meta: {
+          id: "sess-invalid-now",
+          timestamp: "2026-02-01T00:00:00.000Z",
+          cwd: "/tmp/work",
+        },
+      }),
+    ]);
+
+    const stats = await getCodexUsageStats({
+      codexSessionsDir: sessionsDir,
+      recentDays: 1,
+      now: new Date("invalid"),
+    });
+
+    expect(stats).not.toBeNull();
+    expect(stats?.totalSessions).toBe(1);
+    expect(stats?.lastComputedDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });
 

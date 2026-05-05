@@ -55,6 +55,7 @@ export interface CodexUsageStats {
 export interface GetCodexUsageStatsOptions {
   readonly codexSessionsDir?: string;
   readonly recentDays?: number;
+  readonly now?: Date | number;
 }
 
 interface UsageStatsCacheEntry {
@@ -71,7 +72,7 @@ export async function getCodexUsageStats(
   const sessionsDir =
     options?.codexSessionsDir ?? join(resolveCodexHome(), "sessions");
   const recentDays = normalizeRecentDays(options?.recentDays);
-  const now = Date.now();
+  const now = resolveNowMs(options?.now);
   const cacheKey = `${sessionsDir}::${String(recentDays)}`;
 
   if (
@@ -237,6 +238,17 @@ function normalizeRecentDays(value: number | undefined): number {
   }
   const floored = Math.floor(value);
   return floored > 0 ? floored : DEFAULT_RECENT_DAYS;
+}
+
+function resolveNowMs(value: Date | number | undefined): number {
+  if (value instanceof Date) {
+    const epochMs = value.getTime();
+    return Number.isFinite(epochMs) ? epochMs : Date.now();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return Date.now();
 }
 
 async function listRolloutFiles(

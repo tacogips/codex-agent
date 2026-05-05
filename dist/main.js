@@ -1868,6 +1868,14 @@ async function* runGroup(group, prompt, options) {
   }
   yield makeEvent("group_completed");
 }
+// src/queue/types.ts
+var QUEUE_PROMPT_STATUSES = [
+  "pending",
+  "running",
+  "completed",
+  "failed"
+];
+var QUEUE_COMMAND_MODES = ["auto", "manual"];
 // src/queue/repository.ts
 import { readFile as readFile3, writeFile as writeFile2, mkdir as mkdir2, rename as rename2 } from "fs/promises";
 import { join as join5 } from "path";
@@ -2139,6 +2147,7 @@ function toQueuePrompt(m) {
     prompt: m.prompt,
     images: m.images,
     status: m.status,
+    mode: m.mode,
     result: m.result,
     addedAt: m.addedAt,
     startedAt: m.startedAt,
@@ -2162,6 +2171,7 @@ async function* runQueue(queue, options, stopSignal) {
     prompt: p.prompt,
     images: p.images,
     status: p.status,
+    mode: p.mode,
     result: p.result,
     addedAt: p.addedAt,
     startedAt: p.startedAt,
@@ -11405,6 +11415,15 @@ function getOperationAST(documentAST, operationName) {
   }
   return operation;
 }
+// src/process/types.ts
+var SANDBOX_MODES = ["full", "network-only", "none"];
+var APPROVAL_MODES = [
+  "always",
+  "unless-allow-listed",
+  "never",
+  "on-failure"
+];
+var STREAM_GRANULARITIES = ["event", "char"];
 // src/sdk/events.ts
 class BasicSdkEventEmitter {
   handlers = new Map;
@@ -12719,7 +12738,7 @@ var usageStatsCache = null;
 async function getCodexUsageStats(options) {
   const sessionsDir = options?.codexSessionsDir ?? join11(resolveCodexHome(), "sessions");
   const recentDays = normalizeRecentDays(options?.recentDays);
-  const now = Date.now();
+  const now = resolveNowMs(options?.now);
   const cacheKey = `${sessionsDir}::${String(recentDays)}`;
   if (usageStatsCache !== null && usageStatsCache.key === cacheKey && usageStatsCache.expiresAt > now) {
     return usageStatsCache.value;
@@ -12835,6 +12854,16 @@ function normalizeRecentDays(value) {
   }
   const floored = Math.floor(value);
   return floored > 0 ? floored : DEFAULT_RECENT_DAYS;
+}
+function resolveNowMs(value) {
+  if (value instanceof Date) {
+    const epochMs = value.getTime();
+    return Number.isFinite(epochMs) ? epochMs : Date.now();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return Date.now();
 }
 async function listRolloutFiles(sessionsDir) {
   try {
@@ -13437,6 +13466,30 @@ function readStringArray3(record, key) {
   }
   return value;
 }
+function readStringUnion(record, key, allowedValues) {
+  const rawValue = record[key];
+  if (rawValue === undefined) {
+    return;
+  }
+  if (typeof rawValue !== "string") {
+    throw new GraphQLError(`${key} must be a string`);
+  }
+  const value = rawValue;
+  if (!isAllowedString(value, allowedValues)) {
+    throw new GraphQLError(`${key} must be one of: ${allowedValues.join(", ")}`);
+  }
+  return value;
+}
+function requireStringUnion(record, key, allowedValues) {
+  const value = requireString(record, key);
+  if (!isAllowedString(value, allowedValues)) {
+    throw new GraphQLError(`${key} must be one of: ${allowedValues.join(", ")}`);
+  }
+  return value;
+}
+function isAllowedString(value, allowedValues) {
+  return allowedValues.includes(value);
+}
 function readStringRecord(record, key) {
   const value = record[key];
   if (value === undefined) {
@@ -13466,15 +13519,6 @@ function requireNumber(record, key) {
   }
   return value;
 }
-function isSandboxMode(value) {
-  return value === "full" || value === "network-only" || value === "none";
-}
-function isApprovalMode(value) {
-  return value === "always" || value === "unless-allow-listed" || value === "never" || value === "on-failure";
-}
-function isStreamGranularity(value) {
-  return value === "event" || value === "char";
-}
 function readProcessOptions(record) {
   const options = {};
   const model = readString7(record, "model");
@@ -13483,20 +13527,12 @@ function readProcessOptions(record) {
   const cwd = readString7(record, "cwd");
   if (cwd !== undefined)
     options.cwd = cwd;
-  const sandbox = readString7(record, "sandbox");
-  if (sandbox !== undefined) {
-    if (!isSandboxMode(sandbox)) {
-      throw new GraphQLError("sandbox must be full, network-only, or none");
-    }
+  const sandbox = readStringUnion(record, "sandbox", SANDBOX_MODES);
+  if (sandbox !== undefined)
     options.sandbox = sandbox;
-  }
-  const approvalMode = readString7(record, "approvalMode");
-  if (approvalMode !== undefined) {
-    if (!isApprovalMode(approvalMode)) {
-      throw new GraphQLError("approvalMode must be always, unless-allow-listed, never, or on-failure");
-    }
+  const approvalMode = readStringUnion(record, "approvalMode", APPROVAL_MODES);
+  if (approvalMode !== undefined)
     options.approvalMode = approvalMode;
-  }
   const fullAuto = readBoolean(record, "fullAuto");
   if (fullAuto !== undefined)
     options.fullAuto = fullAuto;
@@ -13509,11 +13545,8 @@ function readProcessOptions(record) {
   const configOverrides = readStringArray3(record, "configOverrides");
   if (configOverrides !== undefined)
     options.configOverrides = configOverrides;
-  const streamGranularity = readString7(record, "streamGranularity");
+  const streamGranularity = readStringUnion(record, "streamGranularity", STREAM_GRANULARITIES);
   if (streamGranularity !== undefined) {
-    if (!isStreamGranularity(streamGranularity)) {
-      throw new GraphQLError("streamGranularity must be event or char");
-    }
     options.streamGranularity = streamGranularity;
   }
   const environmentVariables = readStringRecord(record, "environmentVariables");
@@ -13791,7 +13824,7 @@ async function handleQueueUpdate(params, context) {
   const input = toRecord7(params);
   const ok = await updateQueueCommand(requireString(input, "id"), requireString(input, "commandId"), {
     prompt: readString7(input, "prompt"),
-    status: readString7(input, "status")
+    status: readStringUnion(input, "status", QUEUE_PROMPT_STATUSES)
   }, context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue command not found");
@@ -13816,10 +13849,7 @@ async function handleQueueMove(params, context) {
 }
 async function handleQueueMode(params, context) {
   const input = toRecord7(params);
-  const mode = requireString(input, "mode");
-  if (mode !== "auto" && mode !== "manual") {
-    throw new GraphQLError("mode must be auto or manual");
-  }
+  const mode = requireStringUnion(input, "mode", QUEUE_COMMAND_MODES);
   const ok = await toggleQueueCommandMode(requireString(input, "id"), requireString(input, "commandId"), mode, context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue command not found");
@@ -13843,7 +13873,7 @@ async function handleQueueRun(params, context) {
 async function handleBookmarkAdd(params, context) {
   const input = toRecord7(params);
   return addBookmark({
-    type: requireString(input, "type"),
+    type: requireStringUnion(input, "type", BOOKMARK_TYPES),
     sessionId: requireString(input, "sessionId"),
     name: requireString(input, "name"),
     description: readString7(input, "description"),
@@ -13857,7 +13887,7 @@ async function handleBookmarkList(params, context) {
   const input = params === undefined ? {} : toRecord7(params);
   return listBookmarks({
     sessionId: readString7(input, "sessionId"),
-    type: readString7(input, "type"),
+    type: readStringUnion(input, "type", BOOKMARK_TYPES),
     tag: readString7(input, "tag")
   }, context.configDir);
 }
@@ -14403,6 +14433,7 @@ Session list options:
 Common process options:
   --model <model>             Model to use
   --sandbox <full|network-only|none>  Sandbox mode
+  --approval-mode <mode>       Approval mode: always, unless-allow-listed, never, on-failure
   --full-auto                 Enable full-auto mode
   --stream-granularity <event|char>  Stream by rollout event or character
   --char-delay-ms <n>         Delay per rendered char in ms (session run only, default: 8)
@@ -15740,10 +15771,12 @@ function parseProcessOptions(args) {
   const model = getArgValue2(args, "--model");
   if (model !== undefined)
     opts.model = model;
-  const sandbox = getArgValue2(args, "--sandbox");
-  if (sandbox === "full" || sandbox === "network-only" || sandbox === "none") {
+  const sandbox = readAllowedArg(args, "--sandbox", SANDBOX_MODES);
+  if (sandbox !== undefined)
     opts.sandbox = sandbox;
-  }
+  const approvalMode = readAllowedArg(args, "--approval-mode", APPROVAL_MODES);
+  if (approvalMode !== undefined)
+    opts.approvalMode = approvalMode;
   if (args.includes("--full-auto")) {
     opts.fullAuto = true;
   }
@@ -15751,11 +15784,18 @@ function parseProcessOptions(args) {
   if (images.length > 0) {
     opts.images = images;
   }
-  const streamGranularity = getArgValue2(args, "--stream-granularity");
-  if (streamGranularity === "event" || streamGranularity === "char") {
+  const streamGranularity = readAllowedArg(args, "--stream-granularity", STREAM_GRANULARITIES);
+  if (streamGranularity !== undefined) {
     opts.streamGranularity = streamGranularity;
   }
   return opts;
+}
+function readAllowedArg(args, flag, allowedValues) {
+  const value = getArgValue2(args, flag);
+  if (value === undefined) {
+    return;
+  }
+  return allowedValues.includes(value) ? value : undefined;
 }
 function parseCharDelayMs(args) {
   const raw = getArgValue2(args, "--char-delay-ms");
@@ -15917,8 +15957,12 @@ export {
   addBookmark,
   ToolRegistry,
   SessionRunner,
+  STREAM_GRANULARITIES,
+  SANDBOX_MODES,
   RunningSession,
   RolloutWatcher,
+  QUEUE_PROMPT_STATUSES,
+  QUEUE_COMMAND_MODES,
   ProcessManager,
   PERMISSIONS,
   MockCodexSessionRunner,
@@ -15926,5 +15970,6 @@ export {
   DEFAULT_TOKEN_PERMISSIONS,
   BasicSdkEventEmitter,
   BOOKMARK_TYPES,
+  APPROVAL_MODES,
   ALL_PERMISSIONS
 };

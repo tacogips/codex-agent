@@ -121,6 +121,11 @@ import type {
   ApprovalMode,
   StreamGranularity,
 } from "../process/types";
+import {
+  APPROVAL_MODES,
+  SANDBOX_MODES,
+  STREAM_GRANULARITIES,
+} from "../process/types";
 import type { BookmarkType } from "../bookmark/types";
 import { getToolVersions } from "../sdk/tool-versions";
 import { checkCodexModelAvailability } from "../sdk/model-availability";
@@ -192,6 +197,7 @@ Session list options:
 Common process options:
   --model <model>             Model to use
   --sandbox <full|network-only|none>  Sandbox mode
+  --approval-mode <mode>       Approval mode: always, unless-allow-listed, never, on-failure
   --full-auto                 Enable full-auto mode
   --stream-granularity <event|char>  Stream by rollout event or character
   --char-delay-ms <n>         Delay per rendered char in ms (session run only, default: 8)
@@ -1904,10 +1910,10 @@ export function parseProcessOptions(
   const model = getArgValue(args, "--model");
   if (model !== undefined) opts.model = model;
 
-  const sandbox = getArgValue(args, "--sandbox");
-  if (sandbox === "full" || sandbox === "network-only" || sandbox === "none") {
-    opts.sandbox = sandbox;
-  }
+  const sandbox = readAllowedArg(args, "--sandbox", SANDBOX_MODES);
+  if (sandbox !== undefined) opts.sandbox = sandbox;
+  const approvalMode = readAllowedArg(args, "--approval-mode", APPROVAL_MODES);
+  if (approvalMode !== undefined) opts.approvalMode = approvalMode;
 
   if (args.includes("--full-auto")) {
     opts.fullAuto = true;
@@ -1918,12 +1924,28 @@ export function parseProcessOptions(
     opts.images = images;
   }
 
-  const streamGranularity = getArgValue(args, "--stream-granularity");
-  if (streamGranularity === "event" || streamGranularity === "char") {
+  const streamGranularity = readAllowedArg(
+    args,
+    "--stream-granularity",
+    STREAM_GRANULARITIES,
+  );
+  if (streamGranularity !== undefined) {
     opts.streamGranularity = streamGranularity;
   }
 
   return opts;
+}
+
+function readAllowedArg<const T extends readonly string[]>(
+  args: readonly string[],
+  flag: string,
+  allowedValues: T,
+): T[number] | undefined {
+  const value = getArgValue(args, flag);
+  if (value === undefined) {
+    return undefined;
+  }
+  return allowedValues.includes(value) ? value : undefined;
 }
 
 function parseCharDelayMs(args: readonly string[]): number {

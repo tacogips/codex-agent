@@ -75,6 +75,19 @@ describe("parseModelCheckArgs", () => {
 });
 
 describe("parseProcessOptions", () => {
+  it("parses sandbox and approval mode flags", () => {
+    const parsed = parseProcessOptions([
+      "--sandbox",
+      "network-only",
+      "--approval-mode",
+      "on-failure",
+    ]);
+    expect(parsed).toEqual({
+      sandbox: "network-only",
+      approvalMode: "on-failure",
+    });
+  });
+
   it("parses stream granularity char", () => {
     const parsed = parseProcessOptions(["--stream-granularity", "char"]);
     expect(parsed).toEqual({
@@ -82,8 +95,15 @@ describe("parseProcessOptions", () => {
     });
   });
 
-  it("ignores invalid stream granularity", () => {
-    const parsed = parseProcessOptions(["--stream-granularity", "invalid"]);
+  it("ignores invalid enum-like process option values", () => {
+    const parsed = parseProcessOptions([
+      "--sandbox",
+      "invalid",
+      "--approval-mode",
+      "invalid",
+      "--stream-granularity",
+      "invalid",
+    ]);
     expect(parsed).toEqual({});
   });
 });

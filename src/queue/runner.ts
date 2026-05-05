@@ -9,13 +9,19 @@
 import { ProcessManager } from "../process/manager";
 import { updateQueuePrompts } from "./repository";
 import type { CodexProcessOptions } from "../process/types";
-import type { PromptQueue, QueuePrompt, QueueEvent } from "./types";
+import type {
+  PromptQueue,
+  QueueCommandMode,
+  QueuePrompt,
+  QueueEvent,
+} from "./types";
 
 interface MutablePrompt {
   id: string;
   prompt: string;
   images?: readonly string[] | undefined;
   status: QueuePrompt["status"];
+  mode?: QueueCommandMode | undefined;
   result?: { exitCode: number } | undefined;
   addedAt: Date;
   startedAt?: Date | undefined;
@@ -28,6 +34,7 @@ function toQueuePrompt(m: MutablePrompt): QueuePrompt {
     prompt: m.prompt,
     images: m.images,
     status: m.status,
+    mode: m.mode,
     result: m.result,
     addedAt: m.addedAt,
     startedAt: m.startedAt,
@@ -51,7 +58,9 @@ export async function* runQueue(
       type: "queue_stopped",
       queueId: queue.id,
       completed: [],
-      pending: queue.prompts.filter((p) => p.status === "pending").map((p) => p.id),
+      pending: queue.prompts
+        .filter((p) => p.status === "pending")
+        .map((p) => p.id),
       failed: [],
     };
     return;
@@ -63,6 +72,7 @@ export async function* runQueue(
     prompt: p.prompt,
     images: p.images,
     status: p.status,
+    mode: p.mode,
     result: p.result,
     addedAt: p.addedAt,
     startedAt: p.startedAt,
@@ -72,7 +82,9 @@ export async function* runQueue(
 
   const completedIds: string[] = [];
   const failedIds: string[] = [];
-  const pendingIds = prompts.filter((p) => p.status === "pending").map((p) => p.id);
+  const pendingIds = prompts
+    .filter((p) => p.status === "pending")
+    .map((p) => p.id);
 
   function makeEvent(
     type: QueueEvent["type"],

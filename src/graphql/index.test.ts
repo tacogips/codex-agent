@@ -10,6 +10,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { executeGraphqlDocument, executeGraphqlOperation } from "./index";
+import { addPrompt, createQueue, findQueue } from "../queue/index";
 
 const tempDirs: string[] = [];
 
@@ -91,6 +92,52 @@ describe("executeGraphqlDocument", () => {
     const payload = data["command"] as Record<string, unknown>;
     expect(payload["name"]).toBe("demo-group");
     expect(payload["id"]).toBeTypeOf("string");
+  });
+
+  it("rejects invalid queue prompt statuses without persisting them", async () => {
+    const configDir = await makeTempDir("codex-agent-graphql-queue-");
+    const queue = await createQueue("demo-queue", "/tmp/demo", configDir);
+    const prompt = await addPrompt(queue.id, "hello", undefined, configDir);
+
+    const result = await executeGraphqlDocument({
+      document:
+        'mutation ($param: JSON) { command(name: "queue.update", params: $param) }',
+      variables: {
+        param: {
+          id: queue.id,
+          commandId: prompt.id,
+          status: "archived",
+        },
+      },
+      context: { configDir },
+    });
+
+    expect(result.errors?.[0]?.message).toBe(
+      "status must be one of: pending, running, completed, failed",
+    );
+    const persisted = await findQueue(queue.id, configDir);
+    expect(persisted?.prompts[0]?.status).toBe("pending");
+  });
+
+  it("rejects invalid bookmark types before persistence", async () => {
+    const configDir = await makeTempDir("codex-agent-graphql-bookmark-");
+
+    const result = await executeGraphqlDocument({
+      document:
+        'mutation ($param: JSON) { command(name: "bookmark.add", params: $param) }',
+      variables: {
+        param: {
+          type: "invalid",
+          sessionId: "session-001",
+          name: "bad bookmark",
+        },
+      },
+      context: { configDir },
+    });
+
+    expect(result.errors?.[0]?.message).toBe(
+      "type must be one of: session, message, range",
+    );
   });
 
   it("passes validated environment variables to session.run", async () => {

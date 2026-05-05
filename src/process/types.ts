@@ -4,9 +4,20 @@
 
 import type { RolloutLine } from "../types/rollout";
 
-export type SandboxMode = "full" | "network-only" | "none";
-export type ApprovalMode = "always" | "unless-allow-listed" | "never" | "on-failure";
-export type StreamGranularity = "event" | "char";
+export const SANDBOX_MODES = ["full", "network-only", "none"] as const;
+export type SandboxMode = (typeof SANDBOX_MODES)[number];
+
+export const APPROVAL_MODES = [
+  "always",
+  "unless-allow-listed",
+  "never",
+  "on-failure",
+] as const;
+export type ApprovalMode = (typeof APPROVAL_MODES)[number];
+
+export const STREAM_GRANULARITIES = ["event", "char"] as const;
+export type StreamGranularity = (typeof STREAM_GRANULARITIES)[number];
+
 export type CodexEnvironmentVariables = Readonly<Record<string, string>>;
 
 export interface CodexProcessOptions {

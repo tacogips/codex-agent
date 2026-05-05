@@ -5,9 +5,12 @@ export type {
   QueuePromptData,
   QueueConfig,
   QueuePromptStatus,
+  QueueCommandMode,
   QueueEvent,
   QueueEventType,
 } from "./types";
+
+export { QUEUE_PROMPT_STATUSES, QUEUE_COMMAND_MODES } from "./types";
 
 export {
   loadQueues,
