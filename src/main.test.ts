@@ -8,6 +8,9 @@ describe("package root source exports", () => {
     expect(typeof mainModule.findLatestSession).toBe("function");
     expect(typeof mainModule.getSessionMessages).toBe("function");
     expect(typeof mainModule.checkCodexModelAvailability).toBe("function");
+    expect(typeof mainModule.MockCodexRunningSession).toBe("function");
+    expect(typeof mainModule.MockCodexSessionRunner).toBe("function");
+    expect(typeof mainModule.createMockCodexSessionRunner).toBe("function");
     expect(typeof mainModule.runCli).toBe("function");
   });
 });

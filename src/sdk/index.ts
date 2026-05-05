@@ -19,6 +19,17 @@ export type {
   SessionStreamChunk,
 } from "./session-runner";
 export { SessionRunner, RunningSession } from "./session-runner";
+export type {
+  MockCodexSessionResultInput,
+  MockCodexRunningSessionOptions,
+  MockCodexStartSessionCall,
+  MockCodexResumeSessionCall,
+} from "./mock-session-runner";
+export {
+  MockCodexRunningSession,
+  MockCodexSessionRunner,
+  createMockCodexSessionRunner,
+} from "./mock-session-runner";
 
 export type {
   AgentRunnerOptions,
