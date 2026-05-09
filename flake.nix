@@ -45,7 +45,7 @@
           pkgs-unstable.typescript-language-server
           nodePackages.prettier
 
-          # Biome 2.4.13 from nixpkgs-unstable.
+          # Rust-based JS/TS linter used by repository lint tasks.
           pkgs-unstable.biome
 
           # Development tools
@@ -65,8 +65,6 @@
 
           shellHook = ''
             ${preCommitCheck.shellHook}
-
-            export BIOME_BINARY="${pkgs.lib.getExe pkgs-unstable.biome}"
 
             echo "TypeScript development environment ready"
             echo "Bun version: $(bun --version)"
