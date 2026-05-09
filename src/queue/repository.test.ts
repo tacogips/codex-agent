@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { defined } from "../testing/assert";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -48,7 +49,7 @@ describe("QueueRepository", () => {
 
       const config = await loadQueues(configDir);
       expect(config.queues).toHaveLength(1);
-      expect(config.queues[0]!.name).toBe("test");
+      expect(defined(config.queues[0]).name).toBe("test");
     });
 
     it("writes valid JSON", async () => {
@@ -71,22 +72,28 @@ describe("QueueRepository", () => {
       await createQueue("persisted", "/path", configDir);
       const queues = await listQueues(configDir);
       expect(queues).toHaveLength(1);
-      expect(queues[0]!.name).toBe("persisted");
+      expect(defined(queues[0]).name).toBe("persisted");
     });
   });
 
   describe("addPrompt", () => {
     it("adds a prompt to a queue", async () => {
       const queue = await createQueue("with-prompts", "/path", configDir);
-      const prompt = await addPrompt(queue.id, "Do something", undefined, configDir);
+      const prompt = await addPrompt(
+        queue.id,
+        "Do something",
+        undefined,
+        configDir,
+      );
 
       expect(prompt.id).toBeTruthy();
       expect(prompt.prompt).toBe("Do something");
       expect(prompt.status).toBe("pending");
 
       const found = await findQueue(queue.id, configDir);
-      expect(found!.prompts).toHaveLength(1);
-      expect(found!.prompts[0]!.prompt).toBe("Do something");
+      const foundDefined = defined(found);
+      expect(foundDefined.prompts).toHaveLength(1);
+      expect(defined(foundDefined.prompts[0]).prompt).toBe("Do something");
     });
 
     it("adds multiple prompts", async () => {
@@ -95,18 +102,23 @@ describe("QueueRepository", () => {
       await addPrompt(queue.id, "Second", undefined, configDir);
 
       const found = await findQueue(queue.id, configDir);
-      expect(found!.prompts).toHaveLength(2);
+      expect(defined(found).prompts).toHaveLength(2);
     });
 
     it("persists prompt image attachments", async () => {
       const queue = await createQueue("with-images", "/path", configDir);
       const images = ["./screenshots/a.png", "./screenshots/b.png"];
-      const prompt = await addPrompt(queue.id, "Analyze screenshots", images, configDir);
+      const prompt = await addPrompt(
+        queue.id,
+        "Analyze screenshots",
+        images,
+        configDir,
+      );
 
       expect(prompt.images).toEqual(images);
 
       const found = await findQueue(queue.id, configDir);
-      expect(found!.prompts[0]!.images).toEqual(images);
+      expect(defined(defined(found).prompts[0]).images).toEqual(images);
     });
   });
 
@@ -131,14 +143,14 @@ describe("QueueRepository", () => {
       const queue = await createQueue("findable", "/path", configDir);
       const found = await findQueue(queue.id, configDir);
       expect(found).not.toBeNull();
-      expect(found!.id).toBe(queue.id);
+      expect(defined(found).id).toBe(queue.id);
     });
 
     it("finds by name", async () => {
       await createQueue("by-name", "/path", configDir);
       const found = await findQueue("by-name", configDir);
       expect(found).not.toBeNull();
-      expect(found!.name).toBe("by-name");
+      expect(defined(found).name).toBe("by-name");
     });
 
     it("returns null for not found", async () => {
@@ -163,8 +175,9 @@ describe("QueueRepository", () => {
       await updateQueuePrompts(queue.id, updatedPrompts, configDir);
 
       const found = await findQueue(queue.id, configDir);
-      expect(found!.prompts[0]!.status).toBe("completed");
-      expect(found!.prompts[0]!.result).toEqual({ exitCode: 0 });
+      const prompt0 = defined(defined(found).prompts[0]);
+      expect(prompt0.status).toBe("completed");
+      expect(prompt0.result).toEqual({ exitCode: 0 });
     });
   });
 });

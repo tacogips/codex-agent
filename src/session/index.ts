@@ -10,7 +10,11 @@ import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { parseSessionMeta, extractFirstUserMessage } from "../rollout/reader";
-import type { CodexSession, SessionListOptions, SessionListResult } from "../types/session";
+import type {
+  CodexSession,
+  SessionListOptions,
+  SessionListResult,
+} from "../types/session";
 import type { SessionMetaLine, SessionSource } from "../types/rollout";
 import {
   openCodexDb,
@@ -97,7 +101,13 @@ export async function buildSession(
   const firstMessage = await extractFirstUserMessage(rolloutPath);
   const isArchived = rolloutPath.includes(`/${ARCHIVED_DIR}/`);
 
-  return sessionFromMeta(meta, rolloutPath, fileStat.mtime, firstMessage, isArchived);
+  return sessionFromMeta(
+    meta,
+    rolloutPath,
+    fileStat.mtime,
+    firstMessage,
+    isArchived,
+  );
 }
 
 /**
@@ -152,8 +162,10 @@ async function listSessionsFilesystem(
 
   // Sort
   sessions.sort((a, b) => {
-    const aVal = sortBy === "updatedAt" ? a.updatedAt.getTime() : a.createdAt.getTime();
-    const bVal = sortBy === "updatedAt" ? b.updatedAt.getTime() : b.createdAt.getTime();
+    const aVal =
+      sortBy === "updatedAt" ? a.updatedAt.getTime() : a.createdAt.getTime();
+    const bVal =
+      sortBy === "updatedAt" ? b.updatedAt.getTime() : b.createdAt.getTime();
     return sortOrder === "asc" ? aVal - bVal : bVal - aVal;
   });
 
@@ -304,7 +316,12 @@ function readString(
 }
 
 function toSessionSource(value: string | undefined): SessionSource | undefined {
-  if (value === "cli" || value === "vscode" || value === "exec" || value === "unknown") {
+  if (
+    value === "cli" ||
+    value === "vscode" ||
+    value === "exec" ||
+    value === "unknown"
+  ) {
     return value;
   }
   return undefined;
@@ -320,13 +337,13 @@ function matchesFilter(
   if (options.source !== undefined && session.source !== options.source) {
     return false;
   }
-  if (options.cwd !== undefined && resolve(session.cwd) !== resolve(options.cwd)) {
+  if (
+    options.cwd !== undefined &&
+    resolve(session.cwd) !== resolve(options.cwd)
+  ) {
     return false;
   }
-  if (
-    options.branch !== undefined &&
-    session.git?.branch !== options.branch
-  ) {
+  if (options.branch !== undefined && session.git?.branch !== options.branch) {
     return false;
   }
   return true;
@@ -347,9 +364,7 @@ async function readSortedDirs(
 ): Promise<readonly string[]> {
   try {
     const entries = await readdir(parent, { withFileTypes: true });
-    const dirs = entries
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
+    const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
     dirs.sort();
     if (order === "desc") {
       dirs.reverse();
@@ -366,9 +381,7 @@ async function readSortedFiles(
 ): Promise<readonly string[]> {
   try {
     const entries = await readdir(parent, { withFileTypes: true });
-    const files = entries
-      .filter((e) => e.isFile())
-      .map((e) => e.name);
+    const files = entries.filter((e) => e.isFile()).map((e) => e.name);
     files.sort();
     if (order === "desc") {
       files.reverse();

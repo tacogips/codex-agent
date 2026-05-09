@@ -9,7 +9,11 @@ export type {
   BookmarkSearchResult,
 } from "./types";
 
-export { BOOKMARK_TYPES, isBookmarkType, validateCreateBookmarkInput } from "./types";
+export {
+  BOOKMARK_TYPES,
+  isBookmarkType,
+  validateCreateBookmarkInput,
+} from "./types";
 
 export { loadBookmarks, saveBookmarks } from "./repository";
 
@@ -20,4 +24,3 @@ export {
   deleteBookmark,
   searchBookmarks,
 } from "./manager";
-

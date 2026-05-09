@@ -160,11 +160,16 @@ export async function* runAgent(
   const normalized = await normalizeAttachments(request.attachments);
   const resumed = isResumeRequest(request);
   const normalizedMode = request.streamMode === "normalized";
-  let currentSessionId: string | undefined =
-    resumed ? request.sessionId : undefined;
+  let currentSessionId: string | undefined = resumed
+    ? request.sessionId
+    : undefined;
 
   try {
-    const session = await startFromRequest(runner, request, normalized.imagePaths);
+    const session = await startFromRequest(
+      runner,
+      request,
+      normalized.imagePaths,
+    );
     currentSessionId = session.sessionId;
 
     const iterator = session.messages();
@@ -187,7 +192,10 @@ export async function* runAgent(
         };
         yield startedEvent;
       } else {
-        const startedSessionId = resolveSessionId(session.sessionId, firstChunk.value);
+        const startedSessionId = resolveSessionId(
+          session.sessionId,
+          firstChunk.value,
+        );
         currentSessionId = startedSessionId;
         const startedEvent: AgentSessionStartedEvent = {
           type: "session.started",
@@ -220,7 +228,10 @@ export async function* runAgent(
       if (nextChunk.done) {
         break;
       }
-      const resolvedSessionId = resolveSessionId(session.sessionId, nextChunk.value);
+      const resolvedSessionId = resolveSessionId(
+        session.sessionId,
+        nextChunk.value,
+      );
       currentSessionId = resolvedSessionId;
 
       if (normalizedMode) {
@@ -275,7 +286,12 @@ export async function* toNormalizedEvents(
   let fallbackSessionId = "unknown-session";
   for await (const chunk of chunks) {
     fallbackSessionId = resolveSessionId(fallbackSessionId, chunk);
-    for (const event of normalizeChunkToEvents(chunk, fallbackSessionId, state, true)) {
+    for (const event of normalizeChunkToEvents(
+      chunk,
+      fallbackSessionId,
+      state,
+      true,
+    )) {
       yield event;
     }
   }
@@ -291,17 +307,21 @@ async function startFromRequest(
   readonly waitForCompletion: () => Promise<SessionResult>;
 }> {
   if (isResumeRequest(request)) {
-    const session = await runner.resumeSession(request.sessionId, request.prompt, {
-      cwd: request.cwd,
-      model: request.model,
-      sandbox: request.sandbox,
-      approvalMode: request.approvalMode,
-      fullAuto: request.fullAuto,
-      additionalArgs: request.additionalArgs,
-      images: imagePaths,
-      streamGranularity: request.streamGranularity,
-      environmentVariables: request.environmentVariables,
-    });
+    const session = await runner.resumeSession(
+      request.sessionId,
+      request.prompt,
+      {
+        cwd: request.cwd,
+        model: request.model,
+        sandbox: request.sandbox,
+        approvalMode: request.approvalMode,
+        fullAuto: request.fullAuto,
+        additionalArgs: request.additionalArgs,
+        images: imagePaths,
+        streamGranularity: request.streamGranularity,
+        environmentVariables: request.environmentVariables,
+      },
+    );
     return session;
   }
 
@@ -373,7 +393,10 @@ async function normalizeAttachments(
   };
 }
 
-function parseBase64Input(data: string): { readonly body: string; readonly mediaType?: string } {
+function parseBase64Input(data: string): {
+  readonly body: string;
+  readonly mediaType?: string;
+} {
   if (!data.startsWith("data:")) {
     return { body: data };
   }
@@ -411,7 +434,10 @@ function extensionForMediaType(mediaType: string | undefined): string {
   }
 }
 
-function sanitizeFileName(filename: string | undefined, defaultExt: string): string {
+function sanitizeFileName(
+  filename: string | undefined,
+  defaultExt: string,
+): string {
   if (filename === undefined || filename.trim().length === 0) {
     return `${randomUUID()}${defaultExt}`;
   }
@@ -439,7 +465,9 @@ function resolveSessionId(
     chunk.payload !== null &&
     "meta" in chunk.payload
   ) {
-    const payload = chunk.payload as { readonly meta?: { readonly id?: string } };
+    const payload = chunk.payload as {
+      readonly meta?: { readonly id?: string };
+    };
     const candidate = payload.meta?.id;
     if (typeof candidate === "string" && candidate.length > 0) {
       return candidate;
@@ -448,7 +476,9 @@ function resolveSessionId(
   return fallbackSessionId;
 }
 
-function isCharChunk(chunk: SessionStreamChunk): chunk is SessionCharStreamChunk {
+function isCharChunk(
+  chunk: SessionStreamChunk,
+): chunk is SessionCharStreamChunk {
   return (chunk as SessionCharStreamChunk).kind === "char";
 }
 
@@ -456,7 +486,9 @@ function toError(value: unknown): Error {
   if (value instanceof Error) {
     return value;
   }
-  return new Error(typeof value === "string" ? value : "Unknown runAgent error");
+  return new Error(
+    typeof value === "string" ? value : "Unknown runAgent error",
+  );
 }
 
 function isResumeRequest(request: AgentRequest): request is ResumeAgentRequest {
@@ -571,7 +603,9 @@ function normalizeChunkToEvents(
       events.push({
         type: "session.error",
         sessionId,
-        error: new Error(readString(payload["message"]) ?? "Unknown rollout error"),
+        error: new Error(
+          readString(payload["message"]) ?? "Unknown rollout error",
+        ),
       });
       return events;
     }
@@ -620,8 +654,9 @@ function normalizeChunkToEvents(
       type: "tool.result",
       sessionId,
       name:
-        (callId !== undefined ? state.toolNamesByCallId.get(callId) : undefined) ??
-        "unknown-tool",
+        (callId !== undefined
+          ? state.toolNamesByCallId.get(callId)
+          : undefined) ?? "unknown-tool",
       isError,
       output,
     });
@@ -731,7 +766,9 @@ function readStringArray(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const strings = value.filter((item): item is string => typeof item === "string");
+  const strings = value.filter(
+    (item): item is string => typeof item === "string",
+  );
   return strings.length > 0 ? strings : undefined;
 }
 

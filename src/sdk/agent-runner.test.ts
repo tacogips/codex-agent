@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "vitest";
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { defined } from "../testing/assert";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAgent, toNormalizedEvents, type AgentEvent } from "./agent-runner";
@@ -17,7 +25,9 @@ afterEach(async () => {
 
 describe("runAgent", () => {
   test("starts a new session through a stable request object", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-new-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-new-"),
+    );
     createdDirs.push(fixtureDir);
 
     const argsLogPath = join(fixtureDir, "args.log");
@@ -27,9 +37,9 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
-        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"meta\":{\"id\":\"new-session-001\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"codex\",\"cli_version\":\"1.0.0\",\"source\":\"exec\"}}}'",
-        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"AgentMessage\",\"message\":\"hello\"}}'",
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
+        'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"meta":{"id":"new-session-001","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp/project","originator":"codex","cli_version":"1.0.0","source":"exec"}}}\'',
+        'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"AgentMessage","message":"hello"}}\'',
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -60,7 +70,9 @@ describe("runAgent", () => {
   });
 
   test("emits started event with resolved session id for new session", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-started-id-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-started-id-"),
+    );
     createdDirs.push(fixtureDir);
 
     const fakeCodexPath = join(fixtureDir, "fake-codex-started-id.sh");
@@ -69,8 +81,8 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"resolved-session-001\"}'",
-        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"hello\"}}'",
+        'printf \'%s\\n\' \'{"type":"thread.started","thread_id":"resolved-session-001"}\'',
+        'printf \'%s\\n\' \'{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"hello"}}\'',
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -95,7 +107,9 @@ describe("runAgent", () => {
   });
 
   test("forwards additional args for new sessions", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-new-additional-args-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-new-additional-args-"),
+    );
     createdDirs.push(fixtureDir);
 
     const argsLogPath = join(fixtureDir, "new-additional-args.log");
@@ -105,8 +119,8 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
-        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"meta\":{\"id\":\"new-session-additional-args-001\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"codex\",\"cli_version\":\"1.0.0\",\"source\":\"exec\"}}}'",
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
+        'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"meta":{"id":"new-session-additional-args-001","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp/project","originator":"codex","cli_version":"1.0.0","source":"exec"}}}\'',
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -116,7 +130,10 @@ describe("runAgent", () => {
     for await (const _event of runAgent(
       {
         prompt: "say hello",
-        additionalArgs: ["--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"],
+        additionalArgs: [
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+        ],
       },
       {
         codexBinary: fakeCodexPath,
@@ -131,7 +148,9 @@ describe("runAgent", () => {
   });
 
   test("forwards environment variables for new sessions", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-new-env-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-new-env-"),
+    );
     createdDirs.push(fixtureDir);
 
     const envLogPath = join(fixtureDir, "new-env.log");
@@ -141,8 +160,8 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s' \"\${CODEX_AGENT_TEST_ENV:-}\" > '${envLogPath}'`,
-        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"meta\":{\"id\":\"new-session-env-001\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"codex\",\"cli_version\":\"1.0.0\",\"source\":\"exec\"}}}'",
+        `printf '%s' "\${CODEX_AGENT_TEST_ENV:-}" > '${envLogPath}'`,
+        'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"meta":{"id":"new-session-env-001","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp/project","originator":"codex","cli_version":"1.0.0","source":"exec"}}}\'',
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -168,7 +187,9 @@ describe("runAgent", () => {
   });
 
   test("uses the same API for resume flow while keeping command details internal", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-resume-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-resume-"),
+    );
     createdDirs.push(fixtureDir);
 
     const codexHome = join(fixtureDir, "codex-home");
@@ -212,7 +233,7 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
         "sleep 0.1",
         "exit 0",
       ].join("\n"),
@@ -252,7 +273,9 @@ describe("runAgent", () => {
   });
 
   test("forwards additional args for resume sessions", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-resume-additional-args-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-resume-additional-args-"),
+    );
     createdDirs.push(fixtureDir);
 
     const codexHome = join(fixtureDir, "codex-home");
@@ -290,13 +313,16 @@ describe("runAgent", () => {
     );
 
     const argsLogPath = join(fixtureDir, "resume-additional-args.log");
-    const fakeCodexPath = join(fixtureDir, "fake-codex-resume-additional-args.sh");
+    const fakeCodexPath = join(
+      fixtureDir,
+      "fake-codex-resume-additional-args.sh",
+    );
     await writeFile(
       fakeCodexPath,
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
         "sleep 0.05",
         "exit 0",
       ].join("\n"),
@@ -307,7 +333,10 @@ describe("runAgent", () => {
     for await (const _event of runAgent(
       {
         sessionId,
-        additionalArgs: ["--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"],
+        additionalArgs: [
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+        ],
       },
       {
         codexBinary: fakeCodexPath,
@@ -328,21 +357,26 @@ describe("runAgent", () => {
   });
 
   test("resume request does not fail when session index is temporarily missing", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-resume-missing-index-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-resume-missing-index-"),
+    );
     createdDirs.push(fixtureDir);
 
-    const fakeCodexPath = join(fixtureDir, "fake-codex-resume-missing-index.sh");
+    const fakeCodexPath = join(
+      fixtureDir,
+      "fake-codex-resume-missing-index.sh",
+    );
     await writeFile(
       fakeCodexPath,
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        "if [ \"$1\" = \"exec\" ] && [ \"$2\" = \"--json\" ]; then",
-        "  printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"missing-index-session-001\"}'",
-        "  printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"hello\"}}'",
+        'if [ "$1" = "exec" ] && [ "$2" = "--json" ]; then',
+        '  printf \'%s\\n\' \'{"type":"thread.started","thread_id":"missing-index-session-001"}\'',
+        '  printf \'%s\\n\' \'{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"hello"}}\'',
         "  exit 0",
         "fi",
-        "if [ \"$1\" = \"exec\" ] && [ \"$2\" = \"resume\" ] && [ \"$3\" = \"--json\" ] && [ \"$4\" = \"missing-index-session-001\" ] && [ \"$5\" = \"say hello again\" ]; then",
+        'if [ "$1" = "exec" ] && [ "$2" = "resume" ] && [ "$3" = "--json" ] && [ "$4" = "missing-index-session-001" ] && [ "$5" = "say hello again" ]; then',
         "  sleep 0.05",
         "  exit 0",
         "fi",
@@ -361,7 +395,10 @@ describe("runAgent", () => {
         codexBinary: fakeCodexPath,
       },
     )) {
-      if (event.type === "session.message" || event.type === "session.completed") {
+      if (
+        event.type === "session.message" ||
+        event.type === "session.completed"
+      ) {
         sessionId = event.sessionId;
       }
     }
@@ -371,7 +408,7 @@ describe("runAgent", () => {
     const resumeEvents: AgentEvent[] = [];
     for await (const event of runAgent(
       {
-        sessionId: sessionId!,
+        sessionId: defined(sessionId),
         prompt: "say hello again",
       },
       {
@@ -381,9 +418,13 @@ describe("runAgent", () => {
       resumeEvents.push(event);
     }
 
-    const errorEvent = resumeEvents.find((event) => event.type === "session.error");
+    const errorEvent = resumeEvents.find(
+      (event) => event.type === "session.error",
+    );
     expect(errorEvent).toBeUndefined();
-    const completedEvent = resumeEvents.find((event) => event.type === "session.completed");
+    const completedEvent = resumeEvents.find(
+      (event) => event.type === "session.completed",
+    );
     expect(completedEvent).toBeDefined();
     if (completedEvent !== undefined) {
       expect(completedEvent.result.success).toBe(true);
@@ -391,7 +432,9 @@ describe("runAgent", () => {
   });
 
   test("normalizes base64 attachments internally and passes only image file paths", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-attachment-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-attachment-"),
+    );
     createdDirs.push(fixtureDir);
 
     const argsLogPath = join(fixtureDir, "attachment-args.log");
@@ -405,23 +448,25 @@ describe("runAgent", () => {
         `args_log='${argsLogPath}'`,
         `image_dump='${imageDumpPath}'`,
         "while [ $# -gt 0 ]; do",
-        "  if [ \"$1\" = \"--image\" ]; then",
-        "    printf 'IMAGE:%s\\n' \"$2\" >> \"$args_log\"",
-        "    cp \"$2\" \"$image_dump\"",
+        '  if [ "$1" = "--image" ]; then',
+        '    printf \'IMAGE:%s\\n\' "$2" >> "$args_log"',
+        '    cp "$2" "$image_dump"',
         "    shift 2",
         "  else",
-        "    printf 'ARG:%s\\n' \"$1\" >> \"$args_log\"",
+        '    printf \'ARG:%s\\n\' "$1" >> "$args_log"',
         "    shift",
         "  fi",
         "done",
-        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"meta\":{\"id\":\"attachment-session-001\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"codex\",\"cli_version\":\"1.0.0\",\"source\":\"exec\"}}}'",
+        'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"meta":{"id":"attachment-session-001","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp/project","originator":"codex","cli_version":"1.0.0","source":"exec"}}}\'',
         "exit 0",
       ].join("\n"),
       "utf-8",
     );
     await chmod(fakeCodexPath, 0o755);
 
-    const base64Payload = Buffer.from("hello-image-data", "utf-8").toString("base64");
+    const base64Payload = Buffer.from("hello-image-data", "utf-8").toString(
+      "base64",
+    );
     const events: AgentEvent[] = [];
     for await (const event of runAgent(
       {
@@ -454,12 +499,16 @@ describe("runAgent", () => {
     const captured = await readFile(imageDumpPath);
     expect(captured.toString("utf-8")).toBe("hello-image-data");
 
-    const completedEvent = events.find((event) => event.type === "session.completed");
+    const completedEvent = events.find(
+      (event) => event.type === "session.completed",
+    );
     expect(completedEvent).toBeDefined();
   });
 
   test("emits session.message for exec-stream item.completed agent_message", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-exec-stream-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-exec-stream-"),
+    );
     createdDirs.push(fixtureDir);
 
     const fakeCodexPath = join(fixtureDir, "fake-codex-exec-stream.sh");
@@ -468,9 +517,9 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"exec-thread-001\"}'",
-        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"hello from exec\"}}'",
-        "printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}'",
+        'printf \'%s\\n\' \'{"type":"thread.started","thread_id":"exec-thread-001"}\'',
+        'printf \'%s\\n\' \'{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"hello from exec"}}\'',
+        'printf \'%s\\n\' \'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}\'',
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -512,7 +561,9 @@ describe("runAgent", () => {
   });
 
   test("streamMode normalized maps event stream to provider-agnostic events", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-normalized-event-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-normalized-event-"),
+    );
     createdDirs.push(fixtureDir);
 
     const fakeCodexPath = join(fixtureDir, "fake-codex-normalized-event.sh");
@@ -521,10 +572,10 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"meta\":{\"id\":\"normalized-event-001\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"codex\",\"cli_version\":\"1.0.0\",\"source\":\"exec\"}}}'",
-        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"ExecCommandBegin\",\"call_id\":\"call_1\",\"turn_id\":\"turn_1\",\"command\":[\"echo\",\"ok\"],\"cwd\":\"/tmp/project\"}}'",
-        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"ExecCommandEnd\",\"call_id\":\"call_1\",\"turn_id\":\"turn_1\",\"command\":[\"echo\",\"ok\"],\"cwd\":\"/tmp/project\",\"exit_code\":0,\"aggregated_output\":\"ok\"}}'",
-        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"AgentMessage\",\"message\":\"hello\"}}'",
+        'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"meta":{"id":"normalized-event-001","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp/project","originator":"codex","cli_version":"1.0.0","source":"exec"}}}\'',
+        'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"ExecCommandBegin","call_id":"call_1","turn_id":"turn_1","command":["echo","ok"],"cwd":"/tmp/project"}}\'',
+        'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"ExecCommandEnd","call_id":"call_1","turn_id":"turn_1","command":["echo","ok"],"cwd":"/tmp/project","exit_code":0,"aggregated_output":"ok"}}\'',
+        'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"AgentMessage","message":"hello"}}\'',
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -544,20 +595,30 @@ describe("runAgent", () => {
       events.push(event as unknown as Record<string, unknown>);
     }
 
-    expect(events.some((event) => event["type"] === "session.started")).toBe(true);
+    expect(events.some((event) => event["type"] === "session.started")).toBe(
+      true,
+    );
     expect(events.some((event) => event["type"] === "tool.call")).toBe(true);
     expect(events.some((event) => event["type"] === "tool.result")).toBe(true);
-    expect(events.some((event) => event["type"] === "assistant.delta")).toBe(true);
-    expect(events.some((event) => event["type"] === "assistant.snapshot")).toBe(true);
+    expect(events.some((event) => event["type"] === "assistant.delta")).toBe(
+      true,
+    );
+    expect(events.some((event) => event["type"] === "assistant.snapshot")).toBe(
+      true,
+    );
 
-    const completed = events.find((event) => event["type"] === "session.completed");
+    const completed = events.find(
+      (event) => event["type"] === "session.completed",
+    );
     expect(completed).toBeDefined();
     expect(completed?.["success"]).toBe(true);
     expect(completed?.["exitCode"]).toBe(0);
   });
 
   test("streamMode normalized emits assistant text events on resumed sessions", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-normalized-resume-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-normalized-resume-"),
+    );
     createdDirs.push(fixtureDir);
 
     const codexHome = join(fixtureDir, "codex-home");
@@ -610,7 +671,7 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
         "sleep 0.05",
         "exit 0",
       ].join("\n"),
@@ -643,13 +704,16 @@ describe("runAgent", () => {
 
     expect(
       events.some(
-        (event) => event["type"] === "assistant.delta" && event["text"] === "hello again",
+        (event) =>
+          event["type"] === "assistant.delta" &&
+          event["text"] === "hello again",
       ),
     ).toBe(true);
     expect(
       events.some(
         (event) =>
-          event["type"] === "assistant.snapshot" && event["content"] === "hello again",
+          event["type"] === "assistant.snapshot" &&
+          event["content"] === "hello again",
       ),
     ).toBe(true);
   });
@@ -699,13 +763,16 @@ describe("runAgent", () => {
       "utf-8",
     );
 
-    const fakeCodexPath = join(fixtureDir, "fake-codex-normalized-resume-char-race.sh");
+    const fakeCodexPath = join(
+      fixtureDir,
+      "fake-codex-normalized-resume-char-race.sh",
+    );
     await writeFile(
       fakeCodexPath,
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"AgentMessage\",\"message\":\"NEW\"}}' >> '${rolloutPath}'`,
+        `printf '%s\\n' '{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"AgentMessage","message":"NEW"}}' >> '${rolloutPath}'`,
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -846,7 +913,7 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"HELLO\"}}'",
+        'printf \'%s\\n\' \'{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"HELLO"}}\'',
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -937,7 +1004,7 @@ describe("runAgent", () => {
         `rollout_line='${rolloutLine}'`,
         "printf '%s\\n' \"$stdout_line\"",
         "sleep 0.05",
-        "printf '%s\\n' \"$rollout_line\" >> \"$rollout\"",
+        'printf \'%s\\n\' "$rollout_line" >> "$rollout"',
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -968,7 +1035,9 @@ describe("runAgent", () => {
   });
 
   test("streamMode normalized maps char stream to assistant.delta events", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-normalized-char-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-normalized-char-"),
+    );
     createdDirs.push(fixtureDir);
 
     const fakeCodexPath = join(fixtureDir, "fake-codex-normalized-char.sh");
@@ -977,8 +1046,8 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"normalized-char-001\"}'",
-        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"OK\"}}'",
+        'printf \'%s\\n\' \'{"type":"thread.started","thread_id":"normalized-char-001"}\'',
+        'printf \'%s\\n\' \'{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"OK"}}\'',
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -1006,7 +1075,9 @@ describe("runAgent", () => {
   });
 
   test("streamMode normalized emits session.error for rollout error events", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-run-agent-normalized-error-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-normalized-error-"),
+    );
     createdDirs.push(fixtureDir);
 
     const fakeCodexPath = join(fixtureDir, "fake-codex-normalized-error.sh");
@@ -1015,8 +1086,8 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"meta\":{\"id\":\"normalized-error-001\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"codex\",\"cli_version\":\"1.0.0\",\"source\":\"exec\"}}}'",
-        "printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"Error\",\"message\":\"boom\"}}'",
+        'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"meta":{"id":"normalized-error-001","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp/project","originator":"codex","cli_version":"1.0.0","source":"exec"}}}\'',
+        'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"Error","message":"boom"}}\'',
         "exit 0",
       ].join("\n"),
       "utf-8",
@@ -1036,7 +1107,9 @@ describe("runAgent", () => {
       events.push(event as unknown as Record<string, unknown>);
     }
 
-    const sessionError = events.find((event) => event["type"] === "session.error");
+    const sessionError = events.find(
+      (event) => event["type"] === "session.error",
+    );
     expect(sessionError).toBeDefined();
   });
 
@@ -1062,7 +1135,7 @@ describe("runAgent", () => {
         payload: {
           type: "function_call",
           name: "search",
-          arguments: "{\"query\":\"hello\"}",
+          arguments: '{"query":"hello"}',
           call_id: "call_1",
         },
       },
@@ -1087,7 +1160,11 @@ describe("runAgent", () => {
       },
     ];
 
-    async function* source(): AsyncGenerator<SessionStreamChunk, void, undefined> {
+    async function* source(): AsyncGenerator<
+      SessionStreamChunk,
+      void,
+      undefined
+    > {
       for (const chunk of chunks) {
         yield chunk;
       }
@@ -1098,9 +1175,17 @@ describe("runAgent", () => {
       normalized.push(event as unknown as Record<string, unknown>);
     }
 
-    expect(normalized.some((event) => event["type"] === "session.started")).toBe(true);
-    expect(normalized.some((event) => event["type"] === "tool.call")).toBe(true);
-    expect(normalized.some((event) => event["type"] === "tool.result")).toBe(true);
-    expect(normalized.some((event) => event["type"] === "assistant.delta")).toBe(true);
+    expect(
+      normalized.some((event) => event["type"] === "session.started"),
+    ).toBe(true);
+    expect(normalized.some((event) => event["type"] === "tool.call")).toBe(
+      true,
+    );
+    expect(normalized.some((event) => event["type"] === "tool.result")).toBe(
+      true,
+    );
+    expect(
+      normalized.some((event) => event["type"] === "assistant.delta"),
+    ).toBe(true);
   });
 });

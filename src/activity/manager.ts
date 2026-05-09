@@ -4,7 +4,10 @@ import type { RolloutLine } from "../types/rollout";
 import { isEventMsg, isResponseItem } from "../types/rollout";
 import type { ActivityEntry, ActivityStatus } from "./types";
 
-function deriveStatus(line: RolloutLine, current: ActivityStatus): ActivityStatus {
+function deriveStatus(
+  line: RolloutLine,
+  current: ActivityStatus,
+): ActivityStatus {
   if (isEventMsg(line)) {
     const event = line.payload;
     switch (event.type) {

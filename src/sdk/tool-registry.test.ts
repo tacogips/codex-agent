@@ -23,4 +23,3 @@ describe("tool + ToolRegistry", () => {
     await expect(registry.run("missing", {})).rejects.toThrow("tool not found");
   });
 });
-

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { extractMarkdownTasks, parseMarkdown } from "./parser";
+import { defined } from "../testing/assert";
 
 describe("parseMarkdown", () => {
   it("splits markdown into heading-based sections", () => {
@@ -10,14 +11,16 @@ line 1
 - [ ] one`);
 
     expect(parsed.sections).toHaveLength(2);
-    expect(parsed.sections[0]!.heading).toBe("Plan");
-    expect(parsed.sections[0]!.content).toContain("line 1");
-    expect(parsed.sections[1]!.heading).toBe("Tasks");
+    expect(defined(parsed.sections[0]).heading).toBe("Plan");
+    expect(defined(parsed.sections[0]).content).toContain("line 1");
+    expect(defined(parsed.sections[1]).heading).toBe("Tasks");
   });
 
   it("returns one section for markdown without headings", () => {
     const parsed = parseMarkdown("plain text body");
-    expect(parsed.sections).toEqual([{ heading: "", content: "plain text body" }]);
+    expect(parsed.sections).toEqual([
+      { heading: "", content: "plain text body" },
+    ]);
   });
 });
 
@@ -36,4 +39,3 @@ describe("extractMarkdownTasks", () => {
     expect(tasks[1]?.checked).toBe(true);
   });
 });
-

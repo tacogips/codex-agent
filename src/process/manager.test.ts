@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { ProcessManager } from "./manager";
+import { defined } from "../testing/assert";
 
 describe("ProcessManager", () => {
   test("starts with no processes", () => {
@@ -47,10 +48,9 @@ describe("ProcessManager", () => {
     await pm.spawnExec("hello", { codexBinary: "echo" });
 
     const processes = pm.list();
-    const id = processes[0]?.id;
-    expect(id).toBeDefined();
+    const id = defined(processes[0], "expected at least one process").id;
 
-    const proc = pm.get(id!);
+    const proc = pm.get(id);
     expect(proc).not.toBeNull();
     expect(proc?.id).toBe(id);
   });
@@ -64,9 +64,8 @@ describe("ProcessManager", () => {
     const pm = new ProcessManager("echo");
     await pm.spawnExec("hello", { codexBinary: "echo" });
 
-    const id = pm.list()[0]?.id;
-    expect(id).toBeDefined();
-    expect(pm.kill(id!)).toBe(false); // Already exited
+    const id = defined(pm.list()[0], "expected at least one process").id;
+    expect(pm.kill(id)).toBe(false); // Already exited
   });
 
   test("kill returns false for unknown id", () => {
@@ -115,7 +114,10 @@ describe("ProcessManager", () => {
     const pm = new ProcessManager("echo");
     await pm.spawnExec("test prompt", {
       codexBinary: "echo",
-      additionalArgs: ["--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"],
+      additionalArgs: [
+        "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox",
+      ],
     });
 
     const command = pm.list()[0]?.command;
@@ -124,7 +126,9 @@ describe("ProcessManager", () => {
   });
 
   test("spawnExec passes configured environment variables to the child process", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-process-manager-env-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-process-manager-env-"),
+    );
     try {
       const envLogPath = join(fixtureDir, "env.log");
       const fakeCodexPath = join(fixtureDir, "fake-codex-env.sh");
@@ -133,7 +137,7 @@ describe("ProcessManager", () => {
         [
           "#!/usr/bin/env bash",
           "set -eu",
-          `printf '%s' \"\${CODEX_AGENT_TEST_ENV:-}\" > '${envLogPath}'`,
+          `printf '%s' "\${CODEX_AGENT_TEST_ENV:-}" > '${envLogPath}'`,
           "exit 0",
         ].join("\n"),
         "utf-8",
@@ -174,7 +178,9 @@ describe("ProcessManager", () => {
   });
 
   test("spawnResume does not stall when child writes large stdout/stderr output", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-process-manager-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-process-manager-"),
+    );
     try {
       const fakeCodexPath = join(fixtureDir, "fake-codex-heavy-resume.sh");
       await writeFile(
@@ -182,10 +188,10 @@ describe("ProcessManager", () => {
         [
           "#!/usr/bin/env bash",
           "set -eu",
-          "if [ \"$1\" = \"exec\" ] && [ \"$2\" = \"resume\" ] && [ \"$3\" = \"--json\" ]; then",
+          'if [ "$1" = "exec" ] && [ "$2" = "resume" ] && [ "$3" = "--json" ]; then',
           "  i=0",
-          "  while [ \"$i\" -lt 4000 ]; do",
-          "    printf '%s\\n' '{\"type\":\"event_msg\",\"payload\":{\"type\":\"AgentMessage\",\"message\":\"stdout\"}}'",
+          '  while [ "$i" -lt 4000 ]; do',
+          '    printf \'%s\\n\' \'{"type":"event_msg","payload":{"type":"AgentMessage","message":"stdout"}}\'',
           "    printf '%s\\n' 'stderr noise line' >&2",
           "    i=$((i+1))",
           "  done",

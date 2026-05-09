@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { defined } from "../testing/assert";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -48,7 +49,7 @@ describe("GroupRepository", () => {
 
       const config = await loadGroups(configDir);
       expect(config.groups).toHaveLength(1);
-      expect(config.groups[0]!.name).toBe("test");
+      expect(defined(config.groups[0]).name).toBe("test");
     });
 
     it("writes valid JSON", async () => {
@@ -71,7 +72,7 @@ describe("GroupRepository", () => {
       await addGroup("persisted", undefined, configDir);
       const groups = await listGroups(configDir);
       expect(groups).toHaveLength(1);
-      expect(groups[0]!.name).toBe("persisted");
+      expect(defined(groups[0]).name).toBe("persisted");
     });
 
     it("can add multiple groups", async () => {
@@ -103,14 +104,14 @@ describe("GroupRepository", () => {
       const group = await addGroup("findable", undefined, configDir);
       const found = await findGroup(group.id, configDir);
       expect(found).not.toBeNull();
-      expect(found!.id).toBe(group.id);
+      expect(defined(found).id).toBe(group.id);
     });
 
     it("finds by name", async () => {
       await addGroup("by-name", undefined, configDir);
       const found = await findGroup("by-name", configDir);
       expect(found).not.toBeNull();
-      expect(found!.name).toBe("by-name");
+      expect(defined(found).name).toBe("by-name");
     });
 
     it("returns null for not found", async () => {
@@ -134,7 +135,7 @@ describe("GroupRepository", () => {
       await addSessionToGroup(group.id, "session-1", configDir);
 
       const found = await findGroup(group.id, configDir);
-      expect(found!.sessionIds).toEqual(["session-1"]);
+      expect(defined(found).sessionIds).toEqual(["session-1"]);
     });
 
     it("removes a session from a group", async () => {
@@ -144,7 +145,7 @@ describe("GroupRepository", () => {
       await removeSessionFromGroup(group.id, "session-1", configDir);
 
       const found = await findGroup(group.id, configDir);
-      expect(found!.sessionIds).toEqual(["session-2"]);
+      expect(defined(found).sessionIds).toEqual(["session-2"]);
     });
   });
 });

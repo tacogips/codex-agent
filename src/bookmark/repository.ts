@@ -57,7 +57,9 @@ function toData(bookmark: Bookmark): BookmarkData {
 /**
  * Load all bookmarks from persistent storage.
  */
-export async function loadBookmarks(configDir?: string): Promise<readonly Bookmark[]> {
+export async function loadBookmarks(
+  configDir?: string,
+): Promise<readonly Bookmark[]> {
   const path = bookmarkFilePath(configDir);
   try {
     const raw = await readFile(path, "utf-8");
@@ -86,4 +88,3 @@ export async function saveBookmarks(
   await writeFile(tmpPath, json, "utf-8");
   await rename(tmpPath, path);
 }
-

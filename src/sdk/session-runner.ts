@@ -253,17 +253,23 @@ export class SessionRunner {
     const sessionInfo = await findSession(sessionId, codexHome);
     const includeExisting = this.options.includeExistingOnResume === true;
     const preResumeRolloutOffset =
-      sessionInfo !== null ? await getRolloutSize(sessionInfo.rolloutPath) : undefined;
+      sessionInfo !== null
+        ? await getRolloutSize(sessionInfo.rolloutPath)
+        : undefined;
     const existingRolloutLines =
       includeExisting && sessionInfo !== null
         ? await readRollout(sessionInfo.rolloutPath)
         : undefined;
 
     const startedAt = new Date();
-    const resumeStream = this.pm.spawnResumeStream(sessionId, {
-      ...options,
-      codexBinary: this.options.codexBinary,
-    }, prompt);
+    const resumeStream = this.pm.spawnResumeStream(
+      sessionId,
+      {
+        ...options,
+        codexBinary: this.options.codexBinary,
+      },
+      prompt,
+    );
     const running = new RunningSession(
       sessionId,
       this.pm,
@@ -387,7 +393,9 @@ export class SessionRunner {
   private resolveCodexHome(
     options?: Pick<CodexProcessOptions, "environmentVariables">,
   ): string | undefined {
-    return options?.environmentVariables?.["CODEX_HOME"] ?? this.options.codexHome;
+    return (
+      options?.environmentVariables?.["CODEX_HOME"] ?? this.options.codexHome
+    );
   }
 
   private forwardExecStream(

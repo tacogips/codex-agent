@@ -1,4 +1,8 @@
-import type { MarkdownTask, ParsedMarkdown, ParsedMarkdownSection } from "./types";
+import type {
+  MarkdownTask,
+  ParsedMarkdown,
+  ParsedMarkdownSection,
+} from "./types";
 
 const HEADING_RE = /^(#{1,6})\s+(.+)$/;
 const TASK_RE = /^\s*[-*]\s+\[([ xX])\]\s+(.+)$/;
@@ -58,4 +62,3 @@ export function extractMarkdownTasks(content: string): readonly MarkdownTask[] {
   }
   return tasks;
 }
-

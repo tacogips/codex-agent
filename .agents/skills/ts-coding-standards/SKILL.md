@@ -23,6 +23,24 @@ Apply these standards when:
 3. **Simple Over Clever** - Prefer readable code over clever abstractions
 4. **Fail Fast** - Catch errors at compile time, not runtime
 
+## Source file size
+
+- **Hard limit**: No TypeScript source file under `src/` (including `*.test.ts` / `*.tsx`) should stay above **1000 lines**. If a file is at or past that size, **split it** in the same change set or as a focused follow-up.
+- **How to split**: Prefer clear module boundaries (feature, layer, or cohesive helpers). When many imports point at one path, use a **thin facade** file that re-exports from `*-helpers.ts`, `*-types.ts`, or a small subdirectory so callers keep stable import paths.
+- **Agents**: When editing or reviewing code, if a touched file is **1000+ lines**, treat splitting as **in scope** for the task unless the user explicitly excludes it.
+- **Automation**: Non-test sources under `src/` are checked by **Biome** (`noExcessiveLinesPerFile`, **1000** lines). Legacy `*.test.ts` files may exceed this until split; the guideline above still applies during review.
+
+## After coding (agents)
+
+After modifying TypeScript under `src/` or `vitest.config.ts`:
+
+1. Run **`biome check . --diagnostic-level=warn`** (or **`bun run lint:biome`**, which sets that threshold). Use Biome from `nix develop` / flake devShell, or `bunx biome ...` when the platform binary works.
+2. Run **`bun run typecheck`**.
+3. Run **`bun run test`** (or the subset relevant to the change).
+4. Run Prettier when you touch formatted paths: **`bun run format`** or `bunx prettier --write` on the files you edited.
+
+If Biome or typecheck reports issues, fix them before declaring the task complete.
+
 ## Quick Reference
 
 ### Must-Use Patterns

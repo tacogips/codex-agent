@@ -62,7 +62,10 @@ export async function loadGroups(configDir?: string): Promise<GroupConfig> {
 /**
  * Persist groups to storage using atomic write.
  */
-export async function saveGroups(config: GroupConfig, configDir?: string): Promise<void> {
+export async function saveGroups(
+  config: GroupConfig,
+  configDir?: string,
+): Promise<void> {
   const dir = resolveConfigDir(configDir);
   await mkdir(dir, { recursive: true });
   const path = groupFilePath(configDir);
@@ -122,14 +125,18 @@ export async function findGroup(
   configDir?: string,
 ): Promise<SessionGroup | null> {
   const config = await loadGroups(configDir);
-  const data = config.groups.find((g) => g.id === idOrName || g.name === idOrName);
+  const data = config.groups.find(
+    (g) => g.id === idOrName || g.name === idOrName,
+  );
   return data ? toGroup(data) : null;
 }
 
 /**
  * List all groups.
  */
-export async function listGroups(configDir?: string): Promise<readonly SessionGroup[]> {
+export async function listGroups(
+  configDir?: string,
+): Promise<readonly SessionGroup[]> {
   const config = await loadGroups(configDir);
   return config.groups.map(toGroup);
 }
@@ -175,7 +182,10 @@ export async function removeSessionFromGroup(
   await saveGroups({ groups: newGroups }, configDir);
 }
 
-export async function pauseGroup(groupId: string, configDir?: string): Promise<boolean> {
+export async function pauseGroup(
+  groupId: string,
+  configDir?: string,
+): Promise<boolean> {
   const config = await loadGroups(configDir);
   let found = false;
   const groups = config.groups.map((group) => {
@@ -196,7 +206,10 @@ export async function pauseGroup(groupId: string, configDir?: string): Promise<b
   return true;
 }
 
-export async function resumeGroup(groupId: string, configDir?: string): Promise<boolean> {
+export async function resumeGroup(
+  groupId: string,
+  configDir?: string,
+): Promise<boolean> {
   const config = await loadGroups(configDir);
   let found = false;
   const groups = config.groups.map((group) => {

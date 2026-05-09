@@ -12,7 +12,12 @@ import {
 
 const TEST_DIR = join(tmpdir(), "codex-agent-test-session-" + Date.now());
 
-function makeSessionMeta(id: string, cwd: string, source: string, branch?: string): string {
+function makeSessionMeta(
+  id: string,
+  cwd: string,
+  source: string,
+  branch?: string,
+): string {
   return JSON.stringify({
     timestamp: "2025-05-07T17:24:21.123Z",
     type: "session_meta",
@@ -26,9 +31,14 @@ function makeSessionMeta(id: string, cwd: string, source: string, branch?: strin
         source,
         model_provider: "openai",
       },
-      git: branch !== undefined
-        ? { sha: "abc123", branch, origin_url: "https://github.com/test/repo" }
-        : undefined,
+      git:
+        branch !== undefined
+          ? {
+              sha: "abc123",
+              branch,
+              origin_url: "https://github.com/test/repo",
+            }
+          : undefined,
     },
   });
 }
@@ -58,9 +68,18 @@ beforeAll(async () => {
   await mkdir(day1, { recursive: true });
   await mkdir(day2, { recursive: true });
 
-  rollout1Path = join(day1, `rollout-2025-05-07T17-24-21-${SESSION_1_ID}.jsonl`);
-  rollout2Path = join(day1, `rollout-2025-05-07T18-00-00-${SESSION_2_ID}.jsonl`);
-  rollout3Path = join(day2, `rollout-2025-05-08T10-00-00-${SESSION_3_ID}.jsonl`);
+  rollout1Path = join(
+    day1,
+    `rollout-2025-05-07T17-24-21-${SESSION_1_ID}.jsonl`,
+  );
+  rollout2Path = join(
+    day1,
+    `rollout-2025-05-07T18-00-00-${SESSION_2_ID}.jsonl`,
+  );
+  rollout3Path = join(
+    day2,
+    `rollout-2025-05-08T10-00-00-${SESSION_3_ID}.jsonl`,
+  );
   malformedRolloutPath = join(
     day2,
     `rollout-2025-05-08T11-00-00-${MALFORMED_SESSION_ID}.jsonl`,
@@ -160,22 +179,36 @@ describe("listSessions", () => {
   });
 
   test("filters by cwd", async () => {
-    const result = await listSessions({ codexHome: TEST_DIR, cwd: "/tmp/project-a" });
+    const result = await listSessions({
+      codexHome: TEST_DIR,
+      cwd: "/tmp/project-a",
+    });
     expect(result.total).toBe(2);
   });
 
   test("filters by branch", async () => {
-    const result = await listSessions({ codexHome: TEST_DIR, branch: "develop" });
+    const result = await listSessions({
+      codexHome: TEST_DIR,
+      branch: "develop",
+    });
     expect(result.total).toBe(1);
     expect(result.sessions[0]?.id).toBe(SESSION_2_ID);
   });
 
   test("paginates results", async () => {
-    const result = await listSessions({ codexHome: TEST_DIR, limit: 2, offset: 0 });
+    const result = await listSessions({
+      codexHome: TEST_DIR,
+      limit: 2,
+      offset: 0,
+    });
     expect(result.sessions).toHaveLength(2);
     expect(result.total).toBe(3);
 
-    const page2 = await listSessions({ codexHome: TEST_DIR, limit: 2, offset: 2 });
+    const page2 = await listSessions({
+      codexHome: TEST_DIR,
+      limit: 2,
+      offset: 2,
+    });
     expect(page2.sessions).toHaveLength(1);
   });
 });
@@ -194,7 +227,9 @@ describe("findSession", () => {
   });
 
   test("returns null instead of throwing when session meta is malformed", async () => {
-    await expect(findSession(MALFORMED_SESSION_ID, TEST_DIR)).resolves.toBeNull();
+    await expect(
+      findSession(MALFORMED_SESSION_ID, TEST_DIR),
+    ).resolves.toBeNull();
   });
 });
 

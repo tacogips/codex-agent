@@ -65,10 +65,21 @@ tasks:
       - bun run format:check
 
   lint:
-    desc: Run all lints (format check + typecheck)
+    desc: Run all lints (Biome + format check + typecheck)
     cmds:
+      - bun run lint:biome
       - task: fmt-check
       - task: typecheck
+
+  gitleaks:
+    desc: Scan staged changes for secrets before commit
+    cmds:
+      - gitleaks git --pre-commit --redact --staged --verbose
+
+  install-git-hooks:
+    desc: Install the Nix-managed pre-commit hook configuration
+    cmds:
+      - nix develop -c pre-commit install --install-hooks
 
   clean:
     desc: Clean build artifacts
@@ -78,6 +89,7 @@ tasks:
   ci:
     desc: Run all CI checks
     cmds:
+      - bun run lint:biome
       - task: fmt-check
       - task: typecheck
       - task: test

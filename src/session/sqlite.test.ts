@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { defined } from "../testing/assert";
 import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -61,7 +62,8 @@ function insertSession(
 ): void {
   const defaults = {
     id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-    rollout_path: "/home/user/.codex/sessions/2026/02/20/rollout-1740000000-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl",
+    rollout_path:
+      "/home/user/.codex/sessions/2026/02/20/rollout-1740000000-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl",
     created_at: "2026-02-20T10:00:00Z",
     updated_at: "2026-02-20T10:05:00Z",
     source: "cli",
@@ -78,14 +80,26 @@ function insertSession(
 
   const row = { ...defaults, ...overrides };
 
-  db.query(`
+  db.query(
+    `
     INSERT INTO threads (id, rollout_path, created_at, updated_at, source, model_provider, cwd, cli_version, title, first_user_message, archived_at, git_sha, git_branch, git_origin_url)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    row.id, row.rollout_path, row.created_at, row.updated_at,
-    row.source, row.model_provider, row.cwd, row.cli_version,
-    row.title, row.first_user_message, row.archived_at,
-    row.git_sha, row.git_branch, row.git_origin_url,
+  `,
+  ).run(
+    row.id,
+    row.rollout_path,
+    row.created_at,
+    row.updated_at,
+    row.source,
+    row.model_provider,
+    row.cwd,
+    row.cli_version,
+    row.title,
+    row.first_user_message,
+    row.archived_at,
+    row.git_sha,
+    row.git_branch,
+    row.git_origin_url,
   );
 }
 
@@ -108,7 +122,7 @@ describe("SQLite Session Index", () => {
     it("opens a valid Codex DB", () => {
       const opened = openCodexDb(dir);
       expect(opened).not.toBeNull();
-      opened!.close();
+      defined(opened).close();
     });
 
     it("returns null for missing DB", async () => {
@@ -146,7 +160,7 @@ describe("SQLite Session Index", () => {
 
       const result = listSessionsSqlite(db, { source: "cli" });
       expect(result.total).toBe(1);
-      expect(result.sessions[0]!.id).toBe("id-1");
+      expect(defined(result.sessions[0]).id).toBe("id-1");
     });
 
     it("filters by cwd", () => {
@@ -155,7 +169,7 @@ describe("SQLite Session Index", () => {
 
       const result = listSessionsSqlite(db, { cwd: "/project/a" });
       expect(result.total).toBe(1);
-      expect(result.sessions[0]!.id).toBe("id-1");
+      expect(defined(result.sessions[0]).id).toBe("id-1");
     });
 
     it("filters by branch", () => {
@@ -164,7 +178,7 @@ describe("SQLite Session Index", () => {
 
       const result = listSessionsSqlite(db, { branch: "main" });
       expect(result.total).toBe(1);
-      expect(result.sessions[0]!.id).toBe("id-1");
+      expect(defined(result.sessions[0]).id).toBe("id-1");
     });
 
     it("supports pagination", () => {
@@ -185,8 +199,8 @@ describe("SQLite Session Index", () => {
       insertSession(db, { id: "id-new", created_at: "2026-02-20T12:00:00Z" });
 
       const result = listSessionsSqlite(db);
-      expect(result.sessions[0]!.id).toBe("id-new");
-      expect(result.sessions[1]!.id).toBe("id-old");
+      expect(defined(result.sessions[0]).id).toBe("id-new");
+      expect(defined(result.sessions[1]).id).toBe("id-old");
     });
 
     it("sorts ascending when requested", () => {
@@ -194,7 +208,7 @@ describe("SQLite Session Index", () => {
       insertSession(db, { id: "id-new", created_at: "2026-02-20T12:00:00Z" });
 
       const result = listSessionsSqlite(db, { sortOrder: "asc" });
-      expect(result.sessions[0]!.id).toBe("id-old");
+      expect(defined(result.sessions[0]).id).toBe("id-old");
     });
 
     it("maps git info correctly", () => {
@@ -206,7 +220,7 @@ describe("SQLite Session Index", () => {
       });
 
       const result = listSessionsSqlite(db);
-      const session = result.sessions[0]!;
+      const session = defined(result.sessions[0]);
       expect(session.git).toEqual({
         sha: "deadbeef",
         branch: "feature",
@@ -223,7 +237,7 @@ describe("SQLite Session Index", () => {
       });
 
       const result = listSessionsSqlite(db);
-      expect(result.sessions[0]!.git).toBeUndefined();
+      expect(defined(result.sessions[0]).git).toBeUndefined();
     });
   });
 
@@ -234,7 +248,7 @@ describe("SQLite Session Index", () => {
 
       const session = findSessionSqlite(db, "target-id");
       expect(session).not.toBeNull();
-      expect(session!.id).toBe("target-id");
+      expect(defined(session).id).toBe("target-id");
     });
 
     it("returns null for non-existent ID", () => {
@@ -252,16 +266,24 @@ describe("SQLite Session Index", () => {
 
       const session = findLatestSessionSqlite(db);
       expect(session).not.toBeNull();
-      expect(session!.id).toBe("id-new");
+      expect(defined(session).id).toBe("id-new");
     });
 
     it("filters by cwd", () => {
-      insertSession(db, { id: "id-a", cwd: "/project/a", updated_at: "2026-02-20T12:00:00Z" });
-      insertSession(db, { id: "id-b", cwd: "/project/b", updated_at: "2026-02-20T14:00:00Z" });
+      insertSession(db, {
+        id: "id-a",
+        cwd: "/project/a",
+        updated_at: "2026-02-20T12:00:00Z",
+      });
+      insertSession(db, {
+        id: "id-b",
+        cwd: "/project/b",
+        updated_at: "2026-02-20T14:00:00Z",
+      });
 
       const session = findLatestSessionSqlite(db, "/project/a");
       expect(session).not.toBeNull();
-      expect(session!.id).toBe("id-a");
+      expect(defined(session).id).toBe("id-a");
     });
 
     it("returns null when no sessions exist", () => {

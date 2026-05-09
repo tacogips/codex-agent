@@ -319,8 +319,12 @@ describe("SessionRunner", () => {
   });
 
   test("resumeSession discovers sessions from request-scoped CODEX_HOME", async () => {
-    const runnerHome = await mkdtemp(join(tmpdir(), "codex-agent-sdk-runner-home-"));
-    const requestHome = await mkdtemp(join(tmpdir(), "codex-agent-sdk-request-home-"));
+    const runnerHome = await mkdtemp(
+      join(tmpdir(), "codex-agent-sdk-runner-home-"),
+    );
+    const requestHome = await mkdtemp(
+      join(tmpdir(), "codex-agent-sdk-request-home-"),
+    );
     createdDirs.push(runnerHome, requestHome);
 
     const sessionId = "resume-env-home-session-001";

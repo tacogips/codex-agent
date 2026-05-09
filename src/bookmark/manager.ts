@@ -21,7 +21,10 @@ function applyFilter(
     return bookmarks;
   }
   return bookmarks.filter((bookmark) => {
-    if (filter.sessionId !== undefined && bookmark.sessionId !== filter.sessionId) {
+    if (
+      filter.sessionId !== undefined &&
+      bookmark.sessionId !== filter.sessionId
+    ) {
       return false;
     }
     if (filter.type !== undefined && bookmark.type !== filter.type) {
@@ -153,4 +156,3 @@ export async function searchBookmarks(
   }
   return scored.slice(0, limit);
 }
-

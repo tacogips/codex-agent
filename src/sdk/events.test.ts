@@ -23,4 +23,3 @@ describe("BasicSdkEventEmitter", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 });
-

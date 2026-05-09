@@ -259,7 +259,12 @@ export class ProcessManager {
     drainPipe(child.stderr);
 
     const id = randomUUID();
-    const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
+    const managed = createManagedProcess(
+      id,
+      child,
+      binary + " " + args.join(" "),
+      prompt,
+    );
     this.processes.set(id, managed);
 
     child.on("exit", (code) => {
@@ -400,11 +405,16 @@ async function* streamJsonlOutput(
 }
 
 function waitForExit(child: ChildProcess): Promise<number> {
+  // Fast path: child already exited before this call (common with short-lived binaries
+  // like 'echo' where the OS signals exit before the event loop delivers it as an event).
+  if (child.exitCode !== null) {
+    return Promise.resolve(child.exitCode);
+  }
   return new Promise((resolve) => {
-    child.on("exit", (code) => {
+    child.once("exit", (code) => {
       resolve(code ?? 1);
     });
-    child.on("error", () => {
+    child.once("error", () => {
       resolve(1);
     });
   });
@@ -418,9 +428,7 @@ function drainPipe(stream: NodeJS.ReadableStream | null): void {
   stream.resume();
 }
 
-function drainAsyncIterable(
-  lines: AsyncIterable<RolloutLine>,
-): void {
+function drainAsyncIterable(lines: AsyncIterable<RolloutLine>): void {
   void (async () => {
     for await (const _ of lines) {
       // Intentionally discard parsed lines while still draining stdout.
