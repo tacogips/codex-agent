@@ -395,6 +395,86 @@ describe("runAgent", () => {
     expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
+  test("forwards config overrides for resume sessions", async () => {
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-run-agent-resume-config-overrides-"),
+    );
+    createdDirs.push(fixtureDir);
+
+    const codexHome = join(fixtureDir, "codex-home");
+    const now = new Date();
+    const dayDir = join(
+      codexHome,
+      "sessions",
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    );
+    await mkdir(dayDir, { recursive: true });
+
+    const sessionId = "resume-config-overrides-001";
+    const rolloutPath = join(dayDir, `rollout-${sessionId}.jsonl`);
+    await writeFile(
+      rolloutPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-01-01T00:00:00Z",
+          type: "session_meta",
+          payload: {
+            meta: {
+              id: sessionId,
+              timestamp: "2026-01-01T00:00:00Z",
+              cwd: "/tmp/project",
+              originator: "codex",
+              cli_version: "1.0.0",
+              source: "cli",
+            },
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const argsLogPath = join(fixtureDir, "resume-config-overrides.log");
+    const fakeCodexPath = join(
+      fixtureDir,
+      "fake-codex-resume-config-overrides.sh",
+    );
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
+        "sleep 0.05",
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    for await (const _event of runAgent(
+      {
+        sessionId,
+        configOverrides: ['model_reasoning_effort="high"'],
+      },
+      {
+        codexBinary: fakeCodexPath,
+        codexHome,
+        includeExistingOnResume: true,
+      },
+    )) {
+      // Drain stream.
+    }
+
+    const args = await readFile(argsLogPath, "utf-8");
+    expect(args).toContain("exec");
+    expect(args).toContain("resume");
+    expect(args).toContain("--json");
+    expect(args).toContain(sessionId);
+    expect(args).toContain('-c\nmodel_reasoning_effort="high"');
+  });
+
   test("resume request does not fail when session index is temporarily missing", async () => {
     const fixtureDir = await mkdtemp(
       join(tmpdir(), "codex-agent-run-agent-resume-missing-index-"),

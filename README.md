@@ -135,6 +135,7 @@ for await (const event of runAgent({
     OPENAI_API_KEY: process.env["OPENAI_API_KEY"] ?? "",
     CODEX_HOME: "/tmp/codex-home",
   },
+  configOverrides: ['model_reasoning_effort="high"'],
   attachments: [
     { type: "path", path: "./screenshots/failure.png" },
     { type: "base64", data: "iVBORw0KGgoAAA...", mediaType: "image/png" },
@@ -147,8 +148,12 @@ for await (const event of runAgent({
 `environmentVariables` lets you pass the subprocess environment as a typed
 object instead of assembling ad hoc shell prefixes at the call site.
 
-Request routing (`exec` vs `resume`) and attachment normalization are handled
-inside `codex-agent` internals.
+`configOverrides` forwards Codex CLI `-c <override>` settings for both new
+sessions and resumed sessions, so callers can use the same request option
+whether the request starts with `prompt` or `sessionId`.
+
+Request routing (`exec` vs `resume`), config override forwarding, and attachment
+normalization are handled inside `codex-agent` internals.
 
 ### Streaming Options (CLI + SDK)
 
