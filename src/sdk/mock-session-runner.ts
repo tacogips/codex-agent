@@ -15,6 +15,7 @@ export interface MockCodexProcessOptions {
   readonly fullAuto?: boolean;
   readonly model?: string;
   readonly additionalArgs?: readonly string[];
+  readonly configOverrides?: readonly string[];
   readonly images?: readonly string[];
   readonly streamGranularity?: StreamGranularity;
   readonly environmentVariables?: CodexEnvironmentVariables;

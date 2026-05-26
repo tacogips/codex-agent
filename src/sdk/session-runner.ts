@@ -30,6 +30,7 @@ export interface SessionConfig {
   readonly fullAuto?: boolean | undefined;
   readonly model?: string | undefined;
   readonly additionalArgs?: readonly string[] | undefined;
+  readonly configOverrides?: readonly string[] | undefined;
   readonly images?: readonly string[] | undefined;
   readonly streamGranularity?: StreamGranularity | undefined;
   readonly environmentVariables?: CodexEnvironmentVariables | undefined;
@@ -222,6 +223,7 @@ export class SessionRunner {
         approvalMode: config.approvalMode,
         fullAuto: config.fullAuto,
         additionalArgs: config.additionalArgs,
+        configOverrides: config.configOverrides,
         images: config.images,
         streamGranularity: config.streamGranularity,
         environmentVariables: config.environmentVariables,
@@ -253,17 +255,23 @@ export class SessionRunner {
     const sessionInfo = await findSession(sessionId, codexHome);
     const includeExisting = this.options.includeExistingOnResume === true;
     const preResumeRolloutOffset =
-      sessionInfo !== null ? await getRolloutSize(sessionInfo.rolloutPath) : undefined;
+      sessionInfo !== null
+        ? await getRolloutSize(sessionInfo.rolloutPath)
+        : undefined;
     const existingRolloutLines =
       includeExisting && sessionInfo !== null
         ? await readRollout(sessionInfo.rolloutPath)
         : undefined;
 
     const startedAt = new Date();
-    const resumeStream = this.pm.spawnResumeStream(sessionId, {
-      ...options,
-      codexBinary: this.options.codexBinary,
-    }, prompt);
+    const resumeStream = this.pm.spawnResumeStream(
+      sessionId,
+      {
+        ...options,
+        codexBinary: this.options.codexBinary,
+      },
+      prompt,
+    );
     const running = new RunningSession(
       sessionId,
       this.pm,
@@ -378,6 +386,7 @@ export class SessionRunner {
       approvalMode: config.approvalMode,
       fullAuto: config.fullAuto,
       additionalArgs: config.additionalArgs,
+      configOverrides: config.configOverrides,
       images: config.images,
       streamGranularity: config.streamGranularity,
       environmentVariables: config.environmentVariables,
@@ -387,7 +396,9 @@ export class SessionRunner {
   private resolveCodexHome(
     options?: Pick<CodexProcessOptions, "environmentVariables">,
   ): string | undefined {
-    return options?.environmentVariables?.["CODEX_HOME"] ?? this.options.codexHome;
+    return (
+      options?.environmentVariables?.["CODEX_HOME"] ?? this.options.codexHome
+    );
   }
 
   private forwardExecStream(

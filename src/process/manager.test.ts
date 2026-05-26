@@ -115,7 +115,10 @@ describe("ProcessManager", () => {
     const pm = new ProcessManager("echo");
     await pm.spawnExec("test prompt", {
       codexBinary: "echo",
-      additionalArgs: ["--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"],
+      additionalArgs: [
+        "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox",
+      ],
     });
 
     const command = pm.list()[0]?.command;
@@ -123,8 +126,21 @@ describe("ProcessManager", () => {
     expect(command).toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
+  test("spawnExec includes config override args", async () => {
+    const pm = new ProcessManager("echo");
+    await pm.spawnExec("test prompt", {
+      codexBinary: "echo",
+      configOverrides: ['model_reasoning_effort="high"'],
+    });
+
+    const command = pm.list()[0]?.command;
+    expect(command).toContain('-c model_reasoning_effort="high"');
+  });
+
   test("spawnExec passes configured environment variables to the child process", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-process-manager-env-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-process-manager-env-"),
+    );
     try {
       const envLogPath = join(fixtureDir, "env.log");
       const fakeCodexPath = join(fixtureDir, "fake-codex-env.sh");
@@ -174,7 +190,9 @@ describe("ProcessManager", () => {
   });
 
   test("spawnResume does not stall when child writes large stdout/stderr output", async () => {
-    const fixtureDir = await mkdtemp(join(tmpdir(), "codex-agent-process-manager-"));
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-process-manager-"),
+    );
     try {
       const fakeCodexPath = join(fixtureDir, "fake-codex-heavy-resume.sh");
       await writeFile(
@@ -182,10 +200,10 @@ describe("ProcessManager", () => {
         [
           "#!/usr/bin/env bash",
           "set -eu",
-          "if [ \"$1\" = \"exec\" ] && [ \"$2\" = \"resume\" ] && [ \"$3\" = \"--json\" ]; then",
+          'if [ "$1" = "exec" ] && [ "$2" = "resume" ] && [ "$3" = "--json" ]; then',
           "  i=0",
-          "  while [ \"$i\" -lt 4000 ]; do",
-          "    printf '%s\\n' '{\"type\":\"event_msg\",\"payload\":{\"type\":\"AgentMessage\",\"message\":\"stdout\"}}'",
+          '  while [ "$i" -lt 4000 ]; do',
+          '    printf \'%s\\n\' \'{"type":"event_msg","payload":{"type":"AgentMessage","message":"stdout"}}\'',
           "    printf '%s\\n' 'stderr noise line' >&2",
           "    i=$((i+1))",
           "  done",
