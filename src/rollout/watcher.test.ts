@@ -74,7 +74,10 @@ describe("RolloutWatcher", () => {
     const path2 = join(TEST_DIR, "rollout-pre-existing.jsonl");
     await writeFile(
       path2,
-      SESSION_META + "\n" + makeJsonlLine("event_msg", { type: "UserMessage", message: "old" }) + "\n",
+      SESSION_META +
+        "\n" +
+        makeJsonlLine("event_msg", { type: "UserMessage", message: "old" }) +
+        "\n",
       "utf-8",
     );
 
@@ -99,7 +102,10 @@ describe("RolloutWatcher", () => {
 
     await appendFile(
       path3,
-      makeJsonlLine("event_msg", { type: "AgentMessage", message: "late write" }) + "\n",
+      makeJsonlLine("event_msg", {
+        type: "AgentMessage",
+        message: "late write",
+      }) + "\n",
       "utf-8",
     );
 
@@ -132,7 +138,10 @@ describe("RolloutWatcher", () => {
 
     await appendFile(
       rolloutPath,
-      makeJsonlLine("event_msg", { type: "AgentMessage", message: "after stop" }) + "\n",
+      makeJsonlLine("event_msg", {
+        type: "AgentMessage",
+        message: "after stop",
+      }) + "\n",
       "utf-8",
     );
     await sleep(200);
@@ -152,7 +161,10 @@ describe("RolloutWatcher", () => {
     await sleep(50);
     await appendFile(
       rolloutPath,
-      makeJsonlLine("event_msg", { type: "UserMessage", message: "dedup test" }) + "\n",
+      makeJsonlLine("event_msg", {
+        type: "UserMessage",
+        message: "dedup test",
+      }) + "\n",
       "utf-8",
     );
     await sleep(300);
@@ -162,7 +174,9 @@ describe("RolloutWatcher", () => {
   });
 
   test("sessionsWatchDir returns correct path", () => {
-    expect(sessionsWatchDir("/home/user/.codex")).toBe("/home/user/.codex/sessions");
+    expect(sessionsWatchDir("/home/user/.codex")).toBe(
+      "/home/user/.codex/sessions",
+    );
   });
 });
 

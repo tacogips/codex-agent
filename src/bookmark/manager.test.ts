@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { defined } from "../testing/assert";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -34,8 +35,9 @@ describe("BookmarkManager", () => {
 
     const found = await getBookmark(created.id, configDir);
     expect(found).not.toBeNull();
-    expect(found!.name).toBe("important session");
-    expect(found!.tags).toEqual(["priority", "review"]);
+    const foundDefined = defined(found);
+    expect(foundDefined.name).toBe("important session");
+    expect(foundDefined.tags).toEqual(["priority", "review"]);
   });
 
   it("validates type-specific fields", async () => {
@@ -74,15 +76,15 @@ describe("BookmarkManager", () => {
 
     const bySession = await listBookmarks({ sessionId: "s1" }, configDir);
     expect(bySession).toHaveLength(1);
-    expect(bySession[0]!.sessionId).toBe("s1");
+    expect(defined(bySession[0]).sessionId).toBe("s1");
 
     const byType = await listBookmarks({ type: "message" }, configDir);
     expect(byType).toHaveLength(1);
-    expect(byType[0]!.type).toBe("message");
+    expect(defined(byType[0]).type).toBe("message");
 
     const byTag = await listBookmarks({ tag: "beta" }, configDir);
     expect(byTag).toHaveLength(1);
-    expect(byTag[0]!.name).toBe("message two");
+    expect(defined(byTag[0]).name).toBe("message two");
   });
 
   it("searches bookmarks by text relevance", async () => {
@@ -108,8 +110,9 @@ describe("BookmarkManager", () => {
 
     const result = await searchBookmarks("incident", undefined, configDir);
     expect(result).toHaveLength(1);
-    expect(result[0]!.bookmark.id).toBe(top.id);
-    expect(result[0]!.score).toBeGreaterThan(0);
+    const result0 = defined(result[0]);
+    expect(result0.bookmark.id).toBe(top.id);
+    expect(result0.score).toBeGreaterThan(0);
   });
 
   it("deletes an existing bookmark", async () => {
@@ -131,4 +134,3 @@ describe("BookmarkManager", () => {
     expect(found).toBeNull();
   });
 });
-

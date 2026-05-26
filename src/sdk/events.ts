@@ -6,13 +6,21 @@ export type SdkEventType =
 
 export interface SdkEventPayloadMap {
   readonly "session.started": { readonly sessionId: string };
-  readonly "session.updated": { readonly sessionId: string; readonly status?: string | undefined };
-  readonly "session.completed": { readonly sessionId: string; readonly success: boolean };
+  readonly "session.updated": {
+    readonly sessionId: string;
+    readonly status?: string | undefined;
+  };
+  readonly "session.completed": {
+    readonly sessionId: string;
+    readonly success: boolean;
+  };
   readonly error: { readonly message: string };
 }
 
 export type SdkEventPayload<T extends SdkEventType> = SdkEventPayloadMap[T];
-export type SdkEventHandler<T extends SdkEventType> = (payload: SdkEventPayload<T>) => void;
+export type SdkEventHandler<T extends SdkEventType> = (
+  payload: SdkEventPayload<T>,
+) => void;
 
 export interface SdkEventEmitter {
   on<T extends SdkEventType>(event: T, handler: SdkEventHandler<T>): void;
@@ -21,7 +29,10 @@ export interface SdkEventEmitter {
 }
 
 export class BasicSdkEventEmitter implements SdkEventEmitter {
-  private readonly handlers: Map<SdkEventType, Set<(payload: unknown) => void>> = new Map();
+  private readonly handlers: Map<
+    SdkEventType,
+    Set<(payload: unknown) => void>
+  > = new Map();
 
   on<T extends SdkEventType>(event: T, handler: SdkEventHandler<T>): void {
     const set = this.handlers.get(event) ?? new Set();
@@ -43,4 +54,3 @@ export class BasicSdkEventEmitter implements SdkEventEmitter {
     }
   }
 }
-

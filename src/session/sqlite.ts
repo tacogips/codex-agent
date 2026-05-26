@@ -8,7 +8,11 @@
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { resolveCodexHome } from "./index";
-import type { CodexSession, SessionListOptions, SessionListResult } from "../types/session";
+import type {
+  CodexSession,
+  SessionListOptions,
+  SessionListResult,
+} from "../types/session";
 import type { SessionSource, GitInfo } from "../types/rollout";
 
 const STATE_DB_FILENAME = "state";
@@ -24,7 +28,11 @@ export function openCodexDb(codexHome?: string): Database | null {
   try {
     const db = new Database(dbPath, { readonly: true });
     // Verify the threads table exists
-    const check = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='threads'").get();
+    const check = db
+      .query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='threads'",
+      )
+      .get();
     if (check === null) {
       db.close();
       return null;
@@ -63,9 +71,14 @@ function rowToSession(row: Record<string, unknown>): CodexSession {
     modelProvider: row["model_provider"] as string | undefined,
     cwd: row["cwd"] as string,
     cliVersion: row["cli_version"] as string,
-    title: (row["title"] as string) ?? (row["first_user_message"] as string) ?? (row["id"] as string),
+    title:
+      (row["title"] as string) ??
+      (row["first_user_message"] as string) ??
+      (row["id"] as string),
     firstUserMessage: row["first_user_message"] as string | undefined,
-    archivedAt: row["archived_at"] ? new Date(row["archived_at"] as string) : undefined,
+    archivedAt: row["archived_at"]
+      ? new Date(row["archived_at"] as string)
+      : undefined,
     git,
   };
 }
@@ -75,7 +88,10 @@ function rowToSession(row: Record<string, unknown>): CodexSession {
  */
 type SqlParam = string | number | null;
 
-function buildWhereClause(options?: SessionListOptions): { where: string; params: SqlParam[] } {
+function buildWhereClause(options?: SessionListOptions): {
+  where: string;
+  params: SqlParam[];
+} {
   const conditions: string[] = [];
   const params: SqlParam[] = [];
 
@@ -92,7 +108,8 @@ function buildWhereClause(options?: SessionListOptions): { where: string; params
     params.push(options.branch);
   }
 
-  const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
+  const where =
+    conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
   return { where, params };
 }
 
@@ -119,7 +136,10 @@ export function listSessionsSqlite(
 
   // Fetch page
   const selectSql = `SELECT * FROM threads ${where} ORDER BY ${orderCol} ${orderDir} LIMIT ? OFFSET ?`;
-  const rows = db.query(selectSql).all(...params, limit, offset) as Record<string, unknown>[];
+  const rows = db.query(selectSql).all(...params, limit, offset) as Record<
+    string,
+    unknown
+  >[];
   const sessions = rows.map(rowToSession);
 
   return { sessions, total, offset, limit };
@@ -132,7 +152,10 @@ export function findSessionSqlite(
   db: Database,
   id: string,
 ): CodexSession | null {
-  const row = db.query("SELECT * FROM threads WHERE id = ?").get(id) as Record<string, unknown> | null;
+  const row = db.query("SELECT * FROM threads WHERE id = ?").get(id) as Record<
+    string,
+    unknown
+  > | null;
   if (row === null) {
     return null;
   }

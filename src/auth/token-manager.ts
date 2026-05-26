@@ -171,9 +171,13 @@ export async function rotateToken(
     throw new Error(`token not found: ${id}`);
   }
 
+  const original = config.tokens[idx];
+  if (original === undefined) {
+    throw new Error(`unexpected: token at index ${idx} is undefined`);
+  }
   const secret = randomBytes(24).toString("hex");
   const replacement = {
-    ...config.tokens[idx]!,
+    ...original,
     tokenHash: hashSecret(secret),
     revokedAt: undefined,
   };

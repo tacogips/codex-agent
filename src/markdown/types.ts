@@ -12,4 +12,3 @@ export interface MarkdownTask {
   readonly text: string;
   readonly checked: boolean;
 }
-

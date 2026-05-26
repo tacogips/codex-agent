@@ -48,4 +48,3 @@ describe("deriveActivityEntry", () => {
     expect(entry.status).toBe("failed");
   });
 });
-

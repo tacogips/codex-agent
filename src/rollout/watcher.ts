@@ -92,7 +92,10 @@ export class RolloutWatcher extends EventEmitter<RolloutWatcherEvents> {
         return;
       }
       const basename = filename.split("/").pop() ?? filename;
-      if (basename.startsWith(ROLLOUT_PREFIX) && basename.endsWith(ROLLOUT_EXT)) {
+      if (
+        basename.startsWith(ROLLOUT_PREFIX) &&
+        basename.endsWith(ROLLOUT_EXT)
+      ) {
         const fullPath = join(dir, filename);
         this.emit("newSession", fullPath);
       }

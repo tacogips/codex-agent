@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
+import { defined } from "../testing/assert";
 import {
   chmod,
   mkdtemp,
@@ -36,7 +37,7 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
         'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"meta":{"id":"new-session-001","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp/project","originator":"codex","cli_version":"1.0.0","source":"exec"}}}\'',
         'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"AgentMessage","message":"hello"}}\'',
         "exit 0",
@@ -118,7 +119,7 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
         'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"meta":{"id":"new-session-additional-args-001","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp/project","originator":"codex","cli_version":"1.0.0","source":"exec"}}}\'',
         "exit 0",
       ].join("\n"),
@@ -199,7 +200,7 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s' \"\${CODEX_AGENT_TEST_ENV:-}\" > '${envLogPath}'`,
+        `printf '%s' "\${CODEX_AGENT_TEST_ENV:-}" > '${envLogPath}'`,
         'printf \'%s\\n\' \'{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"meta":{"id":"new-session-env-001","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp/project","originator":"codex","cli_version":"1.0.0","source":"exec"}}}\'',
         "exit 0",
       ].join("\n"),
@@ -272,7 +273,7 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
         "sleep 0.1",
         "exit 0",
       ].join("\n"),
@@ -361,7 +362,7 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
         "sleep 0.05",
         "exit 0",
       ].join("\n"),
@@ -527,7 +528,7 @@ describe("runAgent", () => {
     const resumeEvents: AgentEvent[] = [];
     for await (const event of runAgent(
       {
-        sessionId: sessionId!,
+        sessionId: defined(sessionId),
         prompt: "say hello again",
       },
       {
@@ -790,7 +791,7 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
         "sleep 0.05",
         "exit 0",
       ].join("\n"),
@@ -891,7 +892,7 @@ describe("runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' '{\"timestamp\":\"2026-01-01T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"AgentMessage\",\"message\":\"NEW\"}}' >> '${rolloutPath}'`,
+        `printf '%s\\n' '{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"AgentMessage","message":"NEW"}}' >> '${rolloutPath}'`,
         "exit 0",
       ].join("\n"),
       "utf-8",

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { defined } from "../testing/assert";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -47,8 +48,9 @@ describe("TokenManager", () => {
 
     const tokens = await listTokens(configDir);
     expect(tokens).toHaveLength(1);
-    expect(tokens[0]!.name).toBe("listable");
-    expect(tokens[0]!.permissions).toEqual(["group:*"]);
+    const token0 = defined(tokens[0]);
+    expect(token0.name).toBe("listable");
+    expect(token0.permissions).toEqual(["group:*"]);
   });
 
   it("revokes token and blocks verification", async () => {
@@ -59,7 +61,7 @@ describe("TokenManager", () => {
       },
       configDir,
     );
-    const id = token.split(".")[0]!;
+    const id = defined(token.split(".")[0], "token must have an id segment");
 
     const revoked = await revokeToken(id, configDir);
     expect(revoked).toBe(true);
@@ -75,7 +77,7 @@ describe("TokenManager", () => {
       },
       configDir,
     );
-    const id = original.split(".")[0]!;
+    const id = defined(original.split(".")[0], "token must have an id segment");
     const rotated = await rotateToken(id, configDir);
 
     expect((await verifyToken(original, configDir)).ok).toBe(false);

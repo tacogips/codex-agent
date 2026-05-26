@@ -82,7 +82,9 @@ export function normalizeTags(tags?: readonly string[]): readonly string[] {
   return Array.from(deduped);
 }
 
-export function validateCreateBookmarkInput(input: CreateBookmarkInput): readonly string[] {
+export function validateCreateBookmarkInput(
+  input: CreateBookmarkInput,
+): readonly string[] {
   const errors: string[] = [];
 
   if (input.sessionId.trim().length === 0) {
@@ -97,23 +99,38 @@ export function validateCreateBookmarkInput(input: CreateBookmarkInput): readonl
       if (input.messageId !== undefined) {
         errors.push("messageId is not allowed for session bookmarks");
       }
-      if (input.fromMessageId !== undefined || input.toMessageId !== undefined) {
+      if (
+        input.fromMessageId !== undefined ||
+        input.toMessageId !== undefined
+      ) {
         errors.push("range fields are not allowed for session bookmarks");
       }
       break;
     case "message":
-      if (input.messageId === undefined || input.messageId.trim().length === 0) {
+      if (
+        input.messageId === undefined ||
+        input.messageId.trim().length === 0
+      ) {
         errors.push("messageId is required for message bookmarks");
       }
-      if (input.fromMessageId !== undefined || input.toMessageId !== undefined) {
+      if (
+        input.fromMessageId !== undefined ||
+        input.toMessageId !== undefined
+      ) {
         errors.push("range fields are not allowed for message bookmarks");
       }
       break;
     case "range":
-      if (input.fromMessageId === undefined || input.fromMessageId.trim().length === 0) {
+      if (
+        input.fromMessageId === undefined ||
+        input.fromMessageId.trim().length === 0
+      ) {
         errors.push("fromMessageId is required for range bookmarks");
       }
-      if (input.toMessageId === undefined || input.toMessageId.trim().length === 0) {
+      if (
+        input.toMessageId === undefined ||
+        input.toMessageId.trim().length === 0
+      ) {
         errors.push("toMessageId is required for range bookmarks");
       }
       if (input.messageId !== undefined) {
@@ -124,4 +141,3 @@ export function validateCreateBookmarkInput(input: CreateBookmarkInput): readonl
 
   return errors;
 }
-

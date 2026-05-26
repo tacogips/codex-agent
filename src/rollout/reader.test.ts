@@ -57,7 +57,8 @@ const INJECTED_ENV_CONTEXT_LINE = JSON.stringify({
   type: "event_msg",
   payload: {
     type: "UserMessage",
-    message: "<environment_context>\n  <cwd>/tmp/test-project</cwd>\n</environment_context>",
+    message:
+      "<environment_context>\n  <cwd>/tmp/test-project</cwd>\n</environment_context>",
   },
 });
 
@@ -616,7 +617,11 @@ describe("getSessionMessages", () => {
       },
     });
     const path = join(TEST_DIR, "rollout-unknown-response-item.jsonl");
-    await writeFile(path, [SESSION_META_LINE, unknownResponseItem].join("\n"), "utf-8");
+    await writeFile(
+      path,
+      [SESSION_META_LINE, unknownResponseItem].join("\n"),
+      "utf-8",
+    );
 
     const messages = await getSessionMessages(path);
     expect(messages).toHaveLength(0);
@@ -632,7 +637,11 @@ describe("getSessionMessages", () => {
       },
     });
     const path = join(TEST_DIR, "rollout-unknown-event-msg.jsonl");
-    await writeFile(path, [SESSION_META_LINE, unknownEventMsg].join("\n"), "utf-8");
+    await writeFile(
+      path,
+      [SESSION_META_LINE, unknownEventMsg].join("\n"),
+      "utf-8",
+    );
 
     const messages = await getSessionMessages(path);
     expect(messages).toHaveLength(0);

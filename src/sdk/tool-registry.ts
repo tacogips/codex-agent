@@ -5,7 +5,10 @@ export interface ToolContext {
 export interface ToolConfig<TInput, TOutput> {
   readonly name: string;
   readonly description?: string | undefined;
-  readonly run: (input: TInput, context?: ToolContext) => Promise<TOutput> | TOutput;
+  readonly run: (
+    input: TInput,
+    context?: ToolContext,
+  ) => Promise<TOutput> | TOutput;
 }
 
 export interface RegisteredTool<TInput, TOutput> {
@@ -32,8 +35,13 @@ export function tool<TInput, TOutput>(
 export class ToolRegistry {
   private readonly tools = new Map<string, RegisteredTool<unknown, unknown>>();
 
-  register<TInput, TOutput>(registeredTool: RegisteredTool<TInput, TOutput>): void {
-    this.tools.set(registeredTool.name, registeredTool as RegisteredTool<unknown, unknown>);
+  register<TInput, TOutput>(
+    registeredTool: RegisteredTool<TInput, TOutput>,
+  ): void {
+    this.tools.set(
+      registeredTool.name,
+      registeredTool as RegisteredTool<unknown, unknown>,
+    );
   }
 
   get<TInput, TOutput>(name: string): RegisteredTool<TInput, TOutput> | null {
@@ -60,4 +68,3 @@ export class ToolRegistry {
     return registered.run(input, context);
   }
 }
-

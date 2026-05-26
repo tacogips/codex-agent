@@ -52,12 +52,16 @@ export async function* runGroup(
   }
 
   // Process sessions with concurrency control
-  const inFlight = new Map<string, Promise<{ sessionId: string; exitCode: number }>>();
+  const inFlight = new Map<
+    string,
+    Promise<{ sessionId: string; exitCode: number }>
+  >();
 
   while (pending.length > 0 || inFlight.size > 0) {
     // Fill up to maxConcurrent
     while (pending.length > 0 && inFlight.size < maxConcurrent) {
-      const sessionId = pending.shift()!;
+      const sessionId = pending.shift();
+      if (sessionId === undefined) break;
       running.push(sessionId);
 
       const promise = (async () => {
@@ -67,7 +71,7 @@ export async function* runGroup(
             cwd: options?.cwd,
           });
           return { sessionId, exitCode: result.exitCode };
-        } catch (err) {
+        } catch (_err) {
           return { sessionId, exitCode: 1 };
         }
       })();

@@ -5,4 +5,3 @@ export interface ActivityEntry {
   readonly status: ActivityStatus;
   readonly updatedAt: string;
 }
-

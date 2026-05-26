@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { ProcessManager } from "./manager";
+import { defined } from "../testing/assert";
 
 describe("ProcessManager", () => {
   test("starts with no processes", () => {
@@ -47,10 +48,9 @@ describe("ProcessManager", () => {
     await pm.spawnExec("hello", { codexBinary: "echo" });
 
     const processes = pm.list();
-    const id = processes[0]?.id;
-    expect(id).toBeDefined();
+    const id = defined(processes[0], "expected at least one process").id;
 
-    const proc = pm.get(id!);
+    const proc = pm.get(id);
     expect(proc).not.toBeNull();
     expect(proc?.id).toBe(id);
   });
@@ -64,9 +64,8 @@ describe("ProcessManager", () => {
     const pm = new ProcessManager("echo");
     await pm.spawnExec("hello", { codexBinary: "echo" });
 
-    const id = pm.list()[0]?.id;
-    expect(id).toBeDefined();
-    expect(pm.kill(id!)).toBe(false); // Already exited
+    const id = defined(pm.list()[0], "expected at least one process").id;
+    expect(pm.kill(id)).toBe(false); // Already exited
   });
 
   test("kill returns false for unknown id", () => {
@@ -149,7 +148,7 @@ describe("ProcessManager", () => {
         [
           "#!/usr/bin/env bash",
           "set -eu",
-          `printf '%s' \"\${CODEX_AGENT_TEST_ENV:-}\" > '${envLogPath}'`,
+          `printf '%s' "\${CODEX_AGENT_TEST_ENV:-}" > '${envLogPath}'`,
           "exit 0",
         ].join("\n"),
         "utf-8",

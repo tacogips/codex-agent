@@ -189,7 +189,7 @@ describe("dist runtime runAgent", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `printf '%s\\n' \"$@\" > '${argsLogPath}'`,
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
         "sleep 0.05",
         "exit 0",
       ].join("\n"),
