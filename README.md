@@ -266,6 +266,25 @@ Verify distribution artifacts are synced with source:
 bun run check:dist-sync
 ```
 
+## Distribution Artifact
+
+`dist/main.js` is the published Bun runtime artifact used by the package
+`main`, `module`, and root import export. Treat it as generated output from
+`src/main.ts`, not as an independent implementation surface.
+
+When TypeScript source changes affect exported runtime behavior, refresh and
+verify the artifact before committing:
+
+```bash
+bun run build
+git diff -- dist/main.js
+bun run check:dist-sync
+```
+
+Inspect the generated diff before handoff. If the diff appears unrelated to the
+source change or alternates across repeated builds, investigate build
+determinism before widening the fix beyond `dist/main.js`.
+
 ## Notes
 
 - TypeScript strict mode is enabled (`tsconfig.json`).
