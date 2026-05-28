@@ -136,6 +136,108 @@ describe("ProcessManager", () => {
     expect(command).toContain('-c model_reasoning_effort="high"');
   });
 
+  test("spawnExec places options before the prompt argument", async () => {
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-process-manager-args-"),
+    );
+    try {
+      const argsLogPath = join(fixtureDir, "args.log");
+      const fakeCodexPath = join(fixtureDir, "fake-codex-args.sh");
+      await writeFile(
+        fakeCodexPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -eu",
+          `printf '%s\\n' "$@" > '${argsLogPath}'`,
+          "exit 0",
+        ].join("\n"),
+        "utf-8",
+      );
+      await chmod(fakeCodexPath, 0o755);
+
+      const pm = new ProcessManager(fakeCodexPath);
+      const result = await pm.spawnExec("test prompt with spaces", {
+        codexBinary: fakeCodexPath,
+        model: "gpt-5.5",
+        configOverrides: ['model_reasoning_effort="high"'],
+        additionalArgs: ["--skip-git-repo-check"],
+      });
+
+      expect(result.exitCode).toBe(0);
+      const args = (await readFile(argsLogPath, "utf-8")).trimEnd().split("\n");
+      expect(args).toEqual([
+        "exec",
+        "--json",
+        "--model",
+        "gpt-5.5",
+        "-c",
+        'model_reasoning_effort="high"',
+        "--skip-git-repo-check",
+        "test prompt with spaces",
+      ]);
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  test("spawnResumeStream places resume options before session and prompt arguments", async () => {
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-process-manager-resume-args-"),
+    );
+    try {
+      const argsLogPath = join(fixtureDir, "args.log");
+      const fakeCodexPath = join(fixtureDir, "fake-codex-resume-args.sh");
+      await writeFile(
+        fakeCodexPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -eu",
+          `printf '%s\\n' "$@" > '${argsLogPath}'`,
+          "exit 0",
+        ].join("\n"),
+        "utf-8",
+      );
+      await chmod(fakeCodexPath, 0o755);
+
+      const pm = new ProcessManager(fakeCodexPath);
+      const stream = pm.spawnResumeStream(
+        "session-1",
+        {
+          codexBinary: fakeCodexPath,
+          model: "gpt-5.5",
+          images: ["./one.png"],
+          configOverrides: ['model_reasoning_effort="high"'],
+          additionalArgs: ["--skip-git-repo-check"],
+        },
+        "resume prompt",
+      );
+      const drained: unknown[] = [];
+      for await (const line of stream.lines) {
+        drained.push(line);
+      }
+
+      expect(await stream.completion).toBe(0);
+      expect(drained).toEqual([]);
+      const args = (await readFile(argsLogPath, "utf-8")).trimEnd().split("\n");
+      expect(args).toEqual([
+        "exec",
+        "resume",
+        "--json",
+        "--model",
+        "gpt-5.5",
+        "-c",
+        'model_reasoning_effort="high"',
+        "--skip-git-repo-check",
+        "--image",
+        "./one.png",
+        "session-1",
+        "resume prompt",
+      ]);
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
   test("spawnExec passes configured environment variables to the child process", async () => {
     const fixtureDir = await mkdtemp(
       join(tmpdir(), "codex-agent-process-manager-env-"),

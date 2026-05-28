@@ -1696,21 +1696,26 @@ class ProcessManager {
   }
 }
 function buildExecArgs(prompt, options) {
-  const args = ["exec", "--json", prompt];
+  const args = ["exec", "--json", ...buildCommonArgs(options)];
   if (options?.images !== undefined) {
     for (const imagePath of options.images) {
       args.push("--image", imagePath);
     }
   }
-  args.push(...buildCommonArgs(options));
+  args.push(prompt);
   return args;
 }
 function buildResumeArgs(sessionId, options, prompt) {
-  const args = ["exec", "resume", "--json", sessionId];
+  const args = ["exec", "resume", "--json", ...buildCommonArgs(options)];
+  if (options?.images !== undefined) {
+    for (const imagePath of options.images) {
+      args.push("--image", imagePath);
+    }
+  }
+  args.push(sessionId);
   if (prompt !== undefined && prompt.trim().length > 0) {
     args.push(prompt);
   }
-  args.push(...buildCommonArgs(options));
   return args;
 }
 function buildCommonArgs(options) {
@@ -1782,11 +1787,14 @@ async function* streamJsonlOutput(child) {
   }
 }
 function waitForExit(child) {
+  if (child.exitCode !== null) {
+    return Promise.resolve(child.exitCode);
+  }
   return new Promise((resolve3) => {
-    child.on("exit", (code) => {
+    child.once("exit", (code) => {
       resolve3(code ?? 1);
     });
-    child.on("error", () => {
+    child.once("error", () => {
       resolve3(1);
     });
   });
@@ -1832,6 +1840,8 @@ async function* runGroup(group, prompt, options) {
   while (pending.length > 0 || inFlight.size > 0) {
     while (pending.length > 0 && inFlight.size < maxConcurrent) {
       const sessionId = pending.shift();
+      if (sessionId === undefined)
+        break;
       running.push(sessionId);
       const promise = (async () => {
         try {
@@ -1840,7 +1850,7 @@ async function* runGroup(group, prompt, options) {
             cwd: options?.cwd
           });
           return { sessionId, exitCode: result2.exitCode };
-        } catch (err) {
+        } catch (_err) {
           return { sessionId, exitCode: 1 };
         }
       })();
@@ -2650,9 +2660,13 @@ async function rotateToken(id, configDir) {
   if (idx === -1) {
     throw new Error(`token not found: ${id}`);
   }
+  const original = config.tokens[idx];
+  if (original === undefined) {
+    throw new Error(`unexpected: token at index ${idx} is undefined`);
+  }
   const secret = randomBytes(24).toString("hex");
   const replacement = {
-    ...config.tokens[idx],
+    ...original,
     tokenHash: hashSecret(secret),
     revokedAt: undefined
   };
@@ -11424,6 +11438,169 @@ var APPROVAL_MODES = [
   "on-failure"
 ];
 var STREAM_GRANULARITIES = ["event", "char"];
+
+// src/graphql/params.ts
+function parseJsonLiteral(ast) {
+  switch (ast.kind) {
+    case Kind.NULL:
+      return null;
+    case Kind.STRING:
+    case Kind.ENUM:
+      return ast.value;
+    case Kind.INT:
+    case Kind.FLOAT:
+      return Number(ast.value);
+    case Kind.BOOLEAN:
+      return ast.value;
+    case Kind.LIST:
+      return ast.values.map((value) => parseJsonLiteral(value));
+    case Kind.OBJECT:
+      return Object.fromEntries(ast.fields.map((field) => [
+        field.name.value,
+        parseJsonLiteral(field.value)
+      ]));
+    default:
+      return null;
+  }
+}
+function toRecord4(value, label = "params") {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new GraphQLError(`${label} must be a JSON object`);
+  }
+  return value;
+}
+function readString5(record, key) {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+function readNumber3(record, key) {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+function readBoolean(record, key) {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+function readStringArray2(record, key) {
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    return;
+  }
+  if (value.some((entry) => typeof entry !== "string")) {
+    throw new GraphQLError(`${key} must be a string array`);
+  }
+  return value;
+}
+function readStringUnion(record, key, allowedValues) {
+  const rawValue = record[key];
+  if (rawValue === undefined) {
+    return;
+  }
+  if (typeof rawValue !== "string") {
+    throw new GraphQLError(`${key} must be a string`);
+  }
+  const value = rawValue;
+  if (!isAllowedString(value, allowedValues)) {
+    throw new GraphQLError(`${key} must be one of: ${allowedValues.join(", ")}`);
+  }
+  return value;
+}
+function requireStringUnion(record, key, allowedValues) {
+  const value = requireString(record, key);
+  if (!isAllowedString(value, allowedValues)) {
+    throw new GraphQLError(`${key} must be one of: ${allowedValues.join(", ")}`);
+  }
+  return value;
+}
+function isAllowedString(value, allowedValues) {
+  return allowedValues.includes(value);
+}
+function readStringRecord(record, key) {
+  const value = record[key];
+  if (value === undefined) {
+    return;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new GraphQLError(`${key} must be a string-keyed JSON object`);
+  }
+  const entries = Object.entries(value);
+  const invalid = entries.find(([, entryValue]) => typeof entryValue !== "string");
+  if (invalid !== undefined) {
+    throw new GraphQLError(`${key}.${invalid[0]} must be a string`);
+  }
+  return Object.fromEntries(entries);
+}
+function requireString(record, key) {
+  const value = readString5(record, key);
+  if (value === undefined || value.trim().length === 0) {
+    throw new GraphQLError(`${key} is required`);
+  }
+  return value;
+}
+function requireNumber(record, key) {
+  const value = readNumber3(record, key);
+  if (value === undefined) {
+    throw new GraphQLError(`${key} is required`);
+  }
+  return value;
+}
+function readProcessOptions(record) {
+  const options = {};
+  const model = readString5(record, "model");
+  if (model !== undefined)
+    options.model = model;
+  const cwd = readString5(record, "cwd");
+  if (cwd !== undefined)
+    options.cwd = cwd;
+  const sandbox = readStringUnion(record, "sandbox", SANDBOX_MODES);
+  if (sandbox !== undefined)
+    options.sandbox = sandbox;
+  const approvalMode = readStringUnion(record, "approvalMode", APPROVAL_MODES);
+  if (approvalMode !== undefined)
+    options.approvalMode = approvalMode;
+  const fullAuto = readBoolean(record, "fullAuto");
+  if (fullAuto !== undefined)
+    options.fullAuto = fullAuto;
+  const additionalArgs = readStringArray2(record, "additionalArgs");
+  if (additionalArgs !== undefined)
+    options.additionalArgs = additionalArgs;
+  const images = readStringArray2(record, "images");
+  if (images !== undefined)
+    options.images = images;
+  const configOverrides = readStringArray2(record, "configOverrides");
+  if (configOverrides !== undefined)
+    options.configOverrides = configOverrides;
+  const streamGranularity = readStringUnion(record, "streamGranularity", STREAM_GRANULARITIES);
+  if (streamGranularity !== undefined) {
+    options.streamGranularity = streamGranularity;
+  }
+  const environmentVariables = readStringRecord(record, "environmentVariables");
+  if (environmentVariables !== undefined) {
+    options.environmentVariables = environmentVariables;
+  }
+  const codexBinary = readString5(record, "codexBinary");
+  if (codexBinary !== undefined)
+    options.codexBinary = codexBinary;
+  return options;
+}
+function extractSessionId(lines) {
+  for (const line of lines) {
+    if (typeof line !== "object" || line === null) {
+      continue;
+    }
+    const record = line;
+    if (record["type"] !== "session_meta") {
+      continue;
+    }
+    const payload = typeof record["payload"] === "object" && record["payload"] !== null ? record["payload"] : null;
+    const meta = payload !== null && typeof payload["meta"] === "object" && payload["meta"] !== null ? payload["meta"] : null;
+    const id = meta === null ? undefined : readString5(meta, "id");
+    if (id !== undefined) {
+      return id;
+    }
+  }
+  return;
+}
 // src/sdk/events.ts
 class BasicSdkEventEmitter {
   handlers = new Map;
@@ -11611,6 +11788,7 @@ class SessionRunner {
         approvalMode: config.approvalMode,
         fullAuto: config.fullAuto,
         additionalArgs: config.additionalArgs,
+        configOverrides: config.configOverrides,
         images: config.images,
         streamGranularity: config.streamGranularity,
         environmentVariables: config.environmentVariables
@@ -11719,6 +11897,7 @@ class SessionRunner {
       approvalMode: config.approvalMode,
       fullAuto: config.fullAuto,
       additionalArgs: config.additionalArgs,
+      configOverrides: config.configOverrides,
       images: config.images,
       streamGranularity: config.streamGranularity,
       environmentVariables: config.environmentVariables
@@ -11760,7 +11939,7 @@ function toCharStreamChunks(line, sessionId) {
 }
 function extractAssistantTextSegments(line) {
   if (line.type === "event_msg") {
-    const payload2 = toRecord4(line.payload);
+    const payload2 = toRecord5(line.payload);
     if (payload2?.["type"] === "AgentMessage" && typeof payload2["message"] === "string") {
       return [payload2["message"]];
     }
@@ -11769,13 +11948,13 @@ function extractAssistantTextSegments(line) {
   if (line.type !== "response_item") {
     return [];
   }
-  const payload = toRecord4(line.payload);
+  const payload = toRecord5(line.payload);
   if (payload?.["type"] !== "message" || payload["role"] !== "assistant" || !Array.isArray(payload["content"])) {
     return [];
   }
   const segments = [];
   for (const item of payload["content"]) {
-    const content = toRecord4(item);
+    const content = toRecord5(item);
     if (content === null) {
       continue;
     }
@@ -11785,7 +11964,7 @@ function extractAssistantTextSegments(line) {
   }
   return segments;
 }
-function toRecord4(value) {
+function toRecord5(value) {
   if (typeof value !== "object" || value === null) {
     return null;
   }
@@ -12120,6 +12299,7 @@ async function startFromRequest(runner, request, imagePaths) {
       approvalMode: request.approvalMode,
       fullAuto: request.fullAuto,
       additionalArgs: request.additionalArgs,
+      configOverrides: request.configOverrides,
       images: imagePaths,
       streamGranularity: request.streamGranularity,
       environmentVariables: request.environmentVariables
@@ -12134,6 +12314,7 @@ async function startFromRequest(runner, request, imagePaths) {
     approvalMode: request.approvalMode,
     fullAuto: request.fullAuto,
     additionalArgs: request.additionalArgs,
+    configOverrides: request.configOverrides,
     images: imagePaths,
     streamGranularity: request.streamGranularity,
     environmentVariables: request.environmentVariables
@@ -12274,20 +12455,20 @@ function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionS
     return events;
   }
   if (chunk.type === "event_msg") {
-    const payload2 = toRecord5(chunk.payload);
+    const payload2 = toRecord6(chunk.payload);
     if (payload2 === null) {
       return events;
     }
-    const payloadType = readString5(payload2["type"]);
+    const payloadType = readString6(payload2["type"]);
     if (payloadType === "AgentMessage") {
-      const message = readString5(payload2["message"]);
+      const message = readString6(payload2["message"]);
       if (message !== undefined) {
         events.push(...toAssistantTextEvents(sessionId, message, state));
       }
       return events;
     }
     if (payloadType === "AgentReasoning") {
-      const message = readString5(payload2["text"]);
+      const message = readString6(payload2["text"]);
       events.push({
         type: "activity",
         sessionId,
@@ -12296,12 +12477,12 @@ function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionS
       return events;
     }
     if (payloadType === "ExecCommandBegin") {
-      const callId = readString5(payload2["call_id"]);
-      const command = readStringArray2(payload2["command"]);
+      const callId = readString6(payload2["call_id"]);
+      const command = readStringArray3(payload2["command"]);
       const input = {
         callId,
-        turnId: readString5(payload2["turn_id"]),
-        cwd: readString5(payload2["cwd"]),
+        turnId: readString6(payload2["turn_id"]),
+        cwd: readString6(payload2["cwd"]),
         command
       };
       events.push({
@@ -12313,13 +12494,13 @@ function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionS
       return events;
     }
     if (payloadType === "ExecCommandEnd") {
-      const callId = readString5(payload2["call_id"]);
-      const exitCode = readNumber3(payload2["exit_code"]);
+      const callId = readString6(payload2["call_id"]);
+      const exitCode = readNumber4(payload2["exit_code"]);
       const output = {
         callId,
-        turnId: readString5(payload2["turn_id"]),
-        cwd: readString5(payload2["cwd"]),
-        command: readStringArray2(payload2["command"]),
+        turnId: readString6(payload2["turn_id"]),
+        cwd: readString6(payload2["cwd"]),
+        command: readStringArray3(payload2["command"]),
         exitCode,
         aggregatedOutput: payload2["aggregated_output"]
       };
@@ -12336,7 +12517,7 @@ function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionS
       events.push({
         type: "session.error",
         sessionId,
-        error: new Error(readString5(payload2["message"]) ?? "Unknown rollout error")
+        error: new Error(readString6(payload2["message"]) ?? "Unknown rollout error")
       });
       return events;
     }
@@ -12350,14 +12531,14 @@ function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionS
   if (chunk.type !== "response_item") {
     return events;
   }
-  const payload = toRecord5(chunk.payload);
+  const payload = toRecord6(chunk.payload);
   if (payload === null) {
     return events;
   }
-  const itemType = readString5(payload["type"]);
+  const itemType = readString6(payload["type"]);
   if (itemType === "function_call") {
-    const name = readString5(payload["name"]) ?? "unknown-tool";
-    const callId = readString5(payload["call_id"]);
+    const name = readString6(payload["name"]) ?? "unknown-tool";
+    const callId = readString6(payload["call_id"]);
     if (callId !== undefined) {
       state.toolNamesByCallId.set(callId, name);
     }
@@ -12365,15 +12546,15 @@ function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionS
       type: "tool.call",
       sessionId,
       name,
-      input: parseMaybeJson2(readString5(payload["arguments"]))
+      input: parseMaybeJson2(readString6(payload["arguments"]))
     });
     return events;
   }
   if (itemType === "function_call_output") {
-    const callId = readString5(payload["call_id"]);
+    const callId = readString6(payload["call_id"]);
     const output = payload["output"];
-    const outputRecord = toRecord5(output);
-    const isError = outputRecord?.["is_error"] === true || readString5(outputRecord?.["status"]) === "error";
+    const outputRecord = toRecord6(output);
+    const isError = outputRecord?.["is_error"] === true || readString6(outputRecord?.["status"]) === "error";
     events.push({
       type: "tool.result",
       sessionId,
@@ -12384,10 +12565,10 @@ function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionS
     return events;
   }
   if (itemType === "local_shell_call") {
-    const status = readString5(payload["status"]);
+    const status = readString6(payload["status"]);
     const action = payload["action"];
     const output = payload["output"];
-    const callId = readString5(payload["call_id"]);
+    const callId = readString6(payload["call_id"]);
     const isTerminalStatus = status === "completed" || status === "failed" || status === "error";
     if (isTerminalStatus) {
       events.push({
@@ -12416,17 +12597,17 @@ function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionS
     });
     return events;
   }
-  if (itemType === "message" && readString5(payload["role"]) === "assistant" && Array.isArray(payload["content"])) {
+  if (itemType === "message" && readString6(payload["role"]) === "assistant" && Array.isArray(payload["content"])) {
     for (const item of payload["content"]) {
-      const content = toRecord5(item);
+      const content = toRecord6(item);
       if (content === null) {
         continue;
       }
-      const contentType = readString5(content["type"]);
+      const contentType = readString6(content["type"]);
       if (contentType !== "output_text" && contentType !== "input_text") {
         continue;
       }
-      const text = readString5(content["text"]);
+      const text = readString6(content["text"]);
       if (text !== undefined && text.length > 0) {
         events.push(...toAssistantTextEvents(sessionId, text, state));
       }
@@ -12452,19 +12633,19 @@ function toAssistantTextEvents(sessionId, text, state) {
     }
   ];
 }
-function toRecord5(value) {
+function toRecord6(value) {
   if (typeof value !== "object" || value === null) {
     return null;
   }
   return value;
 }
-function readString5(value) {
+function readString6(value) {
   return typeof value === "string" ? value : undefined;
 }
-function readNumber3(value) {
+function readNumber4(value) {
   return typeof value === "number" ? value : undefined;
 }
-function readStringArray2(value) {
+function readStringArray3(value) {
   if (!Array.isArray(value)) {
     return;
   }
@@ -12932,30 +13113,30 @@ function mapToRecord(value) {
 }
 function isUserOrAssistantMessage(line) {
   if (isEventMsg(line)) {
-    const payload = toRecord6(line.payload);
-    const eventType = readString6(payload, "type");
+    const payload = toRecord7(line.payload);
+    const eventType = readString7(payload, "type");
     return eventType === "UserMessage" || eventType === "AgentMessage";
   }
   if (isResponseItem(line)) {
-    const payload = toRecord6(line.payload);
-    if (readString6(payload, "type") !== "message") {
+    const payload = toRecord7(line.payload);
+    if (readString7(payload, "type") !== "message") {
       return false;
     }
-    const role = readString6(payload, "role");
+    const role = readString7(payload, "role");
     return role === "user" || role === "assistant";
   }
   return false;
 }
 function extractToolCallCount(line) {
   if (isEventMsg(line)) {
-    const payload = toRecord6(line.payload);
-    if (readString6(payload, "type") === "ExecCommandBegin") {
+    const payload = toRecord7(line.payload);
+    if (readString7(payload, "type") === "ExecCommandBegin") {
       return 1;
     }
   }
   if (isResponseItem(line)) {
-    const payload = toRecord6(line.payload);
-    const itemType = readString6(payload, "type");
+    const payload = toRecord7(line.payload);
+    const itemType = readString7(payload, "type");
     if (itemType === "function_call" || itemType === "local_shell_call") {
       return 1;
     }
@@ -12966,11 +13147,11 @@ function extractUsageEvent(line) {
   if (!isEventMsg(line)) {
     return null;
   }
-  const payload = toRecord6(line.payload);
+  const payload = toRecord7(line.payload);
   if (payload === null) {
     return null;
   }
-  const eventType = readString6(payload, "type");
+  const eventType = readString7(payload, "type");
   let usage = null;
   let modelFromInfo;
   let source = null;
@@ -12979,16 +13160,16 @@ function extractUsageEvent(line) {
   let model;
   if (eventType === "TurnComplete") {
     source = "turn_complete";
-    usage = toRecord6(payload["usage"]);
+    usage = toRecord7(payload["usage"]);
   } else if (eventType === "token_count" || eventType === "TokenCount") {
-    const info = toRecord6(payload["info"]);
+    const info = toRecord7(payload["info"]);
     if (info === null) {
       return null;
     }
     source = "token_count";
-    modelFromInfo = readString6(info, "model");
-    const lastTokenUsage = toRecord6(info["last_token_usage"]) ?? toRecord6(payload["last_token_usage"]);
-    const totalTokenUsage = toRecord6(info["total_token_usage"]) ?? toRecord6(payload["total_token_usage"]);
+    modelFromInfo = readString7(info, "model");
+    const lastTokenUsage = toRecord7(info["last_token_usage"]) ?? toRecord7(payload["last_token_usage"]);
+    const totalTokenUsage = toRecord7(info["total_token_usage"]) ?? toRecord7(payload["total_token_usage"]);
     if (lastTokenUsage !== null) {
       usage = lastTokenUsage;
       isCumulative = false;
@@ -12996,7 +13177,7 @@ function extractUsageEvent(line) {
       usage = totalTokenUsage;
       isCumulative = true;
     } else {
-      usage = toRecord6(info["usage"]) ?? toRecord6(payload["usage"]) ?? payload;
+      usage = toRecord7(info["usage"]) ?? toRecord7(payload["usage"]) ?? payload;
       isCumulative = false;
     }
     model = resolveTokenCountModel(payload, usage, info, modelFromInfo);
@@ -13005,13 +13186,13 @@ function extractUsageEvent(line) {
   if (source === null || usage === null) {
     return null;
   }
-  const inputTokens = readNumber4(usage, "input_tokens") ?? readNumber4(usage, "inputTokens") ?? 0;
-  const outputTokens = readNumber4(usage, "output_tokens") ?? readNumber4(usage, "outputTokens") ?? 0;
-  const cacheReadInputTokens = readNumber4(usage, "cache_read_input_tokens") ?? readNumber4(usage, "cacheReadInputTokens") ?? readNumber4(usage, "cached_input_tokens") ?? 0;
-  const cacheCreationInputTokens = readNumber4(usage, "cache_creation_input_tokens") ?? readNumber4(usage, "cacheCreationInputTokens") ?? 0;
+  const inputTokens = readNumber5(usage, "input_tokens") ?? readNumber5(usage, "inputTokens") ?? 0;
+  const outputTokens = readNumber5(usage, "output_tokens") ?? readNumber5(usage, "outputTokens") ?? 0;
+  const cacheReadInputTokens = readNumber5(usage, "cache_read_input_tokens") ?? readNumber5(usage, "cacheReadInputTokens") ?? readNumber5(usage, "cached_input_tokens") ?? 0;
+  const cacheCreationInputTokens = readNumber5(usage, "cache_creation_input_tokens") ?? readNumber5(usage, "cacheCreationInputTokens") ?? 0;
   const computedTotal = inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
-  const totalTokens = readNumber4(usage, "total_tokens") ?? readNumber4(usage, "totalTokens") ?? computedTotal;
-  model = model ?? modelFromInfo ?? readString6(usage, "model") ?? readString6(usage, "model_id") ?? readString6(payload, "model") ?? "unknown";
+  const totalTokens = readNumber5(usage, "total_tokens") ?? readNumber5(usage, "totalTokens") ?? computedTotal;
+  model = model ?? modelFromInfo ?? readString7(usage, "model") ?? readString7(usage, "model_id") ?? readString7(payload, "model") ?? "unknown";
   return {
     source,
     model,
@@ -13097,23 +13278,23 @@ function maxDefined(previous, current) {
 }
 function extractTokenCountAggregationKey(payload, info, model) {
   const parts = [];
-  const infoStreamId = readString6(info, "stream_id");
+  const infoStreamId = readString7(info, "stream_id");
   if (infoStreamId !== undefined) {
     parts.push(`stream:${infoStreamId}`);
   }
-  const infoTurnId = readString6(info, "turn_id");
+  const infoTurnId = readString7(info, "turn_id");
   if (infoTurnId !== undefined) {
     parts.push(`info_turn:${infoTurnId}`);
   }
-  const payloadTurnId = readString6(payload, "turn_id");
+  const payloadTurnId = readString7(payload, "turn_id");
   if (payloadTurnId !== undefined) {
     parts.push(`payload_turn:${payloadTurnId}`);
   }
-  const responseId = readString6(info, "response_id");
+  const responseId = readString7(info, "response_id");
   if (responseId !== undefined) {
     parts.push(`response:${responseId}`);
   }
-  const messageId = readString6(info, "message_id");
+  const messageId = readString7(info, "message_id");
   if (messageId !== undefined) {
     parts.push(`message:${messageId}`);
   }
@@ -13121,27 +13302,27 @@ function extractTokenCountAggregationKey(payload, info, model) {
   return parts.join("|");
 }
 function resolveTokenCountModel(payload, usage, info, modelFromInfo) {
-  const explicitModel = modelFromInfo ?? readString6(usage, "model") ?? readString6(usage, "model_id") ?? readString6(payload, "model");
+  const explicitModel = modelFromInfo ?? readString7(usage, "model") ?? readString7(usage, "model_id") ?? readString7(payload, "model");
   if (explicitModel !== undefined) {
     return explicitModel;
   }
-  const payloadRateLimitsModel = extractModelFromRateLimits(toRecord6(payload["rate_limits"]));
+  const payloadRateLimitsModel = extractModelFromRateLimits(toRecord7(payload["rate_limits"]));
   if (payloadRateLimitsModel !== undefined) {
     return payloadRateLimitsModel;
   }
-  const infoRateLimitsModel = extractModelFromRateLimits(toRecord6(info["rate_limits"]));
+  const infoRateLimitsModel = extractModelFromRateLimits(toRecord7(info["rate_limits"]));
   if (infoRateLimitsModel !== undefined) {
     return infoRateLimitsModel;
   }
   return "unknown";
 }
 function extractModelFromRateLimits(rateLimits) {
-  const limitName = readString6(rateLimits, "limit_name");
+  const limitName = readString7(rateLimits, "limit_name");
   const normalizedLimitName = normalizeRateLimitModel(limitName);
   if (normalizedLimitName !== undefined) {
     return normalizedLimitName;
   }
-  const limitId = readString6(rateLimits, "limit_id");
+  const limitId = readString7(rateLimits, "limit_id");
   return normalizeRateLimitModel(limitId);
 }
 function normalizeRateLimitModel(modelName) {
@@ -13152,31 +13333,31 @@ function normalizeRateLimitModel(modelName) {
   return normalized.length > 0 ? normalized : undefined;
 }
 function extractSessionMetaTimestamp(payloadValue) {
-  const payload = toRecord6(payloadValue);
+  const payload = toRecord7(payloadValue);
   if (payload === null) {
     return;
   }
-  const payloadTimestamp = readString6(payload, "timestamp");
+  const payloadTimestamp = readString7(payload, "timestamp");
   if (payloadTimestamp !== undefined) {
     return payloadTimestamp;
   }
-  const meta = toRecord6(payload["meta"]);
-  return readString6(meta, "timestamp");
+  const meta = toRecord7(payload["meta"]);
+  return readString7(meta, "timestamp");
 }
-function toRecord6(value) {
+function toRecord7(value) {
   if (typeof value !== "object" || value === null) {
     return null;
   }
   return value;
 }
-function readString6(value, key) {
+function readString7(value, key) {
   if (value === null) {
     return;
   }
   const candidate = value[key];
   return typeof candidate === "string" ? candidate : undefined;
 }
-function readNumber4(value, key) {
+function readNumber5(value, key) {
   if (value === null) {
     return;
   }
@@ -13201,122 +13382,7 @@ function dayStartEpochMs(epochMs) {
 function dateKeyFromEpochMs(epochMs) {
   return new Date(epochMs).toISOString().slice(0, 10);
 }
-// src/graphql/index.ts
-var JSON_SCALAR = new GraphQLScalarType({
-  name: "JSON",
-  serialize(value) {
-    return value;
-  },
-  parseValue(value) {
-    return value;
-  },
-  parseLiteral(ast) {
-    return parseJsonLiteral(ast);
-  }
-});
-var QUERY_TYPE = new GraphQLObjectType({
-  name: "Query",
-  fields: {
-    command: {
-      type: new GraphQLNonNull(JSON_SCALAR),
-      args: {
-        name: { type: new GraphQLNonNull(GraphQLString) },
-        params: { type: JSON_SCALAR }
-      },
-      async resolve(_source, args, context) {
-        return executeCommand(args.name, args.params, context);
-      }
-    },
-    ping: {
-      type: new GraphQLNonNull(GraphQLBoolean),
-      resolve() {
-        return true;
-      }
-    }
-  }
-});
-var MUTATION_TYPE = new GraphQLObjectType({
-  name: "Mutation",
-  fields: {
-    command: {
-      type: new GraphQLNonNull(JSON_SCALAR),
-      args: {
-        name: { type: new GraphQLNonNull(GraphQLString) },
-        params: { type: JSON_SCALAR }
-      },
-      async resolve(_source, args, context) {
-        return executeCommand(args.name, args.params, context);
-      }
-    }
-  }
-});
-var SUBSCRIPTION_TYPE = new GraphQLObjectType({
-  name: "Subscription",
-  fields: {
-    command: {
-      type: new GraphQLNonNull(JSON_SCALAR),
-      args: {
-        name: { type: new GraphQLNonNull(GraphQLString) },
-        params: { type: JSON_SCALAR }
-      },
-      async subscribe(_source, args, context) {
-        return subscribeCommand(args.name, args.params, context);
-      },
-      resolve(payload) {
-        return payload;
-      }
-    }
-  }
-});
-var SCHEMA = new GraphQLSchema({
-  query: QUERY_TYPE,
-  mutation: MUTATION_TYPE,
-  subscription: SUBSCRIPTION_TYPE
-});
-function getGraphqlSchema() {
-  return SCHEMA;
-}
-function toErrorResult(error) {
-  return {
-    errors: [error]
-  };
-}
-async function executeGraphqlOperation(request) {
-  let document;
-  try {
-    document = parse(request.document);
-  } catch (error) {
-    return toErrorResult(error instanceof GraphQLError ? error : new GraphQLError(String(error)));
-  }
-  const validationErrors = validate(SCHEMA, document);
-  if (validationErrors.length > 0) {
-    return {
-      errors: validationErrors
-    };
-  }
-  const operation = getOperationAST(document);
-  if (operation?.operation === "subscription") {
-    return subscribe({
-      schema: SCHEMA,
-      document,
-      variableValues: request.variables,
-      contextValue: request.context ?? {}
-    });
-  }
-  return execute({
-    schema: SCHEMA,
-    document,
-    variableValues: request.variables,
-    contextValue: request.context ?? {}
-  });
-}
-async function executeGraphqlDocument(request) {
-  const result = await executeGraphqlOperation(request);
-  if (isAsyncIterable2(result)) {
-    throw new GraphQLError("Subscriptions must be executed with executeGraphqlOperation");
-  }
-  return result;
-}
+// src/graphql/command-handlers.ts
 async function executeCommand(name, params, context) {
   switch (name) {
     case "version.get":
@@ -13415,167 +13481,6 @@ async function subscribeCommand(name, params, context) {
       throw new GraphQLError(`Unsupported GraphQL subscription command: ${name}`);
   }
 }
-function parseJsonLiteral(ast) {
-  switch (ast.kind) {
-    case Kind.NULL:
-      return null;
-    case Kind.STRING:
-    case Kind.ENUM:
-      return ast.value;
-    case Kind.INT:
-    case Kind.FLOAT:
-      return Number(ast.value);
-    case Kind.BOOLEAN:
-      return ast.value;
-    case Kind.LIST:
-      return ast.values.map((value) => parseJsonLiteral(value));
-    case Kind.OBJECT:
-      return Object.fromEntries(ast.fields.map((field) => [
-        field.name.value,
-        parseJsonLiteral(field.value)
-      ]));
-    default:
-      return null;
-  }
-}
-function toRecord7(value, label = "params") {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new GraphQLError(`${label} must be a JSON object`);
-  }
-  return value;
-}
-function readString7(record, key) {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
-function readNumber5(record, key) {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-function readBoolean(record, key) {
-  const value = record[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-function readStringArray3(record, key) {
-  const value = record[key];
-  if (!Array.isArray(value)) {
-    return;
-  }
-  if (value.some((entry) => typeof entry !== "string")) {
-    throw new GraphQLError(`${key} must be a string array`);
-  }
-  return value;
-}
-function readStringUnion(record, key, allowedValues) {
-  const rawValue = record[key];
-  if (rawValue === undefined) {
-    return;
-  }
-  if (typeof rawValue !== "string") {
-    throw new GraphQLError(`${key} must be a string`);
-  }
-  const value = rawValue;
-  if (!isAllowedString(value, allowedValues)) {
-    throw new GraphQLError(`${key} must be one of: ${allowedValues.join(", ")}`);
-  }
-  return value;
-}
-function requireStringUnion(record, key, allowedValues) {
-  const value = requireString(record, key);
-  if (!isAllowedString(value, allowedValues)) {
-    throw new GraphQLError(`${key} must be one of: ${allowedValues.join(", ")}`);
-  }
-  return value;
-}
-function isAllowedString(value, allowedValues) {
-  return allowedValues.includes(value);
-}
-function readStringRecord(record, key) {
-  const value = record[key];
-  if (value === undefined) {
-    return;
-  }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new GraphQLError(`${key} must be a string-keyed JSON object`);
-  }
-  const entries = Object.entries(value);
-  const invalid = entries.find(([, entryValue]) => typeof entryValue !== "string");
-  if (invalid !== undefined) {
-    throw new GraphQLError(`${key}.${invalid[0]} must be a string`);
-  }
-  return Object.fromEntries(entries);
-}
-function requireString(record, key) {
-  const value = readString7(record, key);
-  if (value === undefined || value.trim().length === 0) {
-    throw new GraphQLError(`${key} is required`);
-  }
-  return value;
-}
-function requireNumber(record, key) {
-  const value = readNumber5(record, key);
-  if (value === undefined) {
-    throw new GraphQLError(`${key} is required`);
-  }
-  return value;
-}
-function readProcessOptions(record) {
-  const options = {};
-  const model = readString7(record, "model");
-  if (model !== undefined)
-    options.model = model;
-  const cwd = readString7(record, "cwd");
-  if (cwd !== undefined)
-    options.cwd = cwd;
-  const sandbox = readStringUnion(record, "sandbox", SANDBOX_MODES);
-  if (sandbox !== undefined)
-    options.sandbox = sandbox;
-  const approvalMode = readStringUnion(record, "approvalMode", APPROVAL_MODES);
-  if (approvalMode !== undefined)
-    options.approvalMode = approvalMode;
-  const fullAuto = readBoolean(record, "fullAuto");
-  if (fullAuto !== undefined)
-    options.fullAuto = fullAuto;
-  const additionalArgs = readStringArray3(record, "additionalArgs");
-  if (additionalArgs !== undefined)
-    options.additionalArgs = additionalArgs;
-  const images = readStringArray3(record, "images");
-  if (images !== undefined)
-    options.images = images;
-  const configOverrides = readStringArray3(record, "configOverrides");
-  if (configOverrides !== undefined)
-    options.configOverrides = configOverrides;
-  const streamGranularity = readStringUnion(record, "streamGranularity", STREAM_GRANULARITIES);
-  if (streamGranularity !== undefined) {
-    options.streamGranularity = streamGranularity;
-  }
-  const environmentVariables = readStringRecord(record, "environmentVariables");
-  if (environmentVariables !== undefined) {
-    options.environmentVariables = environmentVariables;
-  }
-  const codexBinary = readString7(record, "codexBinary");
-  if (codexBinary !== undefined)
-    options.codexBinary = codexBinary;
-  return options;
-}
-function extractSessionId(lines) {
-  for (const line of lines) {
-    if (typeof line !== "object" || line === null) {
-      continue;
-    }
-    const record = line;
-    if (record["type"] !== "session_meta") {
-      continue;
-    }
-    const payload = typeof record["payload"] === "object" && record["payload"] !== null ? record["payload"] : null;
-    const meta = payload !== null && typeof payload["meta"] === "object" && payload["meta"] !== null ? payload["meta"] : null;
-    const id = meta === null ? undefined : readString7(meta, "id");
-    if (id !== undefined) {
-      return id;
-    }
-  }
-  return;
-}
 async function collectItems(iterable) {
   const items = [];
   for await (const item of iterable) {
@@ -13584,28 +13489,28 @@ async function collectItems(iterable) {
   return items;
 }
 async function handleVersionGet(params) {
-  const input = params === undefined ? {} : toRecord7(params);
+  const input = params === undefined ? {} : toRecord4(params);
   return getToolVersions({
     includeGit: readBoolean(input, "includeGit") ?? false
   });
 }
 async function handleSessionList(params, context) {
-  const input = params === undefined ? {} : toRecord7(params);
+  const input = params === undefined ? {} : toRecord4(params);
   const options = {};
-  const limit = readNumber5(input, "limit");
+  const limit = readNumber3(input, "limit");
   if (limit !== undefined)
     options.limit = limit;
-  const offset = readNumber5(input, "offset");
+  const offset = readNumber3(input, "offset");
   if (offset !== undefined)
     options.offset = offset;
-  const source = readString7(input, "source");
+  const source = readString5(input, "source");
   if (source === "cli" || source === "vscode" || source === "exec" || source === "unknown") {
     options.source = source;
   }
-  const cwd = readString7(input, "cwd");
+  const cwd = readString5(input, "cwd");
   if (cwd !== undefined)
     options.cwd = cwd;
-  const branch = readString7(input, "branch");
+  const branch = readString5(input, "branch");
   if (branch !== undefined)
     options.branch = branch;
   if (context.codexHome !== undefined)
@@ -13613,7 +13518,7 @@ async function handleSessionList(params, context) {
   return listSessions(options);
 }
 async function handleSessionShow(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const session = await findSession(requireString(input, "id"), context.codexHome);
   if (session === null) {
     throw new GraphQLError("Session not found");
@@ -13621,41 +13526,41 @@ async function handleSessionShow(params, context) {
   return session;
 }
 async function handleSessionSearch(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const options = {};
-  const limit = readNumber5(input, "limit");
+  const limit = readNumber3(input, "limit");
   if (limit !== undefined)
     options.limit = limit;
-  const offset = readNumber5(input, "offset");
+  const offset = readNumber3(input, "offset");
   if (offset !== undefined)
     options.offset = offset;
-  const source = readString7(input, "source");
+  const source = readString5(input, "source");
   if (source === "cli" || source === "vscode" || source === "exec" || source === "unknown") {
     options.source = source;
   }
-  const cwd = readString7(input, "cwd");
+  const cwd = readString5(input, "cwd");
   if (cwd !== undefined)
     options.cwd = cwd;
-  const branch = readString7(input, "branch");
+  const branch = readString5(input, "branch");
   if (branch !== undefined)
     options.branch = branch;
-  const role = readString7(input, "role");
+  const role = readString5(input, "role");
   if (role === "user" || role === "assistant" || role === "both") {
     options.role = role;
   }
   const caseSensitive = readBoolean(input, "caseSensitive");
   if (caseSensitive !== undefined)
     options.caseSensitive = caseSensitive;
-  const maxBytes = readNumber5(input, "maxBytes");
+  const maxBytes = readNumber3(input, "maxBytes");
   if (maxBytes !== undefined)
     options.maxBytes = maxBytes;
-  const maxEvents = readNumber5(input, "maxEvents");
+  const maxEvents = readNumber3(input, "maxEvents");
   if (maxEvents !== undefined)
     options.maxEvents = maxEvents;
-  const maxSessions = readNumber5(input, "maxSessions");
+  const maxSessions = readNumber3(input, "maxSessions");
   if (maxSessions !== undefined)
     options.maxSessions = maxSessions;
-  const timeoutMs = readNumber5(input, "timeoutMs");
+  const timeoutMs = readNumber3(input, "timeoutMs");
   if (timeoutMs !== undefined)
     options.timeoutMs = timeoutMs;
   if (context.codexHome !== undefined)
@@ -13663,22 +13568,22 @@ async function handleSessionSearch(params, context) {
   return searchSessions(requireString(input, "query"), options);
 }
 async function handleSessionSearchTranscript(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const options = {};
-  const role = readString7(input, "role");
+  const role = readString5(input, "role");
   if (role === "user" || role === "assistant" || role === "both") {
     options.role = role;
   }
   const caseSensitive = readBoolean(input, "caseSensitive");
   if (caseSensitive !== undefined)
     options.caseSensitive = caseSensitive;
-  const maxBytes = readNumber5(input, "maxBytes");
+  const maxBytes = readNumber3(input, "maxBytes");
   if (maxBytes !== undefined)
     options.maxBytes = maxBytes;
-  const maxEvents = readNumber5(input, "maxEvents");
+  const maxEvents = readNumber3(input, "maxEvents");
   if (maxEvents !== undefined)
     options.maxEvents = maxEvents;
-  const timeoutMs = readNumber5(input, "timeoutMs");
+  const timeoutMs = readNumber3(input, "timeoutMs");
   if (timeoutMs !== undefined)
     options.timeoutMs = timeoutMs;
   if (context.codexHome !== undefined)
@@ -13686,7 +13591,7 @@ async function handleSessionSearchTranscript(params, context) {
   return searchSessionTranscript(requireString(input, "id"), requireString(input, "query"), options);
 }
 async function handleSessionRun(params) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const prompt = requireString(input, "prompt");
   const options = readProcessOptions(input);
   const pm = new ProcessManager(options.codexBinary);
@@ -13698,32 +13603,32 @@ async function handleSessionRun(params) {
   };
 }
 async function handleSessionResume(params) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const options = readProcessOptions(input);
   const pm = new ProcessManager(options.codexBinary);
-  return pm.spawnResume(requireString(input, "id"), options, readString7(input, "prompt"));
+  return pm.spawnResume(requireString(input, "id"), options, readString5(input, "prompt"));
 }
 async function handleSessionFork(params) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const options = readProcessOptions(input);
   const pm = new ProcessManager(options.codexBinary);
-  return pm.spawnFork(requireString(input, "id"), readNumber5(input, "nthMessage"), options);
+  return pm.spawnFork(requireString(input, "id"), readNumber3(input, "nthMessage"), options);
 }
 async function handleSessionWatch(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const session = await findSession(requireString(input, "id"), context.codexHome);
   if (session === null) {
     throw new GraphQLError("Session not found");
   }
-  const startOffset = readNumber5(input, "startOffset");
+  const startOffset = readNumber3(input, "startOffset");
   return createWatchStream(session.rolloutPath, startOffset);
 }
 async function handleGroupCreate(params, context) {
-  const input = toRecord7(params);
-  return addGroup(requireString(input, "name"), readString7(input, "description"), context.configDir);
+  const input = toRecord4(params);
+  return addGroup(requireString(input, "name"), readString5(input, "description"), context.configDir);
 }
 async function handleGroupShow(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const group = await findGroup(requireString(input, "id"), context.configDir);
   if (group === null) {
     throw new GraphQLError("Group not found");
@@ -13731,7 +13636,7 @@ async function handleGroupShow(params, context) {
   return group;
 }
 async function handleGroupAdd(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const group = await findGroup(requireString(input, "id"), context.configDir);
   if (group === null) {
     throw new GraphQLError("Group not found");
@@ -13740,7 +13645,7 @@ async function handleGroupAdd(params, context) {
   return { ok: true };
 }
 async function handleGroupRemove(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const group = await findGroup(requireString(input, "id"), context.configDir);
   if (group === null) {
     throw new GraphQLError("Group not found");
@@ -13749,81 +13654,81 @@ async function handleGroupRemove(params, context) {
   return { ok: true };
 }
 async function handleGroupPause(params, context) {
-  const ok = await pauseGroup(requireString(toRecord7(params), "id"), context.configDir);
+  const ok = await pauseGroup(requireString(toRecord4(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Group not found");
   }
   return { ok: true };
 }
 async function handleGroupResume(params, context) {
-  const ok = await resumeGroup(requireString(toRecord7(params), "id"), context.configDir);
+  const ok = await resumeGroup(requireString(toRecord4(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Group not found");
   }
   return { ok: true };
 }
 async function handleGroupDelete(params, context) {
-  const ok = await removeGroup(requireString(toRecord7(params), "id"), context.configDir);
+  const ok = await removeGroup(requireString(toRecord4(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Group not found");
   }
   return { ok: true };
 }
 async function handleGroupRun(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const group = await findGroup(requireString(input, "id"), context.configDir);
   if (group === null) {
     throw new GraphQLError("Group not found");
   }
   return collectItems(runGroup(group, requireString(input, "prompt"), {
     ...readProcessOptions(input),
-    maxConcurrent: readNumber5(input, "maxConcurrent")
+    maxConcurrent: readNumber3(input, "maxConcurrent")
   }));
 }
 async function handleQueueCreate(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   return createQueue(requireString(input, "name"), requireString(input, "projectPath"), context.configDir);
 }
 async function handleQueueShow(params, context) {
-  const queue = await findQueue(requireString(toRecord7(params), "id"), context.configDir);
+  const queue = await findQueue(requireString(toRecord4(params), "id"), context.configDir);
   if (queue === null) {
     throw new GraphQLError("Queue not found");
   }
   return queue;
 }
 async function handleQueueAdd(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const queue = await findQueue(requireString(input, "id"), context.configDir);
   if (queue === null) {
     throw new GraphQLError("Queue not found");
   }
-  return addPrompt(queue.id, requireString(input, "prompt"), readStringArray3(input, "images"), context.configDir);
+  return addPrompt(queue.id, requireString(input, "prompt"), readStringArray2(input, "images"), context.configDir);
 }
 async function handleQueuePause(params, context) {
-  const ok = await pauseQueue(requireString(toRecord7(params), "id"), context.configDir);
+  const ok = await pauseQueue(requireString(toRecord4(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue not found");
   }
   return { ok: true };
 }
 async function handleQueueResume(params, context) {
-  const ok = await resumeQueue(requireString(toRecord7(params), "id"), context.configDir);
+  const ok = await resumeQueue(requireString(toRecord4(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue not found");
   }
   return { ok: true };
 }
 async function handleQueueDelete(params, context) {
-  const ok = await removeQueue(requireString(toRecord7(params), "id"), context.configDir);
+  const ok = await removeQueue(requireString(toRecord4(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue not found");
   }
   return { ok: true };
 }
 async function handleQueueUpdate(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const ok = await updateQueueCommand(requireString(input, "id"), requireString(input, "commandId"), {
-    prompt: readString7(input, "prompt"),
+    prompt: readString5(input, "prompt"),
     status: readStringUnion(input, "status", QUEUE_PROMPT_STATUSES)
   }, context.configDir);
   if (!ok) {
@@ -13832,7 +13737,7 @@ async function handleQueueUpdate(params, context) {
   return { ok: true };
 }
 async function handleQueueRemove(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const ok = await removeQueueCommand(requireString(input, "id"), requireString(input, "commandId"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue command not found");
@@ -13840,7 +13745,7 @@ async function handleQueueRemove(params, context) {
   return { ok: true };
 }
 async function handleQueueMove(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const ok = await moveQueueCommand(requireString(input, "id"), requireNumber(input, "from"), requireNumber(input, "to"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue or command position not found");
@@ -13848,7 +13753,7 @@ async function handleQueueMove(params, context) {
   return { ok: true };
 }
 async function handleQueueMode(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const mode = requireStringUnion(input, "mode", QUEUE_COMMAND_MODES);
   const ok = await toggleQueueCommandMode(requireString(input, "id"), requireString(input, "commandId"), mode, context.configDir);
   if (!ok) {
@@ -13857,7 +13762,7 @@ async function handleQueueMode(params, context) {
   return { ok: true };
 }
 async function handleQueueRun(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   const queue = await findQueue(requireString(input, "id"), context.configDir);
   if (queue === null) {
     throw new GraphQLError("Queue not found");
@@ -13871,47 +13776,47 @@ async function handleQueueRun(params, context) {
   return collectItems(runQueue(queue, options, { stopped: false }));
 }
 async function handleBookmarkAdd(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   return addBookmark({
     type: requireStringUnion(input, "type", BOOKMARK_TYPES),
     sessionId: requireString(input, "sessionId"),
     name: requireString(input, "name"),
-    description: readString7(input, "description"),
-    tags: readStringArray3(input, "tags"),
-    messageId: readString7(input, "messageId"),
-    fromMessageId: readString7(input, "fromMessageId"),
-    toMessageId: readString7(input, "toMessageId")
+    description: readString5(input, "description"),
+    tags: readStringArray2(input, "tags"),
+    messageId: readString5(input, "messageId"),
+    fromMessageId: readString5(input, "fromMessageId"),
+    toMessageId: readString5(input, "toMessageId")
   }, context.configDir);
 }
 async function handleBookmarkList(params, context) {
-  const input = params === undefined ? {} : toRecord7(params);
+  const input = params === undefined ? {} : toRecord4(params);
   return listBookmarks({
-    sessionId: readString7(input, "sessionId"),
+    sessionId: readString5(input, "sessionId"),
     type: readStringUnion(input, "type", BOOKMARK_TYPES),
-    tag: readString7(input, "tag")
+    tag: readString5(input, "tag")
   }, context.configDir);
 }
 async function handleBookmarkGet(params, context) {
-  const bookmark = await getBookmark(requireString(toRecord7(params), "id"), context.configDir);
+  const bookmark = await getBookmark(requireString(toRecord4(params), "id"), context.configDir);
   if (bookmark === null) {
     throw new GraphQLError("Bookmark not found");
   }
   return bookmark;
 }
 async function handleBookmarkDelete(params, context) {
-  const ok = await deleteBookmark(requireString(toRecord7(params), "id"), context.configDir);
+  const ok = await deleteBookmark(requireString(toRecord4(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Bookmark not found");
   }
   return { ok: true };
 }
 async function handleBookmarkSearch(params, context) {
-  const input = toRecord7(params);
-  return searchBookmarks(requireString(input, "query"), { limit: readNumber5(input, "limit") }, context.configDir);
+  const input = toRecord4(params);
+  return searchBookmarks(requireString(input, "query"), { limit: readNumber3(input, "limit") }, context.configDir);
 }
 async function handleTokenCreate(params, context) {
-  const input = toRecord7(params);
-  const rawPermissions = readStringArray3(input, "permissions");
+  const input = toRecord4(params);
+  const rawPermissions = readStringArray2(input, "permissions");
   const permissions = rawPermissions === undefined ? DEFAULT_TOKEN_PERMISSIONS : normalizePermissions(rawPermissions);
   if (permissions.length === 0) {
     throw new GraphQLError("permissions must include at least one valid permission");
@@ -13919,36 +13824,33 @@ async function handleTokenCreate(params, context) {
   return createToken({
     name: requireString(input, "name"),
     permissions,
-    expiresAt: readString7(input, "expiresAt")
+    expiresAt: readString5(input, "expiresAt")
   }, context.configDir);
 }
 async function handleTokenRevoke(params, context) {
-  return revokeToken(requireString(toRecord7(params), "id"), context.configDir);
+  return revokeToken(requireString(toRecord4(params), "id"), context.configDir);
 }
 async function handleTokenRotate(params, context) {
-  return rotateToken(requireString(toRecord7(params), "id"), context.configDir);
+  return rotateToken(requireString(toRecord4(params), "id"), context.configDir);
 }
 async function handleFilesList(params, context) {
-  return getChangedFiles(requireString(toRecord7(params), "sessionId"), {
+  return getChangedFiles(requireString(toRecord4(params), "sessionId"), {
     configDir: context.configDir,
     codexHome: context.codexHome
   });
 }
 async function handleFilesPatches(params, context) {
-  return getSessionFilePatchHistory(requireString(toRecord7(params), "sessionId"), {
+  return getSessionFilePatchHistory(requireString(toRecord4(params), "sessionId"), {
     configDir: context.configDir,
     codexHome: context.codexHome
   });
 }
 async function handleFilesFind(params, context) {
-  const input = toRecord7(params);
+  const input = toRecord4(params);
   return findSessionsByFile(requireString(input, "path"), {
     configDir: context.configDir,
     codexHome: context.codexHome
   });
-}
-function isAsyncIterable2(value) {
-  return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
 }
 async function* createWatchStream(rolloutPath, startOffset) {
   const watcher = new RolloutWatcher;
@@ -13987,6 +13889,128 @@ async function* createWatchStream(rolloutPath, startOffset) {
     watcher.stop();
     wake();
   }
+}
+
+// src/graphql/schema.ts
+var JSON_SCALAR = new GraphQLScalarType({
+  name: "JSON",
+  serialize(value) {
+    return value;
+  },
+  parseValue(value) {
+    return value;
+  },
+  parseLiteral(ast) {
+    return parseJsonLiteral(ast);
+  }
+});
+var QUERY_TYPE = new GraphQLObjectType({
+  name: "Query",
+  fields: {
+    command: {
+      type: new GraphQLNonNull(JSON_SCALAR),
+      args: {
+        name: { type: new GraphQLNonNull(GraphQLString) },
+        params: { type: JSON_SCALAR }
+      },
+      async resolve(_source, args, context) {
+        return executeCommand(args.name, args.params, context);
+      }
+    },
+    ping: {
+      type: new GraphQLNonNull(GraphQLBoolean),
+      resolve() {
+        return true;
+      }
+    }
+  }
+});
+var MUTATION_TYPE = new GraphQLObjectType({
+  name: "Mutation",
+  fields: {
+    command: {
+      type: new GraphQLNonNull(JSON_SCALAR),
+      args: {
+        name: { type: new GraphQLNonNull(GraphQLString) },
+        params: { type: JSON_SCALAR }
+      },
+      async resolve(_source, args, context) {
+        return executeCommand(args.name, args.params, context);
+      }
+    }
+  }
+});
+var SUBSCRIPTION_TYPE = new GraphQLObjectType({
+  name: "Subscription",
+  fields: {
+    command: {
+      type: new GraphQLNonNull(JSON_SCALAR),
+      args: {
+        name: { type: new GraphQLNonNull(GraphQLString) },
+        params: { type: JSON_SCALAR }
+      },
+      async subscribe(_source, args, context) {
+        return subscribeCommand(args.name, args.params, context);
+      },
+      resolve(payload) {
+        return payload;
+      }
+    }
+  }
+});
+var SCHEMA = new GraphQLSchema({
+  query: QUERY_TYPE,
+  mutation: MUTATION_TYPE,
+  subscription: SUBSCRIPTION_TYPE
+});
+function getGraphqlSchema() {
+  return SCHEMA;
+}
+// src/graphql/execute.ts
+function toErrorResult(error) {
+  return {
+    errors: [error]
+  };
+}
+function isAsyncIterable2(value) {
+  return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
+}
+async function executeGraphqlOperation(request) {
+  let document;
+  try {
+    document = parse(request.document);
+  } catch (error) {
+    return toErrorResult(error instanceof GraphQLError ? error : new GraphQLError(String(error)));
+  }
+  const schema = getGraphqlSchema();
+  const validationErrors = validate(schema, document);
+  if (validationErrors.length > 0) {
+    return {
+      errors: validationErrors
+    };
+  }
+  const operation = getOperationAST(document);
+  if (operation?.operation === "subscription") {
+    return subscribe({
+      schema,
+      document,
+      variableValues: request.variables,
+      contextValue: request.context ?? {}
+    });
+  }
+  return execute({
+    schema,
+    document,
+    variableValues: request.variables,
+    contextValue: request.context ?? {}
+  });
+}
+async function executeGraphqlDocument(request) {
+  const result = await executeGraphqlOperation(request);
+  if (isAsyncIterable2(result)) {
+    throw new GraphQLError("Subscriptions must be executed with executeGraphqlOperation");
+  }
+  return result;
 }
 // src/activity/manager.ts
 function deriveStatus(line, current) {
@@ -14098,6 +14122,1115 @@ function extractMarkdownTasks(content) {
   }
   return tasks;
 }
+// src/cli/parsing.ts
+function parseListArgs(args) {
+  const result = { limit: 50, format: "table" };
+  for (let i = 0;i < args.length; i++) {
+    const arg = args[i];
+    const next = args[i + 1];
+    switch (arg) {
+      case "--source":
+        if (next !== undefined && isSessionSource(next)) {
+          result.source = next;
+          i++;
+        }
+        break;
+      case "--cwd":
+        if (next !== undefined) {
+          result.cwd = next;
+          i++;
+        }
+        break;
+      case "--branch":
+        if (next !== undefined) {
+          result.branch = next;
+          i++;
+        }
+        break;
+      case "--limit":
+        if (next !== undefined) {
+          result.limit = parseInt(next, 10) || 50;
+          i++;
+        }
+        break;
+      case "--format":
+        if (next === "json" || next === "table") {
+          result.format = next;
+          i++;
+        }
+        break;
+    }
+  }
+  return result;
+}
+function isSessionSource(s) {
+  return s === "cli" || s === "vscode" || s === "exec" || s === "unknown";
+}
+function getArgValue(args, flag) {
+  const idx = args.indexOf(flag);
+  if (idx === -1 || idx + 1 >= args.length)
+    return;
+  return args[idx + 1];
+}
+function getArgValues(args, flag) {
+  const values = [];
+  for (let i = 0;i < args.length; i++) {
+    if (args[i] === flag) {
+      const value = args[i + 1];
+      if (value !== undefined) {
+        values.push(value);
+      }
+    }
+  }
+  return values;
+}
+function parseProcessOptions(args) {
+  const opts = {};
+  const model = getArgValue(args, "--model");
+  if (model !== undefined)
+    opts.model = model;
+  const sandbox = readAllowedArg(args, "--sandbox", SANDBOX_MODES);
+  if (sandbox !== undefined)
+    opts.sandbox = sandbox;
+  const approvalMode = readAllowedArg(args, "--approval-mode", APPROVAL_MODES);
+  if (approvalMode !== undefined)
+    opts.approvalMode = approvalMode;
+  if (args.includes("--full-auto")) {
+    opts.fullAuto = true;
+  }
+  const images = getArgValues(args, "--image");
+  if (images.length > 0) {
+    opts.images = images;
+  }
+  const streamGranularity = readAllowedArg(args, "--stream-granularity", STREAM_GRANULARITIES);
+  if (streamGranularity !== undefined) {
+    opts.streamGranularity = streamGranularity;
+  }
+  return opts;
+}
+function readAllowedArg(args, flag, allowedValues) {
+  const value = getArgValue(args, flag);
+  if (value === undefined) {
+    return;
+  }
+  return allowedValues.includes(value) ? value : undefined;
+}
+function parseCharDelayMs(args) {
+  const raw = getArgValue(args, "--char-delay-ms");
+  if (raw === undefined) {
+    return 8;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 8;
+  }
+  return parsed;
+}
+function isCharChunk2(chunk) {
+  if (typeof chunk !== "object" || chunk === null) {
+    return false;
+  }
+  const record = chunk;
+  return record["kind"] === "char" && typeof record["char"] === "string";
+}
+function sleep2(ms) {
+  return new Promise((resolve3) => {
+    setTimeout(resolve3, ms);
+  });
+}
+function renderMarkdownTasks(lines) {
+  const tasks = [];
+  for (const line of lines) {
+    if (line.type === "event_msg") {
+      const payload = line.payload;
+      const eventType = payload["type"];
+      const message = payload["message"];
+      if ((eventType === "UserMessage" || eventType === "AgentMessage") && typeof message === "string") {
+        tasks.push(...extractMarkdownTasks(message));
+      }
+      continue;
+    }
+    if (line.type === "response_item") {
+      const payload = line.payload;
+      if (payload["type"] !== "message") {
+        continue;
+      }
+      const content = payload["content"];
+      if (!Array.isArray(content)) {
+        continue;
+      }
+      for (const item of content) {
+        if (typeof item !== "object" || item === null) {
+          continue;
+        }
+        const itemObj = item;
+        if ((itemObj["type"] === "input_text" || itemObj["type"] === "output_text") && typeof itemObj["text"] === "string") {
+          tasks.push(...extractMarkdownTasks(itemObj["text"]));
+        }
+      }
+    }
+  }
+  if (tasks.length === 0) {
+    console.log(`
+Markdown tasks: none`);
+    return;
+  }
+  console.log(`
+Markdown tasks:`);
+  for (const task of tasks) {
+    const checkbox = task.checked ? "[x]" : "[ ]";
+    const sectionPrefix = task.sectionHeading.length > 0 ? `${task.sectionHeading}: ` : "";
+    console.log(`  ${checkbox} ${sectionPrefix}${task.text}`);
+  }
+}
+
+// src/cli/usage.ts
+var CLI_NAME = "codex-agent";
+var USAGE = `${CLI_NAME} - Codex session manager
+
+Usage:
+  ${CLI_NAME} session list [options]
+  ${CLI_NAME} session show <id> [--tasks]
+  ${CLI_NAME} session watch <id>
+  ${CLI_NAME} session run --prompt <P> [options]
+  ${CLI_NAME} session resume <id> [options]
+  ${CLI_NAME} session fork <id> [--nth-message N] [options]
+
+  ${CLI_NAME} group create <name> [--description D]
+  ${CLI_NAME} group list [--format json|table]
+  ${CLI_NAME} group show <group>
+  ${CLI_NAME} group add <group> <session>
+  ${CLI_NAME} group remove <group> <session>
+  ${CLI_NAME} group pause <group>
+  ${CLI_NAME} group resume <group>
+  ${CLI_NAME} group delete <group>
+  ${CLI_NAME} group run <name> --prompt <P> [--max-concurrent N] [--image FILE]...
+
+  ${CLI_NAME} bookmark add --type <session|message|range> --session <id> --name <name> [options]
+  ${CLI_NAME} bookmark list [--format json|table] [--session <id>] [--type <type>] [--tag <tag>]
+  ${CLI_NAME} bookmark get <id>
+  ${CLI_NAME} bookmark delete <id>
+  ${CLI_NAME} bookmark search <query> [--limit <n>] [--format json|table]
+
+  ${CLI_NAME} token create --name <name> [--permissions <csv>] [--expires-at <iso8601>]
+  ${CLI_NAME} token list [--format json|table]
+  ${CLI_NAME} token revoke <id>
+  ${CLI_NAME} token rotate <id>
+
+  ${CLI_NAME} files list <session-id> [--format json|table]
+  ${CLI_NAME} files patches <session-id> [--format json|table]
+  ${CLI_NAME} files find <path> [--format json|table]
+  ${CLI_NAME} files rebuild
+
+  ${CLI_NAME} queue create <name> --project <path>
+  ${CLI_NAME} queue add <name> --prompt <prompt> [--image FILE]...
+  ${CLI_NAME} queue show <name>
+  ${CLI_NAME} queue list [--format json|table]
+  ${CLI_NAME} queue pause <name>
+  ${CLI_NAME} queue resume <name>
+  ${CLI_NAME} queue delete <name>
+  ${CLI_NAME} queue update <name> <command-id> [--prompt <text>] [--status <status>]
+  ${CLI_NAME} queue remove <name> <command-id>
+  ${CLI_NAME} queue move <name> --from <n> --to <n>
+  ${CLI_NAME} queue mode <name> <command-id> --mode <auto|manual>
+  ${CLI_NAME} queue run <name> [--image FILE]...
+
+  ${CLI_NAME} model check --model <model> [--json] [--timeout-ms <ms>]
+
+  ${CLI_NAME} graphql <query|command> [--param <json|path>] [--variables <json|path>]
+
+  ${CLI_NAME} version [--json] [--include-git]
+
+Session list options:
+  --source <cli|vscode|exec>  Filter by session source
+  --cwd <path>                Filter by working directory
+  --branch <name>             Filter by git branch
+  --limit <n>                 Max results (default: 50)
+  --format <table|json>       Output format (default: table)
+
+Common process options:
+  --model <model>             Model to use
+  --sandbox <full|network-only|none>  Sandbox mode
+  --approval-mode <mode>       Approval mode: always, unless-allow-listed, never, on-failure
+  --full-auto                 Enable full-auto mode
+  --stream-granularity <event|char>  Stream by rollout event or character
+  --char-delay-ms <n>         Delay per rendered char in ms (session run only, default: 8)
+  --image <path>              Attach image(s) to prompt (repeatable)
+
+`;
+
+// src/cli/commands/bookmark.ts
+async function handleBookmark(action, args) {
+  switch (action) {
+    case "add":
+      await handleBookmarkAdd2(args);
+      break;
+    case "list":
+      await handleBookmarkList2(args);
+      break;
+    case "get":
+      await handleBookmarkGet2(args);
+      break;
+    case "delete":
+      await handleBookmarkDelete2(args);
+      break;
+    case "search":
+      await handleBookmarkSearch2(args);
+      break;
+    default:
+      console.error(`Unknown bookmark action: ${action ?? "(none)"}`);
+      console.log(USAGE);
+      process.exitCode = 1;
+  }
+}
+async function handleBookmarkAdd2(args) {
+  const typeValue = getArgValue(args, "--type");
+  const sessionId = getArgValue(args, "--session");
+  const name = getArgValue(args, "--name");
+  const description = getArgValue(args, "--description");
+  const tags = getArgValues(args, "--tag");
+  const messageId = getArgValue(args, "--message");
+  const fromMessageId = getArgValue(args, "--from");
+  const toMessageId = getArgValue(args, "--to");
+  if (typeValue === undefined || sessionId === undefined || name === undefined) {
+    console.error("Usage: codex-agent bookmark add --type <session|message|range> --session <id> --name <name> [--description <text>] [--tag <tag>] [--message <id>] [--from <id>] [--to <id>]");
+    process.exitCode = 1;
+    return;
+  }
+  if (!isBookmarkType(typeValue)) {
+    console.error(`Invalid bookmark type: ${typeValue}`);
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const bookmark = await addBookmark({
+      type: typeValue,
+      sessionId,
+      name,
+      description,
+      tags,
+      messageId,
+      fromMessageId,
+      toMessageId
+    });
+    console.log(`Bookmark created: ${bookmark.name} (${bookmark.id})`);
+  } catch (err) {
+    console.error(`Failed to add bookmark: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+  }
+}
+async function handleBookmarkList2(args) {
+  const format = getArgValue(args, "--format") ?? "table";
+  const typeArg = getArgValue(args, "--type");
+  const sessionId = getArgValue(args, "--session");
+  const tag = getArgValue(args, "--tag");
+  let type;
+  if (typeArg !== undefined) {
+    if (!isBookmarkType(typeArg)) {
+      console.error(`Invalid bookmark type: ${typeArg}`);
+      process.exitCode = 1;
+      return;
+    }
+    type = typeArg;
+  }
+  const bookmarks = await listBookmarks({ sessionId, type, tag });
+  if (bookmarks.length === 0) {
+    console.log("No bookmarks found.");
+    return;
+  }
+  if (format === "json") {
+    console.log(JSON.stringify(bookmarks, null, 2));
+    return;
+  }
+  const rows = bookmarks.map((bookmark) => ({
+    id: bookmark.id.slice(0, 8),
+    type: bookmark.type,
+    session: bookmark.sessionId.slice(0, 12),
+    name: bookmark.name.length > 28 ? bookmark.name.slice(0, 25) + "..." : bookmark.name,
+    tags: bookmark.tags.join(",")
+  }));
+  const headers = {
+    id: "ID",
+    type: "TYPE",
+    session: "SESSION",
+    name: "NAME",
+    tags: "TAGS"
+  };
+  const cols = Object.keys(headers);
+  const widths = Object.fromEntries(cols.map((col) => [
+    col,
+    Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
+  ]));
+  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
+  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+  console.log([headerLine, separator, ...dataLines].join(`
+`));
+}
+async function handleBookmarkGet2(args) {
+  const id = args[0];
+  if (id === undefined) {
+    console.error("Usage: codex-agent bookmark get <id>");
+    process.exitCode = 1;
+    return;
+  }
+  const bookmark = await getBookmark(id);
+  if (bookmark === null) {
+    console.error(`Bookmark not found: ${id}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(JSON.stringify(bookmark, null, 2));
+}
+async function handleBookmarkDelete2(args) {
+  const id = args[0];
+  if (id === undefined) {
+    console.error("Usage: codex-agent bookmark delete <id>");
+    process.exitCode = 1;
+    return;
+  }
+  const deleted = await deleteBookmark(id);
+  if (!deleted) {
+    console.error(`Bookmark not found: ${id}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Bookmark deleted: ${id}`);
+}
+async function handleBookmarkSearch2(args) {
+  const query = args[0];
+  if (query === undefined) {
+    console.error("Usage: codex-agent bookmark search <query> [--limit <n>] [--format json|table]");
+    process.exitCode = 1;
+    return;
+  }
+  const format = getArgValue(args, "--format") ?? "table";
+  const limitArg = getArgValue(args, "--limit");
+  const limit = limitArg !== undefined ? parseInt(limitArg, 10) : undefined;
+  const results = await searchBookmarks(query, { limit });
+  if (results.length === 0) {
+    console.log("No matching bookmarks found.");
+    return;
+  }
+  if (format === "json") {
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+  const rows = results.map((result) => ({
+    score: String(result.score),
+    id: result.bookmark.id.slice(0, 8),
+    type: result.bookmark.type,
+    name: result.bookmark.name.length > 28 ? result.bookmark.name.slice(0, 25) + "..." : result.bookmark.name
+  }));
+  const headers = { score: "SCORE", id: "ID", type: "TYPE", name: "NAME" };
+  const cols = Object.keys(headers);
+  const widths = Object.fromEntries(cols.map((col) => [
+    col,
+    Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
+  ]));
+  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
+  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+  console.log([headerLine, separator, ...dataLines].join(`
+`));
+}
+
+// src/cli/commands/files.ts
+async function handleFiles(action, args) {
+  switch (action) {
+    case "list":
+      await handleFilesList2(args);
+      break;
+    case "patches":
+      await handleFilesPatches2(args);
+      break;
+    case "find":
+      await handleFilesFind2(args);
+      break;
+    case "rebuild":
+      await handleFilesRebuild();
+      break;
+    default:
+      console.error(`Unknown files action: ${action ?? "(none)"}`);
+      console.log(USAGE);
+      process.exitCode = 1;
+  }
+}
+async function handleFilesList2(args) {
+  const sessionId = args[0];
+  if (sessionId === undefined) {
+    console.error("Usage: codex-agent files list <session-id> [--format json|table]");
+    process.exitCode = 1;
+    return;
+  }
+  const format = getArgValue(args, "--format") ?? "table";
+  try {
+    const summary = await getChangedFiles(sessionId);
+    if (format === "json") {
+      console.log(JSON.stringify(summary, null, 2));
+      return;
+    }
+    if (summary.files.length === 0) {
+      console.log("No file changes found.");
+      return;
+    }
+    const rows = summary.files.map((file) => ({
+      path: file.path,
+      op: file.operation,
+      count: String(file.changeCount),
+      last: file.lastModified
+    }));
+    const headers = {
+      path: "PATH",
+      op: "OP",
+      count: "COUNT",
+      last: "LAST_MODIFIED"
+    };
+    const cols = Object.keys(headers);
+    const widths = Object.fromEntries(cols.map((col) => [
+      col,
+      Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
+    ]));
+    const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+    const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
+    const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+    console.log([headerLine, separator, ...dataLines].join(`
+`));
+  } catch (err) {
+    console.error(`Failed to list file changes: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+  }
+}
+async function handleFilesPatches2(args) {
+  const sessionId = args[0];
+  if (sessionId === undefined) {
+    console.error("Usage: codex-agent files patches <session-id> [--format json|table]");
+    process.exitCode = 1;
+    return;
+  }
+  const format = getArgValue(args, "--format") ?? "table";
+  try {
+    const history = await getSessionFilePatchHistory(sessionId);
+    if (format === "json") {
+      console.log(JSON.stringify(history, null, 2));
+      return;
+    }
+    if (history.files.length === 0) {
+      console.log("No file patch history found.");
+      return;
+    }
+    for (const file of history.files) {
+      console.log(`${file.path} (${file.changeCount} changes, latest ${file.lastModified})`);
+      for (const change of file.changes) {
+        const summary = change.patch !== undefined ? change.patch.split(`
+`)[0] ?? change.operation : change.command ?? change.operation;
+        console.log(`  ${change.timestamp}  ${change.operation}  ${change.source}  ${summary}`);
+      }
+      console.log("");
+    }
+  } catch (err) {
+    console.error(`Failed to get file patch history: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+  }
+}
+async function handleFilesFind2(args) {
+  const path = args[0];
+  if (path === undefined) {
+    console.error("Usage: codex-agent files find <path> [--format json|table]");
+    process.exitCode = 1;
+    return;
+  }
+  const format = getArgValue(args, "--format") ?? "table";
+  const history = await findSessionsByFile(path);
+  if (format === "json") {
+    console.log(JSON.stringify(history, null, 2));
+    return;
+  }
+  if (history.sessions.length === 0) {
+    console.log(`No sessions found for path: ${path}`);
+    return;
+  }
+  const rows = history.sessions.map((entry) => ({
+    session: entry.sessionId.slice(0, 8),
+    operation: entry.operation,
+    last: entry.lastModified
+  }));
+  const headers = {
+    session: "SESSION",
+    operation: "OP",
+    last: "LAST_MODIFIED"
+  };
+  const cols = Object.keys(headers);
+  const widths = Object.fromEntries(cols.map((col) => [
+    col,
+    Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
+  ]));
+  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
+  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+  console.log([headerLine, separator, ...dataLines].join(`
+`));
+}
+async function handleFilesRebuild() {
+  const stats = await rebuildFileIndex();
+  console.log(`Indexed ${stats.indexedFiles} files across ${stats.indexedSessions} sessions (updated: ${stats.updatedAt})`);
+}
+
+// src/cli/commands/group.ts
+async function handleGroup(action, args) {
+  switch (action) {
+    case "create":
+      await handleGroupCreate2(args);
+      break;
+    case "list":
+      await handleGroupList(args);
+      break;
+    case "show":
+      await handleGroupShow2(args);
+      break;
+    case "add":
+      await handleGroupAdd2(args);
+      break;
+    case "remove":
+      await handleGroupRemove2(args);
+      break;
+    case "pause":
+      await handleGroupPause2(args);
+      break;
+    case "resume":
+      await handleGroupResume2(args);
+      break;
+    case "delete":
+      await handleGroupDelete2(args);
+      break;
+    case "run":
+      await handleGroupRun2(args);
+      break;
+    default:
+      console.error(`Unknown group action: ${action ?? "(none)"}`);
+      console.log(USAGE);
+      process.exitCode = 1;
+  }
+}
+async function handleGroupCreate2(args) {
+  const name = args[0];
+  if (name === undefined) {
+    console.error("Usage: codex-agent group create <name> [--description D]");
+    process.exitCode = 1;
+    return;
+  }
+  const description = getArgValue(args, "--description");
+  const group = await addGroup(name, description);
+  console.log(`Group created: ${group.name} (${group.id})`);
+}
+async function handleGroupList(args) {
+  const format = getArgValue(args, "--format") ?? "table";
+  const groups = await listGroups();
+  if (groups.length === 0) {
+    console.log("No groups found.");
+    return;
+  }
+  if (format === "json") {
+    console.log(JSON.stringify(groups, null, 2));
+    return;
+  }
+  const rows = groups.map((g) => ({
+    id: g.id.slice(0, 8),
+    name: g.name,
+    sessions: String(g.sessionIds.length),
+    created: g.createdAt.toISOString().slice(0, 19).replace("T", " ")
+  }));
+  const headers = {
+    id: "ID",
+    name: "NAME",
+    sessions: "SESSIONS",
+    created: "CREATED"
+  };
+  const cols = Object.keys(headers);
+  const widths = Object.fromEntries(cols.map((col) => [
+    col,
+    Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
+  ]));
+  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
+  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+  console.log([headerLine, separator, ...dataLines].join(`
+`));
+}
+async function handleGroupShow2(args) {
+  const groupName = args[0];
+  if (groupName === undefined) {
+    console.error("Usage: codex-agent group show <group>");
+    process.exitCode = 1;
+    return;
+  }
+  const group = await findGroup(groupName);
+  if (group === null) {
+    console.error(`Group not found: ${groupName}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(JSON.stringify(group, null, 2));
+}
+async function handleGroupAdd2(args) {
+  const groupName = args[0];
+  const sessionId = args[1];
+  if (groupName === undefined || sessionId === undefined) {
+    console.error("Usage: codex-agent group add <group> <session>");
+    process.exitCode = 1;
+    return;
+  }
+  const group = await findGroup(groupName);
+  if (group === null) {
+    console.error(`Group not found: ${groupName}`);
+    process.exitCode = 1;
+    return;
+  }
+  await addSessionToGroup(group.id, sessionId);
+  console.log(`Added session ${sessionId} to group ${group.name}`);
+}
+async function handleGroupRemove2(args) {
+  const groupName = args[0];
+  const sessionId = args[1];
+  if (groupName === undefined || sessionId === undefined) {
+    console.error("Usage: codex-agent group remove <group> <session>");
+    process.exitCode = 1;
+    return;
+  }
+  const group = await findGroup(groupName);
+  if (group === null) {
+    console.error(`Group not found: ${groupName}`);
+    process.exitCode = 1;
+    return;
+  }
+  await removeSessionFromGroup(group.id, sessionId);
+  console.log(`Removed session ${sessionId} from group ${group.name}`);
+}
+async function handleGroupPause2(args) {
+  const groupName = args[0];
+  if (groupName === undefined) {
+    console.error("Usage: codex-agent group pause <group>");
+    process.exitCode = 1;
+    return;
+  }
+  const group = await findGroup(groupName);
+  if (group === null) {
+    console.error(`Group not found: ${groupName}`);
+    process.exitCode = 1;
+    return;
+  }
+  await pauseGroup(group.id);
+  console.log(`Paused group ${group.name}`);
+}
+async function handleGroupResume2(args) {
+  const groupName = args[0];
+  if (groupName === undefined) {
+    console.error("Usage: codex-agent group resume <group>");
+    process.exitCode = 1;
+    return;
+  }
+  const group = await findGroup(groupName);
+  if (group === null) {
+    console.error(`Group not found: ${groupName}`);
+    process.exitCode = 1;
+    return;
+  }
+  await resumeGroup(group.id);
+  console.log(`Resumed group ${group.name}`);
+}
+async function handleGroupDelete2(args) {
+  const groupName = args[0];
+  if (groupName === undefined) {
+    console.error("Usage: codex-agent group delete <group>");
+    process.exitCode = 1;
+    return;
+  }
+  const group = await findGroup(groupName);
+  if (group === null) {
+    console.error(`Group not found: ${groupName}`);
+    process.exitCode = 1;
+    return;
+  }
+  await removeGroup(group.id);
+  console.log(`Deleted group ${group.name}`);
+}
+async function handleGroupRun2(args) {
+  const name = args[0];
+  if (name === undefined) {
+    console.error("Usage: codex-agent group run <name> --prompt <P> [--max-concurrent N]");
+    process.exitCode = 1;
+    return;
+  }
+  const prompt = getArgValue(args, "--prompt");
+  if (prompt === undefined) {
+    console.error("--prompt is required for group run");
+    process.exitCode = 1;
+    return;
+  }
+  const group = await findGroup(name);
+  if (group === null) {
+    console.error(`Group not found: ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  const maxConcurrentStr = getArgValue(args, "--max-concurrent");
+  const maxConcurrent = maxConcurrentStr !== undefined ? parseInt(maxConcurrentStr, 10) : undefined;
+  const opts = parseProcessOptions(args.slice(1));
+  console.log(`Running prompt across ${group.sessionIds.length} sessions in group "${group.name}"...`);
+  for await (const event of runGroup(group, prompt, {
+    ...opts,
+    maxConcurrent
+  })) {
+    switch (event.type) {
+      case "session_started":
+        console.log(`  [started] ${event.sessionId}`);
+        break;
+      case "session_completed":
+        console.log(`  [done]    ${event.sessionId} (exit: ${event.exitCode})`);
+        break;
+      case "session_failed":
+        console.log(`  [failed]  ${event.sessionId} (exit: ${event.exitCode})`);
+        break;
+      case "group_completed":
+        console.log(`
+Group run complete: ${event.completed.length} completed, ${event.failed.length} failed`);
+        break;
+    }
+  }
+}
+
+// src/cli/commands/queue.ts
+async function handleQueue(action, args) {
+  switch (action) {
+    case "create":
+      await handleQueueCreate2(args);
+      break;
+    case "add":
+      await handleQueueAdd2(args);
+      break;
+    case "show":
+      await handleQueueShow2(args);
+      break;
+    case "list":
+      await handleQueueList(args);
+      break;
+    case "pause":
+      await handleQueuePause2(args);
+      break;
+    case "resume":
+      await handleQueueResume2(args);
+      break;
+    case "delete":
+      await handleQueueDelete2(args);
+      break;
+    case "update":
+      await handleQueueUpdate2(args);
+      break;
+    case "remove":
+      await handleQueueRemoveCommand(args);
+      break;
+    case "move":
+      await handleQueueMove2(args);
+      break;
+    case "mode":
+      await handleQueueMode2(args);
+      break;
+    case "run":
+      await handleQueueRun2(args);
+      break;
+    default:
+      console.error(`Unknown queue action: ${action ?? "(none)"}`);
+      console.log(USAGE);
+      process.exitCode = 1;
+  }
+}
+async function handleQueueCreate2(args) {
+  const name = args[0];
+  if (name === undefined) {
+    console.error("Usage: codex-agent queue create <name> --project <path>");
+    process.exitCode = 1;
+    return;
+  }
+  const projectPath = getArgValue(args, "--project");
+  if (projectPath === undefined) {
+    console.error("--project is required for queue create");
+    process.exitCode = 1;
+    return;
+  }
+  const queue = await createQueue(name, projectPath);
+  console.log(`Queue created: ${queue.name} (${queue.id})`);
+}
+async function handleQueueAdd2(args) {
+  const name = args[0];
+  if (name === undefined) {
+    console.error("Usage: codex-agent queue add <name> --prompt <prompt> [--image <path>]...");
+    process.exitCode = 1;
+    return;
+  }
+  const prompt = getArgValue(args, "--prompt");
+  if (prompt === undefined) {
+    console.error("--prompt is required for queue add");
+    process.exitCode = 1;
+    return;
+  }
+  const images = getArgValues(args, "--image");
+  const queue = await findQueue(name);
+  if (queue === null) {
+    console.error(`Queue not found: ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  const queuePrompt = await addPrompt(queue.id, prompt, images.length > 0 ? images : undefined);
+  console.log(`Prompt added to queue ${queue.name}: ${queuePrompt.id.slice(0, 8)}`);
+}
+async function handleQueueShow2(args) {
+  const name = args[0];
+  if (name === undefined) {
+    console.error("Usage: codex-agent queue show <name>");
+    process.exitCode = 1;
+    return;
+  }
+  const queue = await findQueue(name);
+  if (queue === null) {
+    console.error(`Queue not found: ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(JSON.stringify(queue, null, 2));
+}
+async function handleQueueList(args) {
+  const format = getArgValue(args, "--format") ?? "table";
+  const queues = await listQueues();
+  if (queues.length === 0) {
+    console.log("No queues found.");
+    return;
+  }
+  if (format === "json") {
+    console.log(JSON.stringify(queues, null, 2));
+    return;
+  }
+  const rows = queues.map((q) => ({
+    id: q.id.slice(0, 8),
+    name: q.name,
+    project: q.projectPath.length > 40 ? "..." + q.projectPath.slice(-37) : q.projectPath,
+    prompts: String(q.prompts.length),
+    pending: String(q.prompts.filter((p) => p.status === "pending").length),
+    created: q.createdAt.toISOString().slice(0, 19).replace("T", " ")
+  }));
+  const headers = {
+    id: "ID",
+    name: "NAME",
+    project: "PROJECT",
+    prompts: "PROMPTS",
+    pending: "PENDING",
+    created: "CREATED"
+  };
+  const cols = Object.keys(headers);
+  const widths = Object.fromEntries(cols.map((col) => [
+    col,
+    Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
+  ]));
+  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
+  const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
+  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
+  console.log([headerLine, separator, ...dataLines].join(`
+`));
+}
+async function handleQueuePause2(args) {
+  const name = args[0];
+  if (name === undefined) {
+    console.error("Usage: codex-agent queue pause <name>");
+    process.exitCode = 1;
+    return;
+  }
+  const queue = await findQueue(name);
+  if (queue === null) {
+    console.error(`Queue not found: ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  await pauseQueue(queue.id);
+  console.log(`Paused queue ${queue.name}`);
+}
+async function handleQueueResume2(args) {
+  const name = args[0];
+  if (name === undefined) {
+    console.error("Usage: codex-agent queue resume <name>");
+    process.exitCode = 1;
+    return;
+  }
+  const queue = await findQueue(name);
+  if (queue === null) {
+    console.error(`Queue not found: ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  await resumeQueue(queue.id);
+  console.log(`Resumed queue ${queue.name}`);
+}
+async function handleQueueDelete2(args) {
+  const name = args[0];
+  if (name === undefined) {
+    console.error("Usage: codex-agent queue delete <name>");
+    process.exitCode = 1;
+    return;
+  }
+  const queue = await findQueue(name);
+  if (queue === null) {
+    console.error(`Queue not found: ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  await removeQueue(queue.id);
+  console.log(`Deleted queue ${queue.name}`);
+}
+async function handleQueueUpdate2(args) {
+  const name = args[0];
+  const commandId = args[1];
+  if (name === undefined || commandId === undefined) {
+    console.error("Usage: codex-agent queue update <name> <command-id> [--prompt <text>] [--status <status>]");
+    process.exitCode = 1;
+    return;
+  }
+  const queue = await findQueue(name);
+  if (queue === null) {
+    console.error(`Queue not found: ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  const prompt = getArgValue(args, "--prompt");
+  const statusRaw = getArgValue(args, "--status");
+  const status = statusRaw === "pending" || statusRaw === "running" || statusRaw === "completed" || statusRaw === "failed" ? statusRaw : undefined;
+  const ok = await updateQueueCommand(queue.id, commandId, { prompt, status });
+  if (!ok) {
+    console.error(`Queue command not found: ${commandId}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Updated command ${commandId} in queue ${queue.name}`);
+}
+async function handleQueueRemoveCommand(args) {
+  const name = args[0];
+  const commandId = args[1];
+  if (name === undefined || commandId === undefined) {
+    console.error("Usage: codex-agent queue remove <name> <command-id>");
+    process.exitCode = 1;
+    return;
+  }
+  const queue = await findQueue(name);
+  if (queue === null) {
+    console.error(`Queue not found: ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  const ok = await removeQueueCommand(queue.id, commandId);
+  if (!ok) {
+    console.error(`Queue command not found: ${commandId}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Removed command ${commandId} from queue ${queue.name}`);
+}
+async function handleQueueMove2(args) {
+  const name = args[0];
+  if (name === undefined) {
+    console.error("Usage: codex-agent queue move <name> --from <n> --to <n>");
+    process.exitCode = 1;
+    return;
+  }
+  const queue = await findQueue(name);
+  if (queue === null) {
+    console.error(`Queue not found: ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  const fromStr = getArgValue(args, "--from");
+  const toStr = getArgValue(args, "--to");
+  const from = fromStr !== undefined ? parseInt(fromStr, 10) : NaN;
+  const to = toStr !== undefined ? parseInt(toStr, 10) : NaN;
+  if (!Number.isFinite(from) || !Number.isFinite(to)) {
+    console.error("Usage: codex-agent queue move <name> --from <n> --to <n>");
+    process.exitCode = 1;
+    return;
+  }
+  const ok = await moveQueueCommand(queue.id, from, to);
+  if (!ok) {
+    console.error("Failed to move queue command. Check indices.");
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Moved command in queue ${queue.name}: ${from} -> ${to}`);
+}
+async function handleQueueMode2(args) {
+  const name = args[0];
+  const commandId = args[1];
+  const modeRaw = getArgValue(args, "--mode");
+  if (name === undefined || commandId === undefined || modeRaw !== "auto" && modeRaw !== "manual") {
+    console.error("Usage: codex-agent queue mode <name> <command-id> --mode <auto|manual>");
+    process.exitCode = 1;
+    return;
+  }
+  const queue = await findQueue(name);
+  if (queue === null) {
+    console.error(`Queue not found: ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  const ok = await toggleQueueCommandMode(queue.id, commandId, modeRaw);
+  if (!ok) {
+    console.error(`Queue command not found: ${commandId}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Set mode ${modeRaw} for command ${commandId} in queue ${queue.name}`);
+}
+async function handleQueueRun2(args) {
+  const name = args[0];
+  if (name === undefined) {
+    console.error("Usage: codex-agent queue run <name>");
+    process.exitCode = 1;
+    return;
+  }
+  const queue = await findQueue(name);
+  if (queue === null) {
+    console.error(`Queue not found: ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  const pendingCount = queue.prompts.filter((p) => p.status === "pending").length;
+  console.log(`Running queue "${queue.name}" (${pendingCount} pending prompts)...`);
+  const opts = parseProcessOptions(args.slice(1));
+  const stopSignal = { stopped: false };
+  const handler = () => {
+    console.log(`
+Stopping after current prompt...`);
+    stopSignal.stopped = true;
+  };
+  process.on("SIGINT", handler);
+  for await (const event of runQueue(queue, opts, stopSignal)) {
+    switch (event.type) {
+      case "prompt_started":
+        console.log(`  [started]   ${event.promptId?.slice(0, 8)}`);
+        break;
+      case "prompt_completed":
+        console.log(`  [completed] ${event.promptId?.slice(0, 8)} (exit: ${event.exitCode})`);
+        break;
+      case "prompt_failed":
+        console.log(`  [failed]    ${event.promptId?.slice(0, 8)} (exit: ${event.exitCode})`);
+        break;
+      case "queue_completed":
+        console.log(`
+Queue complete: ${event.completed.length} completed, ${event.failed.length} failed`);
+        break;
+      case "queue_stopped":
+        console.log(`
+Queue stopped: ${event.completed.length} completed, ${event.pending.length} remaining`);
+        break;
+    }
+  }
+  process.removeListener("SIGINT", handler);
+}
+
 // src/cli/format.ts
 function formatSessionTable(sessions) {
   if (sessions.length === 0) {
@@ -14235,324 +15368,7 @@ function truncate(s, max) {
   return s.slice(0, max - 3) + "...";
 }
 
-// src/cli/graphql.ts
-import { access, readFile as readFile7 } from "fs/promises";
-import { constants as fsConstants } from "fs";
-async function runGraphqlCli(args, options) {
-  const parsed = await parseGraphqlCliArgs(args);
-  const result = await executeGraphqlOperation({
-    document: parsed.document,
-    variables: parsed.variables,
-    context: {
-      codexHome: options?.codexHome,
-      configDir: options?.configDir
-    }
-  });
-  if (isAsyncIterable3(result)) {
-    for await (const event of result) {
-      console.log(JSON.stringify(event, null, 2));
-      if (Array.isArray(event.errors) && event.errors.length > 0) {
-        process.exitCode = 1;
-      }
-    }
-    return;
-  }
-  console.log(JSON.stringify(result, null, 2));
-  if (Array.isArray(result.errors) && result.errors.length > 0) {
-    process.exitCode = 1;
-  }
-}
-async function parseGraphqlCliArgs(args) {
-  const documentArg = args[0];
-  if (documentArg === undefined || documentArg.trim().length === 0) {
-    throw new Error("Usage: codex-agent graphql <query|command> [--param <json|path>] [--variables <json|path>]");
-  }
-  const variables = await readVariables(args);
-  return {
-    document: normalizeGraphqlDocument(documentArg),
-    ...variables === undefined ? {} : { variables }
-  };
-}
-function normalizeGraphqlDocument(input) {
-  const trimmed = input.trim();
-  if (trimmed.startsWith("query") || trimmed.startsWith("mutation") || trimmed.startsWith("subscription") || trimmed.startsWith("{") || trimmed.startsWith("#")) {
-    return trimmed;
-  }
-  const operation = shorthandOperation(trimmed);
-  return `${operation} ($param: JSON) { command(name: ${JSON.stringify(trimmed)}, params: $param) }`;
-}
-async function readVariables(args) {
-  const variablesRaw = getArgValue(args, "--variables");
-  const paramRaw = getArgValue(args, "--param") ?? getArgValue(args, "--arg");
-  let variables;
-  if (variablesRaw !== undefined) {
-    const parsed = await parseJsonSource(variablesRaw);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error("--variables must be a JSON object");
-    }
-    variables = parsed;
-  }
-  if (paramRaw === undefined) {
-    return variables;
-  }
-  const param = await parseJsonSource(paramRaw);
-  return {
-    ...variables ?? {},
-    param
-  };
-}
-async function parseJsonSource(raw) {
-  const path = raw.startsWith("@") ? raw.slice(1) : raw;
-  const source = await isReadableFile(path) ? await readFile7(path, "utf-8") : raw;
-  try {
-    return JSON.parse(source);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid JSON input: ${message}`);
-  }
-}
-async function isReadableFile(path) {
-  try {
-    await access(path, fsConstants.R_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function getArgValue(args, flag) {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) {
-    return;
-  }
-  return args[idx + 1];
-}
-function shorthandOperation(command) {
-  if (command === "session.watch") {
-    return "subscription";
-  }
-  if (MUTATION_COMMANDS.has(command)) {
-    return "mutation";
-  }
-  return "query";
-}
-function isAsyncIterable3(value) {
-  return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
-}
-var MUTATION_COMMANDS = new Set([
-  "session.run",
-  "session.resume",
-  "session.fork",
-  "group.create",
-  "group.add",
-  "group.remove",
-  "group.pause",
-  "group.resume",
-  "group.delete",
-  "group.run",
-  "queue.create",
-  "queue.add",
-  "queue.pause",
-  "queue.resume",
-  "queue.delete",
-  "queue.update",
-  "queue.remove",
-  "queue.move",
-  "queue.mode",
-  "queue.run",
-  "bookmark.add",
-  "bookmark.delete",
-  "token.create",
-  "token.revoke",
-  "token.rotate",
-  "files.rebuild"
-]);
-
-// src/cli/index.ts
-var CLI_NAME = "codex-agent";
-var USAGE = `${CLI_NAME} - Codex session manager
-
-Usage:
-  ${CLI_NAME} session list [options]
-  ${CLI_NAME} session show <id> [--tasks]
-  ${CLI_NAME} session watch <id>
-  ${CLI_NAME} session run --prompt <P> [options]
-  ${CLI_NAME} session resume <id> [options]
-  ${CLI_NAME} session fork <id> [--nth-message N] [options]
-
-  ${CLI_NAME} group create <name> [--description D]
-  ${CLI_NAME} group list [--format json|table]
-  ${CLI_NAME} group show <group>
-  ${CLI_NAME} group add <group> <session>
-  ${CLI_NAME} group remove <group> <session>
-  ${CLI_NAME} group pause <group>
-  ${CLI_NAME} group resume <group>
-  ${CLI_NAME} group delete <group>
-  ${CLI_NAME} group run <name> --prompt <P> [--max-concurrent N] [--image FILE]...
-
-  ${CLI_NAME} bookmark add --type <session|message|range> --session <id> --name <name> [options]
-  ${CLI_NAME} bookmark list [--format json|table] [--session <id>] [--type <type>] [--tag <tag>]
-  ${CLI_NAME} bookmark get <id>
-  ${CLI_NAME} bookmark delete <id>
-  ${CLI_NAME} bookmark search <query> [--limit <n>] [--format json|table]
-
-  ${CLI_NAME} token create --name <name> [--permissions <csv>] [--expires-at <iso8601>]
-  ${CLI_NAME} token list [--format json|table]
-  ${CLI_NAME} token revoke <id>
-  ${CLI_NAME} token rotate <id>
-
-  ${CLI_NAME} files list <session-id> [--format json|table]
-  ${CLI_NAME} files patches <session-id> [--format json|table]
-  ${CLI_NAME} files find <path> [--format json|table]
-  ${CLI_NAME} files rebuild
-
-  ${CLI_NAME} queue create <name> --project <path>
-  ${CLI_NAME} queue add <name> --prompt <prompt> [--image FILE]...
-  ${CLI_NAME} queue show <name>
-  ${CLI_NAME} queue list [--format json|table]
-  ${CLI_NAME} queue pause <name>
-  ${CLI_NAME} queue resume <name>
-  ${CLI_NAME} queue delete <name>
-  ${CLI_NAME} queue update <name> <command-id> [--prompt <text>] [--status <status>]
-  ${CLI_NAME} queue remove <name> <command-id>
-  ${CLI_NAME} queue move <name> --from <n> --to <n>
-  ${CLI_NAME} queue mode <name> <command-id> --mode <auto|manual>
-  ${CLI_NAME} queue run <name> [--image FILE]...
-
-  ${CLI_NAME} model check --model <model> [--json] [--timeout-ms <ms>]
-
-  ${CLI_NAME} graphql <query|command> [--param <json|path>] [--variables <json|path>]
-
-  ${CLI_NAME} version [--json] [--include-git]
-
-Session list options:
-  --source <cli|vscode|exec>  Filter by session source
-  --cwd <path>                Filter by working directory
-  --branch <name>             Filter by git branch
-  --limit <n>                 Max results (default: 50)
-  --format <table|json>       Output format (default: table)
-
-Common process options:
-  --model <model>             Model to use
-  --sandbox <full|network-only|none>  Sandbox mode
-  --approval-mode <mode>       Approval mode: always, unless-allow-listed, never, on-failure
-  --full-auto                 Enable full-auto mode
-  --stream-granularity <event|char>  Stream by rollout event or character
-  --char-delay-ms <n>         Delay per rendered char in ms (session run only, default: 8)
-  --image <path>              Attach image(s) to prompt (repeatable)
-
-`;
-async function run(argv) {
-  const args = argv.slice(2);
-  if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
-    console.log(USAGE);
-    return;
-  }
-  const subcommand = args[0];
-  const action = args[1];
-  const rest = args.slice(2);
-  switch (subcommand) {
-    case "session":
-      await handleSession(action, rest);
-      break;
-    case "group":
-      await handleGroup(action, rest);
-      break;
-    case "queue":
-      await handleQueue(action, rest);
-      break;
-    case "bookmark":
-      await handleBookmark(action, rest);
-      break;
-    case "token":
-      await handleToken(action, rest);
-      break;
-    case "files":
-      await handleFiles(action, rest);
-      break;
-    case "model":
-      await handleModel(action, rest);
-      break;
-    case "version":
-      await handleVersion(args.slice(1));
-      break;
-    case "graphql":
-      await runGraphqlCli(args.slice(1));
-      break;
-    default:
-      console.error(`Unknown command: ${subcommand}`);
-      console.log(USAGE);
-      process.exitCode = 1;
-  }
-}
-async function handleVersion(args) {
-  const { asJson, includeGit } = parseVersionArgs(args);
-  const versions = await getToolVersions({ includeGit });
-  if (asJson) {
-    console.log(JSON.stringify(versions, null, 2));
-    return;
-  }
-  printToolVersion("codex", versions.codex);
-  if (versions.git !== undefined) {
-    printToolVersion("git", versions.git);
-  }
-}
-function parseVersionArgs(args) {
-  return {
-    asJson: args.includes("--json"),
-    includeGit: args.includes("--include-git")
-  };
-}
-function printToolVersion(name, info) {
-  if (info.error === null) {
-    console.log(`${name}: ${info.version}`);
-    return;
-  }
-  console.log(`${name}: unavailable (${info.error})`);
-}
-async function handleModel(action, args) {
-  if (action !== "check") {
-    console.error(`Unknown model action: ${action ?? "(none)"}`);
-    console.log(USAGE);
-    process.exitCode = 1;
-    return;
-  }
-  const parsed = parseModelCheckArgs(args);
-  if (parsed.model === undefined || parsed.model.trim().length === 0) {
-    console.error("Usage: codex-agent model check --model <model> [--json] [--timeout-ms <ms>]");
-    process.exitCode = 1;
-    return;
-  }
-  const result = await checkCodexModelAvailability({
-    model: parsed.model,
-    ...parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}
-  });
-  if (parsed.asJson) {
-    console.log(JSON.stringify(result, null, 2));
-  } else {
-    console.log(`Overall: ${result.ok ? "available" : "unavailable"}`);
-    console.log(`Auth:    ${result.auth.ok ? "available" : "unavailable"}${result.auth.status !== null ? ` (${result.auth.status})` : ""}`);
-    console.log(`Model:   ${result.model}`);
-    console.log(`Probe:   ${result.probe.ok ? "available" : "unavailable"}${result.probe.error !== null ? ` (${result.probe.error})` : ""}`);
-  }
-  if (!result.ok) {
-    process.exitCode = 1;
-  }
-}
-function parseModelCheckArgs(args) {
-  const timeoutRaw = getArgValue2(args, "--timeout-ms");
-  const timeoutMs = timeoutRaw !== undefined ? Number.parseInt(timeoutRaw, 10) : undefined;
-  const parsed = {
-    asJson: args.includes("--json")
-  };
-  const model = getArgValue2(args, "--model");
-  if (model !== undefined) {
-    parsed.model = model;
-  }
-  if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
-    parsed.timeoutMs = timeoutMs;
-  }
-  return parsed;
-}
+// src/cli/commands/session.ts
 async function handleSession(action, args) {
   switch (action) {
     case "list":
@@ -14662,7 +15478,7 @@ Watching for updates... (Ctrl+C to stop)
   });
 }
 async function handleSessionRun2(args) {
-  const prompt = getArgValue2(args, "--prompt");
+  const prompt = getArgValue(args, "--prompt");
   if (prompt === undefined || prompt.trim().length === 0) {
     console.error("Usage: codex-agent session run --prompt <P> [options]");
     process.exitCode = 1;
@@ -14719,547 +15535,15 @@ async function handleSessionFork2(args) {
     process.exitCode = 1;
     return;
   }
-  const nthMessage = getArgValue2(args, "--nth-message");
+  const nthMessage = getArgValue(args, "--nth-message");
   const nth = nthMessage !== undefined ? parseInt(nthMessage, 10) : undefined;
   const opts = parseProcessOptions(args.slice(1));
   const pm = new ProcessManager;
   const proc = pm.spawnFork(id, nth, opts);
   console.log(`Forking session ${id} (pid: ${proc.pid})`);
 }
-async function handleGroup(action, args) {
-  switch (action) {
-    case "create":
-      await handleGroupCreate2(args);
-      break;
-    case "list":
-      await handleGroupList(args);
-      break;
-    case "show":
-      await handleGroupShow2(args);
-      break;
-    case "add":
-      await handleGroupAdd2(args);
-      break;
-    case "remove":
-      await handleGroupRemove2(args);
-      break;
-    case "pause":
-      await handleGroupPause2(args);
-      break;
-    case "resume":
-      await handleGroupResume2(args);
-      break;
-    case "delete":
-      await handleGroupDelete2(args);
-      break;
-    case "run":
-      await handleGroupRun2(args);
-      break;
-    default:
-      console.error(`Unknown group action: ${action ?? "(none)"}`);
-      console.log(USAGE);
-      process.exitCode = 1;
-  }
-}
-async function handleGroupCreate2(args) {
-  const name = args[0];
-  if (name === undefined) {
-    console.error("Usage: codex-agent group create <name> [--description D]");
-    process.exitCode = 1;
-    return;
-  }
-  const description = getArgValue2(args, "--description");
-  const group = await addGroup(name, description);
-  console.log(`Group created: ${group.name} (${group.id})`);
-}
-async function handleGroupList(args) {
-  const format = getArgValue2(args, "--format") ?? "table";
-  const groups = await listGroups();
-  if (groups.length === 0) {
-    console.log("No groups found.");
-    return;
-  }
-  if (format === "json") {
-    console.log(JSON.stringify(groups, null, 2));
-    return;
-  }
-  const rows = groups.map((g) => ({
-    id: g.id.slice(0, 8),
-    name: g.name,
-    sessions: String(g.sessionIds.length),
-    created: g.createdAt.toISOString().slice(0, 19).replace("T", " ")
-  }));
-  const headers = {
-    id: "ID",
-    name: "NAME",
-    sessions: "SESSIONS",
-    created: "CREATED"
-  };
-  const cols = Object.keys(headers);
-  const widths = Object.fromEntries(cols.map((col) => [
-    col,
-    Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
-  ]));
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
-  const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
-  console.log([headerLine, separator, ...dataLines].join(`
-`));
-}
-async function handleGroupShow2(args) {
-  const groupName = args[0];
-  if (groupName === undefined) {
-    console.error("Usage: codex-agent group show <group>");
-    process.exitCode = 1;
-    return;
-  }
-  const group = await findGroup(groupName);
-  if (group === null) {
-    console.error(`Group not found: ${groupName}`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(JSON.stringify(group, null, 2));
-}
-async function handleGroupAdd2(args) {
-  const groupName = args[0];
-  const sessionId = args[1];
-  if (groupName === undefined || sessionId === undefined) {
-    console.error("Usage: codex-agent group add <group> <session>");
-    process.exitCode = 1;
-    return;
-  }
-  const group = await findGroup(groupName);
-  if (group === null) {
-    console.error(`Group not found: ${groupName}`);
-    process.exitCode = 1;
-    return;
-  }
-  await addSessionToGroup(group.id, sessionId);
-  console.log(`Added session ${sessionId} to group ${group.name}`);
-}
-async function handleGroupRemove2(args) {
-  const groupName = args[0];
-  const sessionId = args[1];
-  if (groupName === undefined || sessionId === undefined) {
-    console.error("Usage: codex-agent group remove <group> <session>");
-    process.exitCode = 1;
-    return;
-  }
-  const group = await findGroup(groupName);
-  if (group === null) {
-    console.error(`Group not found: ${groupName}`);
-    process.exitCode = 1;
-    return;
-  }
-  await removeSessionFromGroup(group.id, sessionId);
-  console.log(`Removed session ${sessionId} from group ${group.name}`);
-}
-async function handleGroupPause2(args) {
-  const groupName = args[0];
-  if (groupName === undefined) {
-    console.error("Usage: codex-agent group pause <group>");
-    process.exitCode = 1;
-    return;
-  }
-  const group = await findGroup(groupName);
-  if (group === null) {
-    console.error(`Group not found: ${groupName}`);
-    process.exitCode = 1;
-    return;
-  }
-  await pauseGroup(group.id);
-  console.log(`Paused group ${group.name}`);
-}
-async function handleGroupResume2(args) {
-  const groupName = args[0];
-  if (groupName === undefined) {
-    console.error("Usage: codex-agent group resume <group>");
-    process.exitCode = 1;
-    return;
-  }
-  const group = await findGroup(groupName);
-  if (group === null) {
-    console.error(`Group not found: ${groupName}`);
-    process.exitCode = 1;
-    return;
-  }
-  await resumeGroup(group.id);
-  console.log(`Resumed group ${group.name}`);
-}
-async function handleGroupDelete2(args) {
-  const groupName = args[0];
-  if (groupName === undefined) {
-    console.error("Usage: codex-agent group delete <group>");
-    process.exitCode = 1;
-    return;
-  }
-  const group = await findGroup(groupName);
-  if (group === null) {
-    console.error(`Group not found: ${groupName}`);
-    process.exitCode = 1;
-    return;
-  }
-  await removeGroup(group.id);
-  console.log(`Deleted group ${group.name}`);
-}
-async function handleGroupRun2(args) {
-  const name = args[0];
-  if (name === undefined) {
-    console.error("Usage: codex-agent group run <name> --prompt <P> [--max-concurrent N]");
-    process.exitCode = 1;
-    return;
-  }
-  const prompt = getArgValue2(args, "--prompt");
-  if (prompt === undefined) {
-    console.error("--prompt is required for group run");
-    process.exitCode = 1;
-    return;
-  }
-  const group = await findGroup(name);
-  if (group === null) {
-    console.error(`Group not found: ${name}`);
-    process.exitCode = 1;
-    return;
-  }
-  const maxConcurrentStr = getArgValue2(args, "--max-concurrent");
-  const maxConcurrent = maxConcurrentStr !== undefined ? parseInt(maxConcurrentStr, 10) : undefined;
-  const opts = parseProcessOptions(args.slice(1));
-  console.log(`Running prompt across ${group.sessionIds.length} sessions in group "${group.name}"...`);
-  for await (const event of runGroup(group, prompt, {
-    ...opts,
-    maxConcurrent
-  })) {
-    switch (event.type) {
-      case "session_started":
-        console.log(`  [started] ${event.sessionId}`);
-        break;
-      case "session_completed":
-        console.log(`  [done]    ${event.sessionId} (exit: ${event.exitCode})`);
-        break;
-      case "session_failed":
-        console.log(`  [failed]  ${event.sessionId} (exit: ${event.exitCode})`);
-        break;
-      case "group_completed":
-        console.log(`
-Group run complete: ${event.completed.length} completed, ${event.failed.length} failed`);
-        break;
-    }
-  }
-}
-async function handleBookmark(action, args) {
-  switch (action) {
-    case "add":
-      await handleBookmarkAdd2(args);
-      break;
-    case "list":
-      await handleBookmarkList2(args);
-      break;
-    case "get":
-      await handleBookmarkGet2(args);
-      break;
-    case "delete":
-      await handleBookmarkDelete2(args);
-      break;
-    case "search":
-      await handleBookmarkSearch2(args);
-      break;
-    default:
-      console.error(`Unknown bookmark action: ${action ?? "(none)"}`);
-      console.log(USAGE);
-      process.exitCode = 1;
-  }
-}
-async function handleBookmarkAdd2(args) {
-  const typeValue = getArgValue2(args, "--type");
-  const sessionId = getArgValue2(args, "--session");
-  const name = getArgValue2(args, "--name");
-  const description = getArgValue2(args, "--description");
-  const tags = getArgValues(args, "--tag");
-  const messageId = getArgValue2(args, "--message");
-  const fromMessageId = getArgValue2(args, "--from");
-  const toMessageId = getArgValue2(args, "--to");
-  if (typeValue === undefined || sessionId === undefined || name === undefined) {
-    console.error("Usage: codex-agent bookmark add --type <session|message|range> --session <id> --name <name> [--description <text>] [--tag <tag>] [--message <id>] [--from <id>] [--to <id>]");
-    process.exitCode = 1;
-    return;
-  }
-  if (!isBookmarkType(typeValue)) {
-    console.error(`Invalid bookmark type: ${typeValue}`);
-    process.exitCode = 1;
-    return;
-  }
-  try {
-    const bookmark = await addBookmark({
-      type: typeValue,
-      sessionId,
-      name,
-      description,
-      tags,
-      messageId,
-      fromMessageId,
-      toMessageId
-    });
-    console.log(`Bookmark created: ${bookmark.name} (${bookmark.id})`);
-  } catch (err) {
-    console.error(`Failed to add bookmark: ${err instanceof Error ? err.message : String(err)}`);
-    process.exitCode = 1;
-  }
-}
-async function handleBookmarkList2(args) {
-  const format = getArgValue2(args, "--format") ?? "table";
-  const typeArg = getArgValue2(args, "--type");
-  const sessionId = getArgValue2(args, "--session");
-  const tag = getArgValue2(args, "--tag");
-  let type;
-  if (typeArg !== undefined) {
-    if (!isBookmarkType(typeArg)) {
-      console.error(`Invalid bookmark type: ${typeArg}`);
-      process.exitCode = 1;
-      return;
-    }
-    type = typeArg;
-  }
-  const bookmarks = await listBookmarks({ sessionId, type, tag });
-  if (bookmarks.length === 0) {
-    console.log("No bookmarks found.");
-    return;
-  }
-  if (format === "json") {
-    console.log(JSON.stringify(bookmarks, null, 2));
-    return;
-  }
-  const rows = bookmarks.map((bookmark) => ({
-    id: bookmark.id.slice(0, 8),
-    type: bookmark.type,
-    session: bookmark.sessionId.slice(0, 12),
-    name: bookmark.name.length > 28 ? bookmark.name.slice(0, 25) + "..." : bookmark.name,
-    tags: bookmark.tags.join(",")
-  }));
-  const headers = {
-    id: "ID",
-    type: "TYPE",
-    session: "SESSION",
-    name: "NAME",
-    tags: "TAGS"
-  };
-  const cols = Object.keys(headers);
-  const widths = Object.fromEntries(cols.map((col) => [
-    col,
-    Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
-  ]));
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
-  const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
-  console.log([headerLine, separator, ...dataLines].join(`
-`));
-}
-async function handleBookmarkGet2(args) {
-  const id = args[0];
-  if (id === undefined) {
-    console.error("Usage: codex-agent bookmark get <id>");
-    process.exitCode = 1;
-    return;
-  }
-  const bookmark = await getBookmark(id);
-  if (bookmark === null) {
-    console.error(`Bookmark not found: ${id}`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(JSON.stringify(bookmark, null, 2));
-}
-async function handleBookmarkDelete2(args) {
-  const id = args[0];
-  if (id === undefined) {
-    console.error("Usage: codex-agent bookmark delete <id>");
-    process.exitCode = 1;
-    return;
-  }
-  const deleted = await deleteBookmark(id);
-  if (!deleted) {
-    console.error(`Bookmark not found: ${id}`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(`Bookmark deleted: ${id}`);
-}
-async function handleBookmarkSearch2(args) {
-  const query = args[0];
-  if (query === undefined) {
-    console.error("Usage: codex-agent bookmark search <query> [--limit <n>] [--format json|table]");
-    process.exitCode = 1;
-    return;
-  }
-  const format = getArgValue2(args, "--format") ?? "table";
-  const limitArg = getArgValue2(args, "--limit");
-  const limit = limitArg !== undefined ? parseInt(limitArg, 10) : undefined;
-  const results = await searchBookmarks(query, { limit });
-  if (results.length === 0) {
-    console.log("No matching bookmarks found.");
-    return;
-  }
-  if (format === "json") {
-    console.log(JSON.stringify(results, null, 2));
-    return;
-  }
-  const rows = results.map((result) => ({
-    score: String(result.score),
-    id: result.bookmark.id.slice(0, 8),
-    type: result.bookmark.type,
-    name: result.bookmark.name.length > 28 ? result.bookmark.name.slice(0, 25) + "..." : result.bookmark.name
-  }));
-  const headers = { score: "SCORE", id: "ID", type: "TYPE", name: "NAME" };
-  const cols = Object.keys(headers);
-  const widths = Object.fromEntries(cols.map((col) => [
-    col,
-    Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
-  ]));
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
-  const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
-  console.log([headerLine, separator, ...dataLines].join(`
-`));
-}
-async function handleFiles(action, args) {
-  switch (action) {
-    case "list":
-      await handleFilesList2(args);
-      break;
-    case "patches":
-      await handleFilesPatches2(args);
-      break;
-    case "find":
-      await handleFilesFind2(args);
-      break;
-    case "rebuild":
-      await handleFilesRebuild();
-      break;
-    default:
-      console.error(`Unknown files action: ${action ?? "(none)"}`);
-      console.log(USAGE);
-      process.exitCode = 1;
-  }
-}
-async function handleFilesList2(args) {
-  const sessionId = args[0];
-  if (sessionId === undefined) {
-    console.error("Usage: codex-agent files list <session-id> [--format json|table]");
-    process.exitCode = 1;
-    return;
-  }
-  const format = getArgValue2(args, "--format") ?? "table";
-  try {
-    const summary = await getChangedFiles(sessionId);
-    if (format === "json") {
-      console.log(JSON.stringify(summary, null, 2));
-      return;
-    }
-    if (summary.files.length === 0) {
-      console.log("No file changes found.");
-      return;
-    }
-    const rows = summary.files.map((file) => ({
-      path: file.path,
-      op: file.operation,
-      count: String(file.changeCount),
-      last: file.lastModified
-    }));
-    const headers = {
-      path: "PATH",
-      op: "OP",
-      count: "COUNT",
-      last: "LAST_MODIFIED"
-    };
-    const cols = Object.keys(headers);
-    const widths = Object.fromEntries(cols.map((col) => [
-      col,
-      Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
-    ]));
-    const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
-    const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-    const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
-    console.log([headerLine, separator, ...dataLines].join(`
-`));
-  } catch (err) {
-    console.error(`Failed to list file changes: ${err instanceof Error ? err.message : String(err)}`);
-    process.exitCode = 1;
-  }
-}
-async function handleFilesPatches2(args) {
-  const sessionId = args[0];
-  if (sessionId === undefined) {
-    console.error("Usage: codex-agent files patches <session-id> [--format json|table]");
-    process.exitCode = 1;
-    return;
-  }
-  const format = getArgValue2(args, "--format") ?? "table";
-  try {
-    const history = await getSessionFilePatchHistory(sessionId);
-    if (format === "json") {
-      console.log(JSON.stringify(history, null, 2));
-      return;
-    }
-    if (history.files.length === 0) {
-      console.log("No file patch history found.");
-      return;
-    }
-    for (const file of history.files) {
-      console.log(`${file.path} (${file.changeCount} changes, latest ${file.lastModified})`);
-      for (const change of file.changes) {
-        const summary = change.patch !== undefined ? change.patch.split(`
-`)[0] ?? change.operation : change.command ?? change.operation;
-        console.log(`  ${change.timestamp}  ${change.operation}  ${change.source}  ${summary}`);
-      }
-      console.log("");
-    }
-  } catch (err) {
-    console.error(`Failed to get file patch history: ${err instanceof Error ? err.message : String(err)}`);
-    process.exitCode = 1;
-  }
-}
-async function handleFilesFind2(args) {
-  const path = args[0];
-  if (path === undefined) {
-    console.error("Usage: codex-agent files find <path> [--format json|table]");
-    process.exitCode = 1;
-    return;
-  }
-  const format = getArgValue2(args, "--format") ?? "table";
-  const history = await findSessionsByFile(path);
-  if (format === "json") {
-    console.log(JSON.stringify(history, null, 2));
-    return;
-  }
-  if (history.sessions.length === 0) {
-    console.log(`No sessions found for path: ${path}`);
-    return;
-  }
-  const rows = history.sessions.map((entry) => ({
-    session: entry.sessionId.slice(0, 8),
-    operation: entry.operation,
-    last: entry.lastModified
-  }));
-  const headers = {
-    session: "SESSION",
-    operation: "OP",
-    last: "LAST_MODIFIED"
-  };
-  const cols = Object.keys(headers);
-  const widths = Object.fromEntries(cols.map((col) => [
-    col,
-    Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
-  ]));
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
-  const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
-  console.log([headerLine, separator, ...dataLines].join(`
-`));
-}
-async function handleFilesRebuild() {
-  const stats = await rebuildFileIndex();
-  console.log(`Indexed ${stats.indexedFiles} files across ${stats.indexedSessions} sessions (updated: ${stats.updatedAt})`);
-}
+
+// src/cli/commands/token.ts
 async function handleToken(action, args) {
   switch (action) {
     case "create":
@@ -15281,14 +15565,14 @@ async function handleToken(action, args) {
   }
 }
 async function handleTokenCreate2(args) {
-  const name = getArgValue2(args, "--name");
+  const name = getArgValue(args, "--name");
   if (name === undefined || name.trim().length === 0) {
     console.error("Usage: codex-agent token create --name <name> [--permissions <csv>] [--expires-at <iso8601>]");
     process.exitCode = 1;
     return;
   }
-  const permissionsCsv = getArgValue2(args, "--permissions");
-  const expiresAt = getArgValue2(args, "--expires-at");
+  const permissionsCsv = getArgValue(args, "--permissions");
+  const expiresAt = getArgValue(args, "--expires-at");
   const permissions = permissionsCsv !== undefined ? parsePermissionList(permissionsCsv) : DEFAULT_TOKEN_PERMISSIONS;
   if (permissions.length === 0) {
     console.error(`No valid permissions provided. Allowed: ${PERMISSIONS.join(", ")}`);
@@ -15309,7 +15593,7 @@ async function handleTokenCreate2(args) {
   }
 }
 async function handleTokenList(args) {
-  const format = getArgValue2(args, "--format") ?? "table";
+  const format = getArgValue(args, "--format") ?? "table";
   const tokens = await listTokens();
   if (tokens.length === 0) {
     console.log("No tokens found.");
@@ -15375,494 +15659,252 @@ async function handleTokenRotate2(args) {
     process.exitCode = 1;
   }
 }
-async function handleQueue(action, args) {
-  switch (action) {
-    case "create":
-      await handleQueueCreate2(args);
-      break;
-    case "add":
-      await handleQueueAdd2(args);
-      break;
-    case "show":
-      await handleQueueShow2(args);
-      break;
-    case "list":
-      await handleQueueList(args);
-      break;
-    case "pause":
-      await handleQueuePause2(args);
-      break;
-    case "resume":
-      await handleQueueResume2(args);
-      break;
-    case "delete":
-      await handleQueueDelete2(args);
-      break;
-    case "update":
-      await handleQueueUpdate2(args);
-      break;
-    case "remove":
-      await handleQueueRemoveCommand(args);
-      break;
-    case "move":
-      await handleQueueMove2(args);
-      break;
-    case "mode":
-      await handleQueueMode2(args);
-      break;
-    case "run":
-      await handleQueueRun2(args);
-      break;
-    default:
-      console.error(`Unknown queue action: ${action ?? "(none)"}`);
-      console.log(USAGE);
-      process.exitCode = 1;
-  }
-}
-async function handleQueueCreate2(args) {
-  const name = args[0];
-  if (name === undefined) {
-    console.error("Usage: codex-agent queue create <name> --project <path>");
-    process.exitCode = 1;
-    return;
-  }
-  const projectPath = getArgValue2(args, "--project");
-  if (projectPath === undefined) {
-    console.error("--project is required for queue create");
-    process.exitCode = 1;
-    return;
-  }
-  const queue = await createQueue(name, projectPath);
-  console.log(`Queue created: ${queue.name} (${queue.id})`);
-}
-async function handleQueueAdd2(args) {
-  const name = args[0];
-  if (name === undefined) {
-    console.error("Usage: codex-agent queue add <name> --prompt <prompt> [--image <path>]...");
-    process.exitCode = 1;
-    return;
-  }
-  const prompt = getArgValue2(args, "--prompt");
-  if (prompt === undefined) {
-    console.error("--prompt is required for queue add");
-    process.exitCode = 1;
-    return;
-  }
-  const images = getArgValues(args, "--image");
-  const queue = await findQueue(name);
-  if (queue === null) {
-    console.error(`Queue not found: ${name}`);
-    process.exitCode = 1;
-    return;
-  }
-  const queuePrompt = await addPrompt(queue.id, prompt, images.length > 0 ? images : undefined);
-  console.log(`Prompt added to queue ${queue.name}: ${queuePrompt.id.slice(0, 8)}`);
-}
-async function handleQueueShow2(args) {
-  const name = args[0];
-  if (name === undefined) {
-    console.error("Usage: codex-agent queue show <name>");
-    process.exitCode = 1;
-    return;
-  }
-  const queue = await findQueue(name);
-  if (queue === null) {
-    console.error(`Queue not found: ${name}`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(JSON.stringify(queue, null, 2));
-}
-async function handleQueueList(args) {
-  const format = getArgValue2(args, "--format") ?? "table";
-  const queues = await listQueues();
-  if (queues.length === 0) {
-    console.log("No queues found.");
-    return;
-  }
-  if (format === "json") {
-    console.log(JSON.stringify(queues, null, 2));
-    return;
-  }
-  const rows = queues.map((q) => ({
-    id: q.id.slice(0, 8),
-    name: q.name,
-    project: q.projectPath.length > 40 ? "..." + q.projectPath.slice(-37) : q.projectPath,
-    prompts: String(q.prompts.length),
-    pending: String(q.prompts.filter((p) => p.status === "pending").length),
-    created: q.createdAt.toISOString().slice(0, 19).replace("T", " ")
-  }));
-  const headers = {
-    id: "ID",
-    name: "NAME",
-    project: "PROJECT",
-    prompts: "PROMPTS",
-    pending: "PENDING",
-    created: "CREATED"
-  };
-  const cols = Object.keys(headers);
-  const widths = Object.fromEntries(cols.map((col) => [
-    col,
-    Math.max(headers[col].length, ...rows.map((r) => r[col].length), 0)
-  ]));
-  const headerLine = cols.map((c) => headers[c].padEnd(widths[c] ?? 0)).join("  ");
-  const separator = cols.map((c) => "-".repeat(widths[c] ?? 0)).join("  ");
-  const dataLines = rows.map((row) => cols.map((c) => row[c].padEnd(widths[c] ?? 0)).join("  "));
-  console.log([headerLine, separator, ...dataLines].join(`
-`));
-}
-async function handleQueuePause2(args) {
-  const name = args[0];
-  if (name === undefined) {
-    console.error("Usage: codex-agent queue pause <name>");
-    process.exitCode = 1;
-    return;
-  }
-  const queue = await findQueue(name);
-  if (queue === null) {
-    console.error(`Queue not found: ${name}`);
-    process.exitCode = 1;
-    return;
-  }
-  await pauseQueue(queue.id);
-  console.log(`Paused queue ${queue.name}`);
-}
-async function handleQueueResume2(args) {
-  const name = args[0];
-  if (name === undefined) {
-    console.error("Usage: codex-agent queue resume <name>");
-    process.exitCode = 1;
-    return;
-  }
-  const queue = await findQueue(name);
-  if (queue === null) {
-    console.error(`Queue not found: ${name}`);
-    process.exitCode = 1;
-    return;
-  }
-  await resumeQueue(queue.id);
-  console.log(`Resumed queue ${queue.name}`);
-}
-async function handleQueueDelete2(args) {
-  const name = args[0];
-  if (name === undefined) {
-    console.error("Usage: codex-agent queue delete <name>");
-    process.exitCode = 1;
-    return;
-  }
-  const queue = await findQueue(name);
-  if (queue === null) {
-    console.error(`Queue not found: ${name}`);
-    process.exitCode = 1;
-    return;
-  }
-  await removeQueue(queue.id);
-  console.log(`Deleted queue ${queue.name}`);
-}
-async function handleQueueUpdate2(args) {
-  const name = args[0];
-  const commandId = args[1];
-  if (name === undefined || commandId === undefined) {
-    console.error("Usage: codex-agent queue update <name> <command-id> [--prompt <text>] [--status <status>]");
-    process.exitCode = 1;
-    return;
-  }
-  const queue = await findQueue(name);
-  if (queue === null) {
-    console.error(`Queue not found: ${name}`);
-    process.exitCode = 1;
-    return;
-  }
-  const prompt = getArgValue2(args, "--prompt");
-  const statusRaw = getArgValue2(args, "--status");
-  const status = statusRaw === "pending" || statusRaw === "running" || statusRaw === "completed" || statusRaw === "failed" ? statusRaw : undefined;
-  const ok = await updateQueueCommand(queue.id, commandId, { prompt, status });
-  if (!ok) {
-    console.error(`Queue command not found: ${commandId}`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(`Updated command ${commandId} in queue ${queue.name}`);
-}
-async function handleQueueRemoveCommand(args) {
-  const name = args[0];
-  const commandId = args[1];
-  if (name === undefined || commandId === undefined) {
-    console.error("Usage: codex-agent queue remove <name> <command-id>");
-    process.exitCode = 1;
-    return;
-  }
-  const queue = await findQueue(name);
-  if (queue === null) {
-    console.error(`Queue not found: ${name}`);
-    process.exitCode = 1;
-    return;
-  }
-  const ok = await removeQueueCommand(queue.id, commandId);
-  if (!ok) {
-    console.error(`Queue command not found: ${commandId}`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(`Removed command ${commandId} from queue ${queue.name}`);
-}
-async function handleQueueMove2(args) {
-  const name = args[0];
-  if (name === undefined) {
-    console.error("Usage: codex-agent queue move <name> --from <n> --to <n>");
-    process.exitCode = 1;
-    return;
-  }
-  const queue = await findQueue(name);
-  if (queue === null) {
-    console.error(`Queue not found: ${name}`);
-    process.exitCode = 1;
-    return;
-  }
-  const fromStr = getArgValue2(args, "--from");
-  const toStr = getArgValue2(args, "--to");
-  const from = fromStr !== undefined ? parseInt(fromStr, 10) : NaN;
-  const to = toStr !== undefined ? parseInt(toStr, 10) : NaN;
-  if (!Number.isFinite(from) || !Number.isFinite(to)) {
-    console.error("Usage: codex-agent queue move <name> --from <n> --to <n>");
-    process.exitCode = 1;
-    return;
-  }
-  const ok = await moveQueueCommand(queue.id, from, to);
-  if (!ok) {
-    console.error("Failed to move queue command. Check indices.");
-    process.exitCode = 1;
-    return;
-  }
-  console.log(`Moved command in queue ${queue.name}: ${from} -> ${to}`);
-}
-async function handleQueueMode2(args) {
-  const name = args[0];
-  const commandId = args[1];
-  const modeRaw = getArgValue2(args, "--mode");
-  if (name === undefined || commandId === undefined || modeRaw !== "auto" && modeRaw !== "manual") {
-    console.error("Usage: codex-agent queue mode <name> <command-id> --mode <auto|manual>");
-    process.exitCode = 1;
-    return;
-  }
-  const queue = await findQueue(name);
-  if (queue === null) {
-    console.error(`Queue not found: ${name}`);
-    process.exitCode = 1;
-    return;
-  }
-  const ok = await toggleQueueCommandMode(queue.id, commandId, modeRaw);
-  if (!ok) {
-    console.error(`Queue command not found: ${commandId}`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(`Set mode ${modeRaw} for command ${commandId} in queue ${queue.name}`);
-}
-async function handleQueueRun2(args) {
-  const name = args[0];
-  if (name === undefined) {
-    console.error("Usage: codex-agent queue run <name>");
-    process.exitCode = 1;
-    return;
-  }
-  const queue = await findQueue(name);
-  if (queue === null) {
-    console.error(`Queue not found: ${name}`);
-    process.exitCode = 1;
-    return;
-  }
-  const pendingCount = queue.prompts.filter((p) => p.status === "pending").length;
-  console.log(`Running queue "${queue.name}" (${pendingCount} pending prompts)...`);
-  const opts = parseProcessOptions(args.slice(1));
-  const stopSignal = { stopped: false };
-  const handler = () => {
-    console.log(`
-Stopping after current prompt...`);
-    stopSignal.stopped = true;
-  };
-  process.on("SIGINT", handler);
-  for await (const event of runQueue(queue, opts, stopSignal)) {
-    switch (event.type) {
-      case "prompt_started":
-        console.log(`  [started]   ${event.promptId?.slice(0, 8)}`);
-        break;
-      case "prompt_completed":
-        console.log(`  [completed] ${event.promptId?.slice(0, 8)} (exit: ${event.exitCode})`);
-        break;
-      case "prompt_failed":
-        console.log(`  [failed]    ${event.promptId?.slice(0, 8)} (exit: ${event.exitCode})`);
-        break;
-      case "queue_completed":
-        console.log(`
-Queue complete: ${event.completed.length} completed, ${event.failed.length} failed`);
-        break;
-      case "queue_stopped":
-        console.log(`
-Queue stopped: ${event.completed.length} completed, ${event.pending.length} remaining`);
-        break;
+
+// src/cli/graphql.ts
+import { access, readFile as readFile7 } from "fs/promises";
+import { constants as fsConstants } from "fs";
+async function runGraphqlCli(args, options) {
+  const parsed = await parseGraphqlCliArgs(args);
+  const result = await executeGraphqlOperation({
+    document: parsed.document,
+    variables: parsed.variables,
+    context: {
+      codexHome: options?.codexHome,
+      configDir: options?.configDir
     }
-  }
-  process.removeListener("SIGINT", handler);
-}
-function parseListArgs(args) {
-  const result = { limit: 50, format: "table" };
-  for (let i = 0;i < args.length; i++) {
-    const arg = args[i];
-    const next = args[i + 1];
-    switch (arg) {
-      case "--source":
-        if (next !== undefined && isSessionSource(next)) {
-          result.source = next;
-          i++;
-        }
-        break;
-      case "--cwd":
-        if (next !== undefined) {
-          result.cwd = next;
-          i++;
-        }
-        break;
-      case "--branch":
-        if (next !== undefined) {
-          result.branch = next;
-          i++;
-        }
-        break;
-      case "--limit":
-        if (next !== undefined) {
-          result.limit = parseInt(next, 10) || 50;
-          i++;
-        }
-        break;
-      case "--format":
-        if (next === "json" || next === "table") {
-          result.format = next;
-          i++;
-        }
-        break;
+  });
+  if (isAsyncIterable3(result)) {
+    for await (const event of result) {
+      console.log(JSON.stringify(event, null, 2));
+      if (Array.isArray(event.errors) && event.errors.length > 0) {
+        process.exitCode = 1;
+      }
     }
+    return;
   }
-  return result;
+  console.log(JSON.stringify(result, null, 2));
+  if (Array.isArray(result.errors) && result.errors.length > 0) {
+    process.exitCode = 1;
+  }
 }
-function isSessionSource(s) {
-  return s === "cli" || s === "vscode" || s === "exec" || s === "unknown";
+async function parseGraphqlCliArgs(args) {
+  const documentArg = args[0];
+  if (documentArg === undefined || documentArg.trim().length === 0) {
+    throw new Error("Usage: codex-agent graphql <query|command> [--param <json|path>] [--variables <json|path>]");
+  }
+  const variables = await readVariables(args);
+  return {
+    document: normalizeGraphqlDocument(documentArg),
+    ...variables === undefined ? {} : { variables }
+  };
+}
+function normalizeGraphqlDocument(input) {
+  const trimmed = input.trim();
+  if (trimmed.startsWith("query") || trimmed.startsWith("mutation") || trimmed.startsWith("subscription") || trimmed.startsWith("{") || trimmed.startsWith("#")) {
+    return trimmed;
+  }
+  const operation = shorthandOperation(trimmed);
+  return `${operation} ($param: JSON) { command(name: ${JSON.stringify(trimmed)}, params: $param) }`;
+}
+async function readVariables(args) {
+  const variablesRaw = getArgValue2(args, "--variables");
+  const paramRaw = getArgValue2(args, "--param") ?? getArgValue2(args, "--arg");
+  let variables;
+  if (variablesRaw !== undefined) {
+    const parsed = await parseJsonSource(variablesRaw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("--variables must be a JSON object");
+    }
+    variables = parsed;
+  }
+  if (paramRaw === undefined) {
+    return variables;
+  }
+  const param = await parseJsonSource(paramRaw);
+  return {
+    ...variables ?? {},
+    param
+  };
+}
+async function parseJsonSource(raw) {
+  const path = raw.startsWith("@") ? raw.slice(1) : raw;
+  const source = await isReadableFile(path) ? await readFile7(path, "utf-8") : raw;
+  try {
+    return JSON.parse(source);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid JSON input: ${message}`);
+  }
+}
+async function isReadableFile(path) {
+  try {
+    await access(path, fsConstants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function getArgValue2(args, flag) {
   const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length)
+  if (idx === -1 || idx + 1 >= args.length) {
     return;
+  }
   return args[idx + 1];
 }
-function getArgValues(args, flag) {
-  const values = [];
-  for (let i = 0;i < args.length; i++) {
-    if (args[i] === flag) {
-      const value = args[i + 1];
-      if (value !== undefined) {
-        values.push(value);
-      }
-    }
+function shorthandOperation(command) {
+  if (command === "session.watch") {
+    return "subscription";
   }
-  return values;
+  if (MUTATION_COMMANDS.has(command)) {
+    return "mutation";
+  }
+  return "query";
 }
-function parseProcessOptions(args) {
-  const opts = {};
-  const model = getArgValue2(args, "--model");
-  if (model !== undefined)
-    opts.model = model;
-  const sandbox = readAllowedArg(args, "--sandbox", SANDBOX_MODES);
-  if (sandbox !== undefined)
-    opts.sandbox = sandbox;
-  const approvalMode = readAllowedArg(args, "--approval-mode", APPROVAL_MODES);
-  if (approvalMode !== undefined)
-    opts.approvalMode = approvalMode;
-  if (args.includes("--full-auto")) {
-    opts.fullAuto = true;
-  }
-  const images = getArgValues(args, "--image");
-  if (images.length > 0) {
-    opts.images = images;
-  }
-  const streamGranularity = readAllowedArg(args, "--stream-granularity", STREAM_GRANULARITIES);
-  if (streamGranularity !== undefined) {
-    opts.streamGranularity = streamGranularity;
-  }
-  return opts;
+function isAsyncIterable3(value) {
+  return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
 }
-function readAllowedArg(args, flag, allowedValues) {
-  const value = getArgValue2(args, flag);
-  if (value === undefined) {
+var MUTATION_COMMANDS = new Set([
+  "session.run",
+  "session.resume",
+  "session.fork",
+  "group.create",
+  "group.add",
+  "group.remove",
+  "group.pause",
+  "group.resume",
+  "group.delete",
+  "group.run",
+  "queue.create",
+  "queue.add",
+  "queue.pause",
+  "queue.resume",
+  "queue.delete",
+  "queue.update",
+  "queue.remove",
+  "queue.move",
+  "queue.mode",
+  "queue.run",
+  "bookmark.add",
+  "bookmark.delete",
+  "token.create",
+  "token.revoke",
+  "token.rotate",
+  "files.rebuild"
+]);
+
+// src/cli/version-model.ts
+async function handleVersion(args) {
+  const { asJson, includeGit } = parseVersionArgs(args);
+  const versions = await getToolVersions({ includeGit });
+  if (asJson) {
+    console.log(JSON.stringify(versions, null, 2));
     return;
   }
-  return allowedValues.includes(value) ? value : undefined;
-}
-function parseCharDelayMs(args) {
-  const raw = getArgValue2(args, "--char-delay-ms");
-  if (raw === undefined) {
-    return 8;
+  printToolVersion("codex", versions.codex);
+  if (versions.git !== undefined) {
+    printToolVersion("git", versions.git);
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return 8;
+}
+function parseVersionArgs(args) {
+  return {
+    asJson: args.includes("--json"),
+    includeGit: args.includes("--include-git")
+  };
+}
+function printToolVersion(name, info) {
+  if (info.error === null) {
+    console.log(`${name}: ${info.version}`);
+    return;
+  }
+  console.log(`${name}: unavailable (${info.error})`);
+}
+async function handleModel(action, args) {
+  if (action !== "check") {
+    console.error(`Unknown model action: ${action ?? "(none)"}`);
+    console.log(USAGE);
+    process.exitCode = 1;
+    return;
+  }
+  const parsed = parseModelCheckArgs(args);
+  if (parsed.model === undefined || parsed.model.trim().length === 0) {
+    console.error("Usage: codex-agent model check --model <model> [--json] [--timeout-ms <ms>]");
+    process.exitCode = 1;
+    return;
+  }
+  const result = await checkCodexModelAvailability({
+    model: parsed.model,
+    ...parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}
+  });
+  if (parsed.asJson) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`Overall: ${result.ok ? "available" : "unavailable"}`);
+    console.log(`Auth:    ${result.auth.ok ? "available" : "unavailable"}${result.auth.status !== null ? ` (${result.auth.status})` : ""}`);
+    console.log(`Model:   ${result.model}`);
+    console.log(`Probe:   ${result.probe.ok ? "available" : "unavailable"}${result.probe.error !== null ? ` (${result.probe.error})` : ""}`);
+  }
+  if (!result.ok) {
+    process.exitCode = 1;
+  }
+}
+function parseModelCheckArgs(args) {
+  const timeoutRaw = getArgValue(args, "--timeout-ms");
+  const timeoutMs = timeoutRaw !== undefined ? Number.parseInt(timeoutRaw, 10) : undefined;
+  const parsed = {
+    asJson: args.includes("--json")
+  };
+  const model = getArgValue(args, "--model");
+  if (model !== undefined) {
+    parsed.model = model;
+  }
+  if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    parsed.timeoutMs = timeoutMs;
   }
   return parsed;
 }
-function isCharChunk2(chunk) {
-  if (typeof chunk !== "object" || chunk === null) {
-    return false;
-  }
-  const record = chunk;
-  return record["kind"] === "char" && typeof record["char"] === "string";
-}
-function sleep2(ms) {
-  return new Promise((resolve3) => {
-    setTimeout(resolve3, ms);
-  });
-}
-function renderMarkdownTasks(lines) {
-  const tasks = [];
-  for (const line of lines) {
-    if (line.type === "event_msg") {
-      const payload = line.payload;
-      const eventType = payload["type"];
-      const message = payload["message"];
-      if ((eventType === "UserMessage" || eventType === "AgentMessage") && typeof message === "string") {
-        tasks.push(...extractMarkdownTasks(message));
-      }
-      continue;
-    }
-    if (line.type === "response_item") {
-      const payload = line.payload;
-      if (payload["type"] !== "message") {
-        continue;
-      }
-      const content = payload["content"];
-      if (!Array.isArray(content)) {
-        continue;
-      }
-      for (const item of content) {
-        if (typeof item !== "object" || item === null) {
-          continue;
-        }
-        const itemObj = item;
-        if ((itemObj["type"] === "input_text" || itemObj["type"] === "output_text") && typeof itemObj["text"] === "string") {
-          tasks.push(...extractMarkdownTasks(itemObj["text"]));
-        }
-      }
-    }
-  }
-  if (tasks.length === 0) {
-    console.log(`
-Markdown tasks: none`);
+
+// src/cli/index.ts
+async function run(argv) {
+  const args = argv.slice(2);
+  if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
+    console.log(USAGE);
     return;
   }
-  console.log(`
-Markdown tasks:`);
-  for (const task of tasks) {
-    const checkbox = task.checked ? "[x]" : "[ ]";
-    const sectionPrefix = task.sectionHeading.length > 0 ? `${task.sectionHeading}: ` : "";
-    console.log(`  ${checkbox} ${sectionPrefix}${task.text}`);
+  const subcommand = args[0];
+  const action = args[1];
+  const rest = args.slice(2);
+  switch (subcommand) {
+    case "session":
+      await handleSession(action, rest);
+      break;
+    case "group":
+      await handleGroup(action, rest);
+      break;
+    case "queue":
+      await handleQueue(action, rest);
+      break;
+    case "bookmark":
+      await handleBookmark(action, rest);
+      break;
+    case "token":
+      await handleToken(action, rest);
+      break;
+    case "files":
+      await handleFiles(action, rest);
+      break;
+    case "model":
+      await handleModel(action, rest);
+      break;
+    case "version":
+      await handleVersion(args.slice(1));
+      break;
+    case "graphql":
+      await runGraphqlCli(args.slice(1));
+      break;
+    default:
+      console.error(`Unknown command: ${subcommand}`);
+      console.log(USAGE);
+      process.exitCode = 1;
   }
 }
 export {

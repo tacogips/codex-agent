@@ -284,13 +284,13 @@ function buildExecArgs(
   prompt: string,
   options?: CodexProcessOptions,
 ): string[] {
-  const args = ["exec", "--json", prompt];
+  const args = ["exec", "--json", ...buildCommonArgs(options)];
   if (options?.images !== undefined) {
     for (const imagePath of options.images) {
       args.push("--image", imagePath);
     }
   }
-  args.push(...buildCommonArgs(options));
+  args.push(prompt);
   return args;
 }
 
@@ -299,11 +299,16 @@ function buildResumeArgs(
   options?: CodexProcessOptions,
   prompt?: string,
 ): string[] {
-  const args = ["exec", "resume", "--json", sessionId];
+  const args = ["exec", "resume", "--json", ...buildCommonArgs(options)];
+  if (options?.images !== undefined) {
+    for (const imagePath of options.images) {
+      args.push("--image", imagePath);
+    }
+  }
+  args.push(sessionId);
   if (prompt !== undefined && prompt.trim().length > 0) {
     args.push(prompt);
   }
-  args.push(...buildCommonArgs(options));
   return args;
 }
 
