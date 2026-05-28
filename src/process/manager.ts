@@ -290,7 +290,7 @@ function buildExecArgs(
       args.push("--image", imagePath);
     }
   }
-  args.push(prompt);
+  args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
   return args;
 }
 
@@ -307,9 +307,19 @@ function buildResumeArgs(
   }
   args.push(sessionId);
   if (prompt !== undefined && prompt.trim().length > 0) {
-    args.push(prompt);
+    args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
   }
   return args;
+}
+
+function buildPromptWithSystemPrompt(
+  prompt: string,
+  systemPrompt: string | undefined,
+): string {
+  if (systemPrompt === undefined || systemPrompt.trim().length === 0) {
+    return prompt;
+  }
+  return `${systemPrompt}\n\n${prompt}`;
 }
 
 function buildCommonArgs(options?: CodexProcessOptions): string[] {

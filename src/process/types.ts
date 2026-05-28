@@ -21,6 +21,7 @@ export type StreamGranularity = (typeof STREAM_GRANULARITIES)[number];
 export type CodexEnvironmentVariables = Readonly<Record<string, string>>;
 
 export interface CodexProcessOptions {
+  readonly systemPrompt?: string | undefined;
   readonly model?: string | undefined;
   readonly cwd?: string | undefined;
   readonly sandbox?: SandboxMode | undefined;

@@ -23,6 +23,7 @@ export interface SessionRunnerOptions {
 
 export interface SessionConfig {
   readonly prompt: string;
+  readonly systemPrompt?: string | undefined;
   readonly resumeSessionId?: string | undefined;
   readonly cwd?: string | undefined;
   readonly sandbox?: SandboxMode | undefined;
@@ -219,6 +220,7 @@ export class SessionRunner {
       return await this.resumeSession(config.resumeSessionId, config.prompt, {
         cwd: config.cwd,
         model: config.model,
+        systemPrompt: config.systemPrompt,
         sandbox: config.sandbox,
         approvalMode: config.approvalMode,
         fullAuto: config.fullAuto,
@@ -381,6 +383,7 @@ export class SessionRunner {
     return {
       codexBinary: this.options.codexBinary,
       cwd: config.cwd,
+      systemPrompt: config.systemPrompt,
       model: config.model,
       sandbox: config.sandbox,
       approvalMode: config.approvalMode,

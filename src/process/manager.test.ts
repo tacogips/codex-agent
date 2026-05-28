@@ -180,6 +180,39 @@ describe("ProcessManager", () => {
     }
   });
 
+  test("spawnExec prefixes prompt with system prompt when provided", async () => {
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-process-manager-system-prompt-"),
+    );
+    try {
+      const argsLogPath = join(fixtureDir, "args.log");
+      const fakeCodexPath = join(fixtureDir, "fake-codex-system-prompt.sh");
+      await writeFile(
+        fakeCodexPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -eu",
+          `printf '%s\\n' "$@" > '${argsLogPath}'`,
+          "exit 0",
+        ].join("\n"),
+        "utf-8",
+      );
+      await chmod(fakeCodexPath, 0o755);
+
+      const pm = new ProcessManager(fakeCodexPath);
+      const result = await pm.spawnExec("user prompt", {
+        codexBinary: fakeCodexPath,
+        systemPrompt: "system prompt",
+      });
+
+      expect(result.exitCode).toBe(0);
+      const argsLog = await readFile(argsLogPath, "utf-8");
+      expect(argsLog).toContain("system prompt\n\nuser prompt\n");
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
   test("spawnResumeStream places resume options before session and prompt arguments", async () => {
     const fixtureDir = await mkdtemp(
       join(tmpdir(), "codex-agent-process-manager-resume-args-"),

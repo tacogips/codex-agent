@@ -1702,7 +1702,7 @@ function buildExecArgs(prompt, options) {
       args.push("--image", imagePath);
     }
   }
-  args.push(prompt);
+  args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
   return args;
 }
 function buildResumeArgs(sessionId, options, prompt) {
@@ -1714,9 +1714,17 @@ function buildResumeArgs(sessionId, options, prompt) {
   }
   args.push(sessionId);
   if (prompt !== undefined && prompt.trim().length > 0) {
-    args.push(prompt);
+    args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
   }
   return args;
+}
+function buildPromptWithSystemPrompt(prompt, systemPrompt) {
+  if (systemPrompt === undefined || systemPrompt.trim().length === 0) {
+    return prompt;
+  }
+  return `${systemPrompt}
+
+${prompt}`;
 }
 function buildCommonArgs(options) {
   const args = [];
@@ -11784,6 +11792,7 @@ class SessionRunner {
       return await this.resumeSession(config.resumeSessionId, config.prompt, {
         cwd: config.cwd,
         model: config.model,
+        systemPrompt: config.systemPrompt,
         sandbox: config.sandbox,
         approvalMode: config.approvalMode,
         fullAuto: config.fullAuto,
@@ -11892,6 +11901,7 @@ class SessionRunner {
     return {
       codexBinary: this.options.codexBinary,
       cwd: config.cwd,
+      systemPrompt: config.systemPrompt,
       model: config.model,
       sandbox: config.sandbox,
       approvalMode: config.approvalMode,
