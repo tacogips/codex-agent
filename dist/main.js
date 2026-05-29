@@ -1702,6 +1702,9 @@ function buildExecArgs(prompt, options) {
       args.push("--image", imagePath);
     }
   }
+  if (options?.images !== undefined && options.images.length > 0) {
+    args.push("--");
+  }
   args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
   return args;
 }
@@ -1711,6 +1714,9 @@ function buildResumeArgs(sessionId, options, prompt) {
     for (const imagePath of options.images) {
       args.push("--image", imagePath);
     }
+  }
+  if (options?.images !== undefined && options.images.length > 0) {
+    args.push("--");
   }
   args.push(sessionId);
   if (prompt !== undefined && prompt.trim().length > 0) {
@@ -3363,462 +3369,14 @@ function devAssert(condition, message) {
   }
 }
 
-// node_modules/graphql/jsutils/inspect.mjs
-var MAX_ARRAY_LENGTH = 10;
-var MAX_RECURSIVE_DEPTH = 2;
-function inspect(value) {
-  return formatValue(value, []);
+// node_modules/graphql/jsutils/isPromise.mjs
+function isPromise(value) {
+  return typeof (value === null || value === undefined ? undefined : value.then) === "function";
 }
-function formatValue(value, seenValues) {
-  switch (typeof value) {
-    case "string":
-      return JSON.stringify(value);
-    case "function":
-      return value.name ? `[function ${value.name}]` : "[function]";
-    case "object":
-      return formatObjectValue(value, seenValues);
-    default:
-      return String(value);
-  }
-}
-function formatObjectValue(value, previouslySeenValues) {
-  if (value === null) {
-    return "null";
-  }
-  if (previouslySeenValues.includes(value)) {
-    return "[Circular]";
-  }
-  const seenValues = [...previouslySeenValues, value];
-  if (isJSONable(value)) {
-    const jsonValue = value.toJSON();
-    if (jsonValue !== value) {
-      return typeof jsonValue === "string" ? jsonValue : formatValue(jsonValue, seenValues);
-    }
-  } else if (Array.isArray(value)) {
-    return formatArray(value, seenValues);
-  }
-  return formatObject(value, seenValues);
-}
-function isJSONable(value) {
-  return typeof value.toJSON === "function";
-}
-function formatObject(object, seenValues) {
-  const entries = Object.entries(object);
-  if (entries.length === 0) {
-    return "{}";
-  }
-  if (seenValues.length > MAX_RECURSIVE_DEPTH) {
-    return "[" + getObjectTag(object) + "]";
-  }
-  const properties = entries.map(([key, value]) => key + ": " + formatValue(value, seenValues));
-  return "{ " + properties.join(", ") + " }";
-}
-function formatArray(array, seenValues) {
-  if (array.length === 0) {
-    return "[]";
-  }
-  if (seenValues.length > MAX_RECURSIVE_DEPTH) {
-    return "[Array]";
-  }
-  const len = Math.min(MAX_ARRAY_LENGTH, array.length);
-  const remaining = array.length - len;
-  const items = [];
-  for (let i = 0;i < len; ++i) {
-    items.push(formatValue(array[i], seenValues));
-  }
-  if (remaining === 1) {
-    items.push("... 1 more item");
-  } else if (remaining > 1) {
-    items.push(`... ${remaining} more items`);
-  }
-  return "[" + items.join(", ") + "]";
-}
-function getObjectTag(object) {
-  const tag = Object.prototype.toString.call(object).replace(/^\[object /, "").replace(/]$/, "");
-  if (tag === "Object" && typeof object.constructor === "function") {
-    const name = object.constructor.name;
-    if (typeof name === "string" && name !== "") {
-      return name;
-    }
-  }
-  return tag;
-}
-
-// node_modules/graphql/jsutils/instanceOf.mjs
-var isProduction = globalThis.process && false;
-var instanceOf = isProduction ? function instanceOf2(value, constructor) {
-  return value instanceof constructor;
-} : function instanceOf3(value, constructor) {
-  if (value instanceof constructor) {
-    return true;
-  }
-  if (typeof value === "object" && value !== null) {
-    var _value$constructor;
-    const className = constructor.prototype[Symbol.toStringTag];
-    const valueClassName = Symbol.toStringTag in value ? value[Symbol.toStringTag] : (_value$constructor = value.constructor) === null || _value$constructor === undefined ? undefined : _value$constructor.name;
-    if (className === valueClassName) {
-      const stringifiedValue = inspect(value);
-      throw new Error(`Cannot use ${className} "${stringifiedValue}" from another module or realm.
-
-Ensure that there is only one instance of "graphql" in the node_modules
-directory. If different versions of "graphql" are the dependencies of other
-relied on modules, use "resolutions" to ensure only one version is installed.
-
-https://yarnpkg.com/en/docs/selective-version-resolutions
-
-Duplicate "graphql" modules cannot be used at the same time since different
-versions may have different capabilities and behavior. The data from one
-version used in the function from another could produce confusing and
-spurious results.`);
-    }
-  }
-  return false;
-};
 
 // node_modules/graphql/jsutils/isObjectLike.mjs
 function isObjectLike(value) {
   return typeof value == "object" && value !== null;
-}
-
-// node_modules/graphql/jsutils/toObjMap.mjs
-function toObjMap(obj) {
-  if (obj == null) {
-    return Object.create(null);
-  }
-  if (Object.getPrototypeOf(obj) === null) {
-    return obj;
-  }
-  const map = Object.create(null);
-  for (const [key, value] of Object.entries(obj)) {
-    map[key] = value;
-  }
-  return map;
-}
-
-// node_modules/graphql/language/ast.mjs
-class Location {
-  constructor(startToken, endToken, source) {
-    this.start = startToken.start;
-    this.end = endToken.end;
-    this.startToken = startToken;
-    this.endToken = endToken;
-    this.source = source;
-  }
-  get [Symbol.toStringTag]() {
-    return "Location";
-  }
-  toJSON() {
-    return {
-      start: this.start,
-      end: this.end
-    };
-  }
-}
-
-class Token {
-  constructor(kind, start, end, line, column, value) {
-    this.kind = kind;
-    this.start = start;
-    this.end = end;
-    this.line = line;
-    this.column = column;
-    this.value = value;
-    this.prev = null;
-    this.next = null;
-  }
-  get [Symbol.toStringTag]() {
-    return "Token";
-  }
-  toJSON() {
-    return {
-      kind: this.kind,
-      value: this.value,
-      line: this.line,
-      column: this.column
-    };
-  }
-}
-var QueryDocumentKeys = {
-  Name: [],
-  Document: ["definitions"],
-  OperationDefinition: [
-    "description",
-    "name",
-    "variableDefinitions",
-    "directives",
-    "selectionSet"
-  ],
-  VariableDefinition: [
-    "description",
-    "variable",
-    "type",
-    "defaultValue",
-    "directives"
-  ],
-  Variable: ["name"],
-  SelectionSet: ["selections"],
-  Field: ["alias", "name", "arguments", "directives", "selectionSet"],
-  Argument: ["name", "value"],
-  FragmentSpread: ["name", "directives"],
-  InlineFragment: ["typeCondition", "directives", "selectionSet"],
-  FragmentDefinition: [
-    "description",
-    "name",
-    "variableDefinitions",
-    "typeCondition",
-    "directives",
-    "selectionSet"
-  ],
-  IntValue: [],
-  FloatValue: [],
-  StringValue: [],
-  BooleanValue: [],
-  NullValue: [],
-  EnumValue: [],
-  ListValue: ["values"],
-  ObjectValue: ["fields"],
-  ObjectField: ["name", "value"],
-  Directive: ["name", "arguments"],
-  NamedType: ["name"],
-  ListType: ["type"],
-  NonNullType: ["type"],
-  SchemaDefinition: ["description", "directives", "operationTypes"],
-  OperationTypeDefinition: ["type"],
-  ScalarTypeDefinition: ["description", "name", "directives"],
-  ObjectTypeDefinition: [
-    "description",
-    "name",
-    "interfaces",
-    "directives",
-    "fields"
-  ],
-  FieldDefinition: ["description", "name", "arguments", "type", "directives"],
-  InputValueDefinition: [
-    "description",
-    "name",
-    "type",
-    "defaultValue",
-    "directives"
-  ],
-  InterfaceTypeDefinition: [
-    "description",
-    "name",
-    "interfaces",
-    "directives",
-    "fields"
-  ],
-  UnionTypeDefinition: ["description", "name", "directives", "types"],
-  EnumTypeDefinition: ["description", "name", "directives", "values"],
-  EnumValueDefinition: ["description", "name", "directives"],
-  InputObjectTypeDefinition: ["description", "name", "directives", "fields"],
-  DirectiveDefinition: ["description", "name", "arguments", "locations"],
-  SchemaExtension: ["directives", "operationTypes"],
-  ScalarTypeExtension: ["name", "directives"],
-  ObjectTypeExtension: ["name", "interfaces", "directives", "fields"],
-  InterfaceTypeExtension: ["name", "interfaces", "directives", "fields"],
-  UnionTypeExtension: ["name", "directives", "types"],
-  EnumTypeExtension: ["name", "directives", "values"],
-  InputObjectTypeExtension: ["name", "directives", "fields"],
-  TypeCoordinate: ["name"],
-  MemberCoordinate: ["name", "memberName"],
-  ArgumentCoordinate: ["name", "fieldName", "argumentName"],
-  DirectiveCoordinate: ["name"],
-  DirectiveArgumentCoordinate: ["name", "argumentName"]
-};
-var kindValues = new Set(Object.keys(QueryDocumentKeys));
-function isNode(maybeNode) {
-  const maybeKind = maybeNode === null || maybeNode === undefined ? undefined : maybeNode.kind;
-  return typeof maybeKind === "string" && kindValues.has(maybeKind);
-}
-var OperationTypeNode;
-(function(OperationTypeNode2) {
-  OperationTypeNode2["QUERY"] = "query";
-  OperationTypeNode2["MUTATION"] = "mutation";
-  OperationTypeNode2["SUBSCRIPTION"] = "subscription";
-})(OperationTypeNode || (OperationTypeNode = {}));
-
-// node_modules/graphql/jsutils/didYouMean.mjs
-var MAX_SUGGESTIONS = 5;
-function didYouMean(firstArg, secondArg) {
-  const [subMessage, suggestionsArg] = secondArg ? [firstArg, secondArg] : [undefined, firstArg];
-  let message = " Did you mean ";
-  if (subMessage) {
-    message += subMessage + " ";
-  }
-  const suggestions = suggestionsArg.map((x) => `"${x}"`);
-  switch (suggestions.length) {
-    case 0:
-      return "";
-    case 1:
-      return message + suggestions[0] + "?";
-    case 2:
-      return message + suggestions[0] + " or " + suggestions[1] + "?";
-  }
-  const selected = suggestions.slice(0, MAX_SUGGESTIONS);
-  const lastItem = selected.pop();
-  return message + selected.join(", ") + ", or " + lastItem + "?";
-}
-
-// node_modules/graphql/jsutils/identityFunc.mjs
-function identityFunc(x) {
-  return x;
-}
-
-// node_modules/graphql/jsutils/keyMap.mjs
-function keyMap(list, keyFn) {
-  const result = Object.create(null);
-  for (const item of list) {
-    result[keyFn(item)] = item;
-  }
-  return result;
-}
-
-// node_modules/graphql/jsutils/keyValMap.mjs
-function keyValMap(list, keyFn, valFn) {
-  const result = Object.create(null);
-  for (const item of list) {
-    result[keyFn(item)] = valFn(item);
-  }
-  return result;
-}
-
-// node_modules/graphql/jsutils/mapValue.mjs
-function mapValue(map, fn) {
-  const result = Object.create(null);
-  for (const key of Object.keys(map)) {
-    result[key] = fn(map[key], key);
-  }
-  return result;
-}
-
-// node_modules/graphql/jsutils/naturalCompare.mjs
-function naturalCompare(aStr, bStr) {
-  let aIndex = 0;
-  let bIndex = 0;
-  while (aIndex < aStr.length && bIndex < bStr.length) {
-    let aChar = aStr.charCodeAt(aIndex);
-    let bChar = bStr.charCodeAt(bIndex);
-    if (isDigit(aChar) && isDigit(bChar)) {
-      let aNum = 0;
-      do {
-        ++aIndex;
-        aNum = aNum * 10 + aChar - DIGIT_0;
-        aChar = aStr.charCodeAt(aIndex);
-      } while (isDigit(aChar) && aNum > 0);
-      let bNum = 0;
-      do {
-        ++bIndex;
-        bNum = bNum * 10 + bChar - DIGIT_0;
-        bChar = bStr.charCodeAt(bIndex);
-      } while (isDigit(bChar) && bNum > 0);
-      if (aNum < bNum) {
-        return -1;
-      }
-      if (aNum > bNum) {
-        return 1;
-      }
-    } else {
-      if (aChar < bChar) {
-        return -1;
-      }
-      if (aChar > bChar) {
-        return 1;
-      }
-      ++aIndex;
-      ++bIndex;
-    }
-  }
-  return aStr.length - bStr.length;
-}
-var DIGIT_0 = 48;
-var DIGIT_9 = 57;
-function isDigit(code) {
-  return !isNaN(code) && DIGIT_0 <= code && code <= DIGIT_9;
-}
-
-// node_modules/graphql/jsutils/suggestionList.mjs
-function suggestionList(input, options) {
-  const optionsByDistance = Object.create(null);
-  const lexicalDistance = new LexicalDistance(input);
-  const threshold = Math.floor(input.length * 0.4) + 1;
-  for (const option of options) {
-    const distance = lexicalDistance.measure(option, threshold);
-    if (distance !== undefined) {
-      optionsByDistance[option] = distance;
-    }
-  }
-  return Object.keys(optionsByDistance).sort((a, b) => {
-    const distanceDiff = optionsByDistance[a] - optionsByDistance[b];
-    return distanceDiff !== 0 ? distanceDiff : naturalCompare(a, b);
-  });
-}
-
-class LexicalDistance {
-  constructor(input) {
-    this._input = input;
-    this._inputLowerCase = input.toLowerCase();
-    this._inputArray = stringToArray(this._inputLowerCase);
-    this._rows = [
-      new Array(input.length + 1).fill(0),
-      new Array(input.length + 1).fill(0),
-      new Array(input.length + 1).fill(0)
-    ];
-  }
-  measure(option, threshold) {
-    if (this._input === option) {
-      return 0;
-    }
-    const optionLowerCase = option.toLowerCase();
-    if (this._inputLowerCase === optionLowerCase) {
-      return 1;
-    }
-    let a = stringToArray(optionLowerCase);
-    let b = this._inputArray;
-    if (a.length < b.length) {
-      const tmp = a;
-      a = b;
-      b = tmp;
-    }
-    const aLength = a.length;
-    const bLength = b.length;
-    if (aLength - bLength > threshold) {
-      return;
-    }
-    const rows = this._rows;
-    for (let j = 0;j <= bLength; j++) {
-      rows[0][j] = j;
-    }
-    for (let i = 1;i <= aLength; i++) {
-      const upRow = rows[(i - 1) % 3];
-      const currentRow = rows[i % 3];
-      let smallestCell = currentRow[0] = i;
-      for (let j = 1;j <= bLength; j++) {
-        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-        let currentCell = Math.min(upRow[j] + 1, currentRow[j - 1] + 1, upRow[j - 1] + cost);
-        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
-          const doubleDiagonalCell = rows[(i - 2) % 3][j - 2];
-          currentCell = Math.min(currentCell, doubleDiagonalCell + 1);
-        }
-        if (currentCell < smallestCell) {
-          smallestCell = currentCell;
-        }
-        currentRow[j] = currentCell;
-      }
-      if (smallestCell > threshold) {
-        return;
-      }
-    }
-    const distance = rows[aLength % 3][bLength];
-    return distance <= threshold ? distance : undefined;
-  }
-}
-function stringToArray(str) {
-  const strLength = str.length;
-  const array = new Array(strLength);
-  for (let i = 0;i < strLength; ++i) {
-    array[i] = str.charCodeAt(i);
-  }
-  return array;
 }
 
 // node_modules/graphql/jsutils/invariant.mjs
@@ -4002,6 +3560,180 @@ function undefinedIfEmpty(array) {
   return array === undefined || array.length === 0 ? undefined : array;
 }
 
+// node_modules/graphql/error/syntaxError.mjs
+function syntaxError(source, position, description) {
+  return new GraphQLError(`Syntax Error: ${description}`, {
+    source,
+    positions: [position]
+  });
+}
+
+// node_modules/graphql/language/ast.mjs
+class Location {
+  constructor(startToken, endToken, source) {
+    this.start = startToken.start;
+    this.end = endToken.end;
+    this.startToken = startToken;
+    this.endToken = endToken;
+    this.source = source;
+  }
+  get [Symbol.toStringTag]() {
+    return "Location";
+  }
+  toJSON() {
+    return {
+      start: this.start,
+      end: this.end
+    };
+  }
+}
+
+class Token {
+  constructor(kind, start, end, line, column, value) {
+    this.kind = kind;
+    this.start = start;
+    this.end = end;
+    this.line = line;
+    this.column = column;
+    this.value = value;
+    this.prev = null;
+    this.next = null;
+  }
+  get [Symbol.toStringTag]() {
+    return "Token";
+  }
+  toJSON() {
+    return {
+      kind: this.kind,
+      value: this.value,
+      line: this.line,
+      column: this.column
+    };
+  }
+}
+var QueryDocumentKeys = {
+  Name: [],
+  Document: ["definitions"],
+  OperationDefinition: [
+    "description",
+    "name",
+    "variableDefinitions",
+    "directives",
+    "selectionSet"
+  ],
+  VariableDefinition: [
+    "description",
+    "variable",
+    "type",
+    "defaultValue",
+    "directives"
+  ],
+  Variable: ["name"],
+  SelectionSet: ["selections"],
+  Field: ["alias", "name", "arguments", "directives", "selectionSet"],
+  Argument: ["name", "value"],
+  FragmentSpread: ["name", "directives"],
+  InlineFragment: ["typeCondition", "directives", "selectionSet"],
+  FragmentDefinition: [
+    "description",
+    "name",
+    "variableDefinitions",
+    "typeCondition",
+    "directives",
+    "selectionSet"
+  ],
+  IntValue: [],
+  FloatValue: [],
+  StringValue: [],
+  BooleanValue: [],
+  NullValue: [],
+  EnumValue: [],
+  ListValue: ["values"],
+  ObjectValue: ["fields"],
+  ObjectField: ["name", "value"],
+  Directive: ["name", "arguments"],
+  NamedType: ["name"],
+  ListType: ["type"],
+  NonNullType: ["type"],
+  SchemaDefinition: ["description", "directives", "operationTypes"],
+  OperationTypeDefinition: ["type"],
+  ScalarTypeDefinition: ["description", "name", "directives"],
+  ObjectTypeDefinition: [
+    "description",
+    "name",
+    "interfaces",
+    "directives",
+    "fields"
+  ],
+  FieldDefinition: ["description", "name", "arguments", "type", "directives"],
+  InputValueDefinition: [
+    "description",
+    "name",
+    "type",
+    "defaultValue",
+    "directives"
+  ],
+  InterfaceTypeDefinition: [
+    "description",
+    "name",
+    "interfaces",
+    "directives",
+    "fields"
+  ],
+  UnionTypeDefinition: ["description", "name", "directives", "types"],
+  EnumTypeDefinition: ["description", "name", "directives", "values"],
+  EnumValueDefinition: ["description", "name", "directives"],
+  InputObjectTypeDefinition: ["description", "name", "directives", "fields"],
+  DirectiveDefinition: ["description", "name", "arguments", "locations"],
+  SchemaExtension: ["directives", "operationTypes"],
+  ScalarTypeExtension: ["name", "directives"],
+  ObjectTypeExtension: ["name", "interfaces", "directives", "fields"],
+  InterfaceTypeExtension: ["name", "interfaces", "directives", "fields"],
+  UnionTypeExtension: ["name", "directives", "types"],
+  EnumTypeExtension: ["name", "directives", "values"],
+  InputObjectTypeExtension: ["name", "directives", "fields"],
+  TypeCoordinate: ["name"],
+  MemberCoordinate: ["name", "memberName"],
+  ArgumentCoordinate: ["name", "fieldName", "argumentName"],
+  DirectiveCoordinate: ["name"],
+  DirectiveArgumentCoordinate: ["name", "argumentName"]
+};
+var kindValues = new Set(Object.keys(QueryDocumentKeys));
+function isNode(maybeNode) {
+  const maybeKind = maybeNode === null || maybeNode === undefined ? undefined : maybeNode.kind;
+  return typeof maybeKind === "string" && kindValues.has(maybeKind);
+}
+var OperationTypeNode;
+(function(OperationTypeNode2) {
+  OperationTypeNode2["QUERY"] = "query";
+  OperationTypeNode2["MUTATION"] = "mutation";
+  OperationTypeNode2["SUBSCRIPTION"] = "subscription";
+})(OperationTypeNode || (OperationTypeNode = {}));
+
+// node_modules/graphql/language/directiveLocation.mjs
+var DirectiveLocation;
+(function(DirectiveLocation2) {
+  DirectiveLocation2["QUERY"] = "QUERY";
+  DirectiveLocation2["MUTATION"] = "MUTATION";
+  DirectiveLocation2["SUBSCRIPTION"] = "SUBSCRIPTION";
+  DirectiveLocation2["FIELD"] = "FIELD";
+  DirectiveLocation2["FRAGMENT_DEFINITION"] = "FRAGMENT_DEFINITION";
+  DirectiveLocation2["FRAGMENT_SPREAD"] = "FRAGMENT_SPREAD";
+  DirectiveLocation2["INLINE_FRAGMENT"] = "INLINE_FRAGMENT";
+  DirectiveLocation2["VARIABLE_DEFINITION"] = "VARIABLE_DEFINITION";
+  DirectiveLocation2["SCHEMA"] = "SCHEMA";
+  DirectiveLocation2["SCALAR"] = "SCALAR";
+  DirectiveLocation2["OBJECT"] = "OBJECT";
+  DirectiveLocation2["FIELD_DEFINITION"] = "FIELD_DEFINITION";
+  DirectiveLocation2["ARGUMENT_DEFINITION"] = "ARGUMENT_DEFINITION";
+  DirectiveLocation2["INTERFACE"] = "INTERFACE";
+  DirectiveLocation2["UNION"] = "UNION";
+  DirectiveLocation2["ENUM"] = "ENUM";
+  DirectiveLocation2["ENUM_VALUE"] = "ENUM_VALUE";
+  DirectiveLocation2["INPUT_OBJECT"] = "INPUT_OBJECT";
+  DirectiveLocation2["INPUT_FIELD_DEFINITION"] = "INPUT_FIELD_DEFINITION";
+})(DirectiveLocation || (DirectiveLocation = {}));
+
 // node_modules/graphql/language/kinds.mjs
 var Kind;
 (function(Kind2) {
@@ -4059,7 +3791,7 @@ var Kind;
 function isWhiteSpace(code) {
   return code === 9 || code === 32;
 }
-function isDigit2(code) {
+function isDigit(code) {
   return code >= 48 && code <= 57;
 }
 function isLetter(code) {
@@ -4069,7 +3801,7 @@ function isNameStart(code) {
   return isLetter(code) || code === 95;
 }
 function isNameContinue(code) {
-  return isLetter(code) || isDigit2(code) || code === 95;
+  return isLetter(code) || isDigit(code) || code === 95;
 }
 
 // node_modules/graphql/language/blockString.mjs
@@ -4122,6 +3854,1662 @@ function printBlockString(value, options) {
 `;
   }
   return '"""' + result + '"""';
+}
+
+// node_modules/graphql/language/tokenKind.mjs
+var TokenKind;
+(function(TokenKind2) {
+  TokenKind2["SOF"] = "<SOF>";
+  TokenKind2["EOF"] = "<EOF>";
+  TokenKind2["BANG"] = "!";
+  TokenKind2["DOLLAR"] = "$";
+  TokenKind2["AMP"] = "&";
+  TokenKind2["PAREN_L"] = "(";
+  TokenKind2["PAREN_R"] = ")";
+  TokenKind2["DOT"] = ".";
+  TokenKind2["SPREAD"] = "...";
+  TokenKind2["COLON"] = ":";
+  TokenKind2["EQUALS"] = "=";
+  TokenKind2["AT"] = "@";
+  TokenKind2["BRACKET_L"] = "[";
+  TokenKind2["BRACKET_R"] = "]";
+  TokenKind2["BRACE_L"] = "{";
+  TokenKind2["PIPE"] = "|";
+  TokenKind2["BRACE_R"] = "}";
+  TokenKind2["NAME"] = "Name";
+  TokenKind2["INT"] = "Int";
+  TokenKind2["FLOAT"] = "Float";
+  TokenKind2["STRING"] = "String";
+  TokenKind2["BLOCK_STRING"] = "BlockString";
+  TokenKind2["COMMENT"] = "Comment";
+})(TokenKind || (TokenKind = {}));
+
+// node_modules/graphql/language/lexer.mjs
+class Lexer {
+  constructor(source) {
+    const startOfFileToken = new Token(TokenKind.SOF, 0, 0, 0, 0);
+    this.source = source;
+    this.lastToken = startOfFileToken;
+    this.token = startOfFileToken;
+    this.line = 1;
+    this.lineStart = 0;
+  }
+  get [Symbol.toStringTag]() {
+    return "Lexer";
+  }
+  advance() {
+    this.lastToken = this.token;
+    const token = this.token = this.lookahead();
+    return token;
+  }
+  lookahead() {
+    let token = this.token;
+    if (token.kind !== TokenKind.EOF) {
+      do {
+        if (token.next) {
+          token = token.next;
+        } else {
+          const nextToken = readNextToken(this, token.end);
+          token.next = nextToken;
+          nextToken.prev = token;
+          token = nextToken;
+        }
+      } while (token.kind === TokenKind.COMMENT);
+    }
+    return token;
+  }
+}
+function isPunctuatorTokenKind(kind) {
+  return kind === TokenKind.BANG || kind === TokenKind.DOLLAR || kind === TokenKind.AMP || kind === TokenKind.PAREN_L || kind === TokenKind.PAREN_R || kind === TokenKind.DOT || kind === TokenKind.SPREAD || kind === TokenKind.COLON || kind === TokenKind.EQUALS || kind === TokenKind.AT || kind === TokenKind.BRACKET_L || kind === TokenKind.BRACKET_R || kind === TokenKind.BRACE_L || kind === TokenKind.PIPE || kind === TokenKind.BRACE_R;
+}
+function isUnicodeScalarValue(code) {
+  return code >= 0 && code <= 55295 || code >= 57344 && code <= 1114111;
+}
+function isSupplementaryCodePoint(body, location) {
+  return isLeadingSurrogate(body.charCodeAt(location)) && isTrailingSurrogate(body.charCodeAt(location + 1));
+}
+function isLeadingSurrogate(code) {
+  return code >= 55296 && code <= 56319;
+}
+function isTrailingSurrogate(code) {
+  return code >= 56320 && code <= 57343;
+}
+function printCodePointAt(lexer, location) {
+  const code = lexer.source.body.codePointAt(location);
+  if (code === undefined) {
+    return TokenKind.EOF;
+  } else if (code >= 32 && code <= 126) {
+    const char = String.fromCodePoint(code);
+    return char === '"' ? `'"'` : `"${char}"`;
+  }
+  return "U+" + code.toString(16).toUpperCase().padStart(4, "0");
+}
+function createToken2(lexer, kind, start, end, value) {
+  const line = lexer.line;
+  const col = 1 + start - lexer.lineStart;
+  return new Token(kind, start, end, line, col, value);
+}
+function readNextToken(lexer, start) {
+  const body = lexer.source.body;
+  const bodyLength = body.length;
+  let position = start;
+  while (position < bodyLength) {
+    const code = body.charCodeAt(position);
+    switch (code) {
+      case 65279:
+      case 9:
+      case 32:
+      case 44:
+        ++position;
+        continue;
+      case 10:
+        ++position;
+        ++lexer.line;
+        lexer.lineStart = position;
+        continue;
+      case 13:
+        if (body.charCodeAt(position + 1) === 10) {
+          position += 2;
+        } else {
+          ++position;
+        }
+        ++lexer.line;
+        lexer.lineStart = position;
+        continue;
+      case 35:
+        return readComment(lexer, position);
+      case 33:
+        return createToken2(lexer, TokenKind.BANG, position, position + 1);
+      case 36:
+        return createToken2(lexer, TokenKind.DOLLAR, position, position + 1);
+      case 38:
+        return createToken2(lexer, TokenKind.AMP, position, position + 1);
+      case 40:
+        return createToken2(lexer, TokenKind.PAREN_L, position, position + 1);
+      case 41:
+        return createToken2(lexer, TokenKind.PAREN_R, position, position + 1);
+      case 46:
+        if (body.charCodeAt(position + 1) === 46 && body.charCodeAt(position + 2) === 46) {
+          return createToken2(lexer, TokenKind.SPREAD, position, position + 3);
+        }
+        break;
+      case 58:
+        return createToken2(lexer, TokenKind.COLON, position, position + 1);
+      case 61:
+        return createToken2(lexer, TokenKind.EQUALS, position, position + 1);
+      case 64:
+        return createToken2(lexer, TokenKind.AT, position, position + 1);
+      case 91:
+        return createToken2(lexer, TokenKind.BRACKET_L, position, position + 1);
+      case 93:
+        return createToken2(lexer, TokenKind.BRACKET_R, position, position + 1);
+      case 123:
+        return createToken2(lexer, TokenKind.BRACE_L, position, position + 1);
+      case 124:
+        return createToken2(lexer, TokenKind.PIPE, position, position + 1);
+      case 125:
+        return createToken2(lexer, TokenKind.BRACE_R, position, position + 1);
+      case 34:
+        if (body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34) {
+          return readBlockString(lexer, position);
+        }
+        return readString4(lexer, position);
+    }
+    if (isDigit(code) || code === 45) {
+      return readNumber2(lexer, position, code);
+    }
+    if (isNameStart(code)) {
+      return readName(lexer, position);
+    }
+    throw syntaxError(lexer.source, position, code === 39 ? `Unexpected single quote character ('), did you mean to use a double quote (")?` : isUnicodeScalarValue(code) || isSupplementaryCodePoint(body, position) ? `Unexpected character: ${printCodePointAt(lexer, position)}.` : `Invalid character: ${printCodePointAt(lexer, position)}.`);
+  }
+  return createToken2(lexer, TokenKind.EOF, bodyLength, bodyLength);
+}
+function readComment(lexer, start) {
+  const body = lexer.source.body;
+  const bodyLength = body.length;
+  let position = start + 1;
+  while (position < bodyLength) {
+    const code = body.charCodeAt(position);
+    if (code === 10 || code === 13) {
+      break;
+    }
+    if (isUnicodeScalarValue(code)) {
+      ++position;
+    } else if (isSupplementaryCodePoint(body, position)) {
+      position += 2;
+    } else {
+      break;
+    }
+  }
+  return createToken2(lexer, TokenKind.COMMENT, start, position, body.slice(start + 1, position));
+}
+function readNumber2(lexer, start, firstCode) {
+  const body = lexer.source.body;
+  let position = start;
+  let code = firstCode;
+  let isFloat = false;
+  if (code === 45) {
+    code = body.charCodeAt(++position);
+  }
+  if (code === 48) {
+    code = body.charCodeAt(++position);
+    if (isDigit(code)) {
+      throw syntaxError(lexer.source, position, `Invalid number, unexpected digit after 0: ${printCodePointAt(lexer, position)}.`);
+    }
+  } else {
+    position = readDigits(lexer, position, code);
+    code = body.charCodeAt(position);
+  }
+  if (code === 46) {
+    isFloat = true;
+    code = body.charCodeAt(++position);
+    position = readDigits(lexer, position, code);
+    code = body.charCodeAt(position);
+  }
+  if (code === 69 || code === 101) {
+    isFloat = true;
+    code = body.charCodeAt(++position);
+    if (code === 43 || code === 45) {
+      code = body.charCodeAt(++position);
+    }
+    position = readDigits(lexer, position, code);
+    code = body.charCodeAt(position);
+  }
+  if (code === 46 || isNameStart(code)) {
+    throw syntaxError(lexer.source, position, `Invalid number, expected digit but got: ${printCodePointAt(lexer, position)}.`);
+  }
+  return createToken2(lexer, isFloat ? TokenKind.FLOAT : TokenKind.INT, start, position, body.slice(start, position));
+}
+function readDigits(lexer, start, firstCode) {
+  if (!isDigit(firstCode)) {
+    throw syntaxError(lexer.source, start, `Invalid number, expected digit but got: ${printCodePointAt(lexer, start)}.`);
+  }
+  const body = lexer.source.body;
+  let position = start + 1;
+  while (isDigit(body.charCodeAt(position))) {
+    ++position;
+  }
+  return position;
+}
+function readString4(lexer, start) {
+  const body = lexer.source.body;
+  const bodyLength = body.length;
+  let position = start + 1;
+  let chunkStart = position;
+  let value = "";
+  while (position < bodyLength) {
+    const code = body.charCodeAt(position);
+    if (code === 34) {
+      value += body.slice(chunkStart, position);
+      return createToken2(lexer, TokenKind.STRING, start, position + 1, value);
+    }
+    if (code === 92) {
+      value += body.slice(chunkStart, position);
+      const escape = body.charCodeAt(position + 1) === 117 ? body.charCodeAt(position + 2) === 123 ? readEscapedUnicodeVariableWidth(lexer, position) : readEscapedUnicodeFixedWidth(lexer, position) : readEscapedCharacter(lexer, position);
+      value += escape.value;
+      position += escape.size;
+      chunkStart = position;
+      continue;
+    }
+    if (code === 10 || code === 13) {
+      break;
+    }
+    if (isUnicodeScalarValue(code)) {
+      ++position;
+    } else if (isSupplementaryCodePoint(body, position)) {
+      position += 2;
+    } else {
+      throw syntaxError(lexer.source, position, `Invalid character within String: ${printCodePointAt(lexer, position)}.`);
+    }
+  }
+  throw syntaxError(lexer.source, position, "Unterminated string.");
+}
+function readEscapedUnicodeVariableWidth(lexer, position) {
+  const body = lexer.source.body;
+  let point = 0;
+  let size = 3;
+  while (size < 12) {
+    const code = body.charCodeAt(position + size++);
+    if (code === 125) {
+      if (size < 5 || !isUnicodeScalarValue(point)) {
+        break;
+      }
+      return {
+        value: String.fromCodePoint(point),
+        size
+      };
+    }
+    point = point << 4 | readHexDigit(code);
+    if (point < 0) {
+      break;
+    }
+  }
+  throw syntaxError(lexer.source, position, `Invalid Unicode escape sequence: "${body.slice(position, position + size)}".`);
+}
+function readEscapedUnicodeFixedWidth(lexer, position) {
+  const body = lexer.source.body;
+  const code = read16BitHexCode(body, position + 2);
+  if (isUnicodeScalarValue(code)) {
+    return {
+      value: String.fromCodePoint(code),
+      size: 6
+    };
+  }
+  if (isLeadingSurrogate(code)) {
+    if (body.charCodeAt(position + 6) === 92 && body.charCodeAt(position + 7) === 117) {
+      const trailingCode = read16BitHexCode(body, position + 8);
+      if (isTrailingSurrogate(trailingCode)) {
+        return {
+          value: String.fromCodePoint(code, trailingCode),
+          size: 12
+        };
+      }
+    }
+  }
+  throw syntaxError(lexer.source, position, `Invalid Unicode escape sequence: "${body.slice(position, position + 6)}".`);
+}
+function read16BitHexCode(body, position) {
+  return readHexDigit(body.charCodeAt(position)) << 12 | readHexDigit(body.charCodeAt(position + 1)) << 8 | readHexDigit(body.charCodeAt(position + 2)) << 4 | readHexDigit(body.charCodeAt(position + 3));
+}
+function readHexDigit(code) {
+  return code >= 48 && code <= 57 ? code - 48 : code >= 65 && code <= 70 ? code - 55 : code >= 97 && code <= 102 ? code - 87 : -1;
+}
+function readEscapedCharacter(lexer, position) {
+  const body = lexer.source.body;
+  const code = body.charCodeAt(position + 1);
+  switch (code) {
+    case 34:
+      return {
+        value: '"',
+        size: 2
+      };
+    case 92:
+      return {
+        value: "\\",
+        size: 2
+      };
+    case 47:
+      return {
+        value: "/",
+        size: 2
+      };
+    case 98:
+      return {
+        value: "\b",
+        size: 2
+      };
+    case 102:
+      return {
+        value: "\f",
+        size: 2
+      };
+    case 110:
+      return {
+        value: `
+`,
+        size: 2
+      };
+    case 114:
+      return {
+        value: "\r",
+        size: 2
+      };
+    case 116:
+      return {
+        value: "\t",
+        size: 2
+      };
+  }
+  throw syntaxError(lexer.source, position, `Invalid character escape sequence: "${body.slice(position, position + 2)}".`);
+}
+function readBlockString(lexer, start) {
+  const body = lexer.source.body;
+  const bodyLength = body.length;
+  let lineStart = lexer.lineStart;
+  let position = start + 3;
+  let chunkStart = position;
+  let currentLine = "";
+  const blockLines = [];
+  while (position < bodyLength) {
+    const code = body.charCodeAt(position);
+    if (code === 34 && body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34) {
+      currentLine += body.slice(chunkStart, position);
+      blockLines.push(currentLine);
+      const token = createToken2(lexer, TokenKind.BLOCK_STRING, start, position + 3, dedentBlockStringLines(blockLines).join(`
+`));
+      lexer.line += blockLines.length - 1;
+      lexer.lineStart = lineStart;
+      return token;
+    }
+    if (code === 92 && body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34 && body.charCodeAt(position + 3) === 34) {
+      currentLine += body.slice(chunkStart, position);
+      chunkStart = position + 1;
+      position += 4;
+      continue;
+    }
+    if (code === 10 || code === 13) {
+      currentLine += body.slice(chunkStart, position);
+      blockLines.push(currentLine);
+      if (code === 13 && body.charCodeAt(position + 1) === 10) {
+        position += 2;
+      } else {
+        ++position;
+      }
+      currentLine = "";
+      chunkStart = position;
+      lineStart = position;
+      continue;
+    }
+    if (isUnicodeScalarValue(code)) {
+      ++position;
+    } else if (isSupplementaryCodePoint(body, position)) {
+      position += 2;
+    } else {
+      throw syntaxError(lexer.source, position, `Invalid character within String: ${printCodePointAt(lexer, position)}.`);
+    }
+  }
+  throw syntaxError(lexer.source, position, "Unterminated string.");
+}
+function readName(lexer, start) {
+  const body = lexer.source.body;
+  const bodyLength = body.length;
+  let position = start + 1;
+  while (position < bodyLength) {
+    const code = body.charCodeAt(position);
+    if (isNameContinue(code)) {
+      ++position;
+    } else {
+      break;
+    }
+  }
+  return createToken2(lexer, TokenKind.NAME, start, position, body.slice(start, position));
+}
+
+// node_modules/graphql/jsutils/inspect.mjs
+var MAX_ARRAY_LENGTH = 10;
+var MAX_RECURSIVE_DEPTH = 2;
+function inspect(value) {
+  return formatValue(value, []);
+}
+function formatValue(value, seenValues) {
+  switch (typeof value) {
+    case "string":
+      return JSON.stringify(value);
+    case "function":
+      return value.name ? `[function ${value.name}]` : "[function]";
+    case "object":
+      return formatObjectValue(value, seenValues);
+    default:
+      return String(value);
+  }
+}
+function formatObjectValue(value, previouslySeenValues) {
+  if (value === null) {
+    return "null";
+  }
+  if (previouslySeenValues.includes(value)) {
+    return "[Circular]";
+  }
+  const seenValues = [...previouslySeenValues, value];
+  if (isJSONable(value)) {
+    const jsonValue = value.toJSON();
+    if (jsonValue !== value) {
+      return typeof jsonValue === "string" ? jsonValue : formatValue(jsonValue, seenValues);
+    }
+  } else if (Array.isArray(value)) {
+    return formatArray(value, seenValues);
+  }
+  return formatObject(value, seenValues);
+}
+function isJSONable(value) {
+  return typeof value.toJSON === "function";
+}
+function formatObject(object, seenValues) {
+  const entries = Object.entries(object);
+  if (entries.length === 0) {
+    return "{}";
+  }
+  if (seenValues.length > MAX_RECURSIVE_DEPTH) {
+    return "[" + getObjectTag(object) + "]";
+  }
+  const properties = entries.map(([key, value]) => key + ": " + formatValue(value, seenValues));
+  return "{ " + properties.join(", ") + " }";
+}
+function formatArray(array, seenValues) {
+  if (array.length === 0) {
+    return "[]";
+  }
+  if (seenValues.length > MAX_RECURSIVE_DEPTH) {
+    return "[Array]";
+  }
+  const len = Math.min(MAX_ARRAY_LENGTH, array.length);
+  const remaining = array.length - len;
+  const items = [];
+  for (let i = 0;i < len; ++i) {
+    items.push(formatValue(array[i], seenValues));
+  }
+  if (remaining === 1) {
+    items.push("... 1 more item");
+  } else if (remaining > 1) {
+    items.push(`... ${remaining} more items`);
+  }
+  return "[" + items.join(", ") + "]";
+}
+function getObjectTag(object) {
+  const tag = Object.prototype.toString.call(object).replace(/^\[object /, "").replace(/]$/, "");
+  if (tag === "Object" && typeof object.constructor === "function") {
+    const name = object.constructor.name;
+    if (typeof name === "string" && name !== "") {
+      return name;
+    }
+  }
+  return tag;
+}
+
+// node_modules/graphql/jsutils/instanceOf.mjs
+var isProduction = globalThis.process && false;
+var instanceOf = isProduction ? function instanceOf2(value, constructor) {
+  return value instanceof constructor;
+} : function instanceOf3(value, constructor) {
+  if (value instanceof constructor) {
+    return true;
+  }
+  if (typeof value === "object" && value !== null) {
+    var _value$constructor;
+    const className = constructor.prototype[Symbol.toStringTag];
+    const valueClassName = Symbol.toStringTag in value ? value[Symbol.toStringTag] : (_value$constructor = value.constructor) === null || _value$constructor === undefined ? undefined : _value$constructor.name;
+    if (className === valueClassName) {
+      const stringifiedValue = inspect(value);
+      throw new Error(`Cannot use ${className} "${stringifiedValue}" from another module or realm.
+
+Ensure that there is only one instance of "graphql" in the node_modules
+directory. If different versions of "graphql" are the dependencies of other
+relied on modules, use "resolutions" to ensure only one version is installed.
+
+https://yarnpkg.com/en/docs/selective-version-resolutions
+
+Duplicate "graphql" modules cannot be used at the same time since different
+versions may have different capabilities and behavior. The data from one
+version used in the function from another could produce confusing and
+spurious results.`);
+    }
+  }
+  return false;
+};
+
+// node_modules/graphql/language/source.mjs
+class Source {
+  constructor(body, name = "GraphQL request", locationOffset = {
+    line: 1,
+    column: 1
+  }) {
+    typeof body === "string" || devAssert(false, `Body must be a string. Received: ${inspect(body)}.`);
+    this.body = body;
+    this.name = name;
+    this.locationOffset = locationOffset;
+    this.locationOffset.line > 0 || devAssert(false, "line in locationOffset is 1-indexed and must be positive.");
+    this.locationOffset.column > 0 || devAssert(false, "column in locationOffset is 1-indexed and must be positive.");
+  }
+  get [Symbol.toStringTag]() {
+    return "Source";
+  }
+}
+function isSource(source) {
+  return instanceOf(source, Source);
+}
+
+// node_modules/graphql/language/parser.mjs
+function parse(source, options) {
+  const parser = new Parser(source, options);
+  const document = parser.parseDocument();
+  Object.defineProperty(document, "tokenCount", {
+    enumerable: false,
+    value: parser.tokenCount
+  });
+  return document;
+}
+class Parser {
+  constructor(source, options = {}) {
+    const { lexer, ..._options } = options;
+    if (lexer) {
+      this._lexer = lexer;
+    } else {
+      const sourceObj = isSource(source) ? source : new Source(source);
+      this._lexer = new Lexer(sourceObj);
+    }
+    this._options = _options;
+    this._tokenCounter = 0;
+  }
+  get tokenCount() {
+    return this._tokenCounter;
+  }
+  parseName() {
+    const token = this.expectToken(TokenKind.NAME);
+    return this.node(token, {
+      kind: Kind.NAME,
+      value: token.value
+    });
+  }
+  parseDocument() {
+    return this.node(this._lexer.token, {
+      kind: Kind.DOCUMENT,
+      definitions: this.many(TokenKind.SOF, this.parseDefinition, TokenKind.EOF)
+    });
+  }
+  parseDefinition() {
+    if (this.peek(TokenKind.BRACE_L)) {
+      return this.parseOperationDefinition();
+    }
+    const hasDescription = this.peekDescription();
+    const keywordToken = hasDescription ? this._lexer.lookahead() : this._lexer.token;
+    if (hasDescription && keywordToken.kind === TokenKind.BRACE_L) {
+      throw syntaxError(this._lexer.source, this._lexer.token.start, "Unexpected description, descriptions are not supported on shorthand queries.");
+    }
+    if (keywordToken.kind === TokenKind.NAME) {
+      switch (keywordToken.value) {
+        case "schema":
+          return this.parseSchemaDefinition();
+        case "scalar":
+          return this.parseScalarTypeDefinition();
+        case "type":
+          return this.parseObjectTypeDefinition();
+        case "interface":
+          return this.parseInterfaceTypeDefinition();
+        case "union":
+          return this.parseUnionTypeDefinition();
+        case "enum":
+          return this.parseEnumTypeDefinition();
+        case "input":
+          return this.parseInputObjectTypeDefinition();
+        case "directive":
+          return this.parseDirectiveDefinition();
+      }
+      switch (keywordToken.value) {
+        case "query":
+        case "mutation":
+        case "subscription":
+          return this.parseOperationDefinition();
+        case "fragment":
+          return this.parseFragmentDefinition();
+      }
+      if (hasDescription) {
+        throw syntaxError(this._lexer.source, this._lexer.token.start, "Unexpected description, only GraphQL definitions support descriptions.");
+      }
+      switch (keywordToken.value) {
+        case "extend":
+          return this.parseTypeSystemExtension();
+      }
+    }
+    throw this.unexpected(keywordToken);
+  }
+  parseOperationDefinition() {
+    const start = this._lexer.token;
+    if (this.peek(TokenKind.BRACE_L)) {
+      return this.node(start, {
+        kind: Kind.OPERATION_DEFINITION,
+        operation: OperationTypeNode.QUERY,
+        description: undefined,
+        name: undefined,
+        variableDefinitions: [],
+        directives: [],
+        selectionSet: this.parseSelectionSet()
+      });
+    }
+    const description = this.parseDescription();
+    const operation = this.parseOperationType();
+    let name;
+    if (this.peek(TokenKind.NAME)) {
+      name = this.parseName();
+    }
+    return this.node(start, {
+      kind: Kind.OPERATION_DEFINITION,
+      operation,
+      description,
+      name,
+      variableDefinitions: this.parseVariableDefinitions(),
+      directives: this.parseDirectives(false),
+      selectionSet: this.parseSelectionSet()
+    });
+  }
+  parseOperationType() {
+    const operationToken = this.expectToken(TokenKind.NAME);
+    switch (operationToken.value) {
+      case "query":
+        return OperationTypeNode.QUERY;
+      case "mutation":
+        return OperationTypeNode.MUTATION;
+      case "subscription":
+        return OperationTypeNode.SUBSCRIPTION;
+    }
+    throw this.unexpected(operationToken);
+  }
+  parseVariableDefinitions() {
+    return this.optionalMany(TokenKind.PAREN_L, this.parseVariableDefinition, TokenKind.PAREN_R);
+  }
+  parseVariableDefinition() {
+    return this.node(this._lexer.token, {
+      kind: Kind.VARIABLE_DEFINITION,
+      description: this.parseDescription(),
+      variable: this.parseVariable(),
+      type: (this.expectToken(TokenKind.COLON), this.parseTypeReference()),
+      defaultValue: this.expectOptionalToken(TokenKind.EQUALS) ? this.parseConstValueLiteral() : undefined,
+      directives: this.parseConstDirectives()
+    });
+  }
+  parseVariable() {
+    const start = this._lexer.token;
+    this.expectToken(TokenKind.DOLLAR);
+    return this.node(start, {
+      kind: Kind.VARIABLE,
+      name: this.parseName()
+    });
+  }
+  parseSelectionSet() {
+    return this.node(this._lexer.token, {
+      kind: Kind.SELECTION_SET,
+      selections: this.many(TokenKind.BRACE_L, this.parseSelection, TokenKind.BRACE_R)
+    });
+  }
+  parseSelection() {
+    return this.peek(TokenKind.SPREAD) ? this.parseFragment() : this.parseField();
+  }
+  parseField() {
+    const start = this._lexer.token;
+    const nameOrAlias = this.parseName();
+    let alias;
+    let name;
+    if (this.expectOptionalToken(TokenKind.COLON)) {
+      alias = nameOrAlias;
+      name = this.parseName();
+    } else {
+      name = nameOrAlias;
+    }
+    return this.node(start, {
+      kind: Kind.FIELD,
+      alias,
+      name,
+      arguments: this.parseArguments(false),
+      directives: this.parseDirectives(false),
+      selectionSet: this.peek(TokenKind.BRACE_L) ? this.parseSelectionSet() : undefined
+    });
+  }
+  parseArguments(isConst) {
+    const item = isConst ? this.parseConstArgument : this.parseArgument;
+    return this.optionalMany(TokenKind.PAREN_L, item, TokenKind.PAREN_R);
+  }
+  parseArgument(isConst = false) {
+    const start = this._lexer.token;
+    const name = this.parseName();
+    this.expectToken(TokenKind.COLON);
+    return this.node(start, {
+      kind: Kind.ARGUMENT,
+      name,
+      value: this.parseValueLiteral(isConst)
+    });
+  }
+  parseConstArgument() {
+    return this.parseArgument(true);
+  }
+  parseFragment() {
+    const start = this._lexer.token;
+    this.expectToken(TokenKind.SPREAD);
+    const hasTypeCondition = this.expectOptionalKeyword("on");
+    if (!hasTypeCondition && this.peek(TokenKind.NAME)) {
+      return this.node(start, {
+        kind: Kind.FRAGMENT_SPREAD,
+        name: this.parseFragmentName(),
+        directives: this.parseDirectives(false)
+      });
+    }
+    return this.node(start, {
+      kind: Kind.INLINE_FRAGMENT,
+      typeCondition: hasTypeCondition ? this.parseNamedType() : undefined,
+      directives: this.parseDirectives(false),
+      selectionSet: this.parseSelectionSet()
+    });
+  }
+  parseFragmentDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("fragment");
+    if (this._options.allowLegacyFragmentVariables === true) {
+      return this.node(start, {
+        kind: Kind.FRAGMENT_DEFINITION,
+        description,
+        name: this.parseFragmentName(),
+        variableDefinitions: this.parseVariableDefinitions(),
+        typeCondition: (this.expectKeyword("on"), this.parseNamedType()),
+        directives: this.parseDirectives(false),
+        selectionSet: this.parseSelectionSet()
+      });
+    }
+    return this.node(start, {
+      kind: Kind.FRAGMENT_DEFINITION,
+      description,
+      name: this.parseFragmentName(),
+      typeCondition: (this.expectKeyword("on"), this.parseNamedType()),
+      directives: this.parseDirectives(false),
+      selectionSet: this.parseSelectionSet()
+    });
+  }
+  parseFragmentName() {
+    if (this._lexer.token.value === "on") {
+      throw this.unexpected();
+    }
+    return this.parseName();
+  }
+  parseValueLiteral(isConst) {
+    const token = this._lexer.token;
+    switch (token.kind) {
+      case TokenKind.BRACKET_L:
+        return this.parseList(isConst);
+      case TokenKind.BRACE_L:
+        return this.parseObject(isConst);
+      case TokenKind.INT:
+        this.advanceLexer();
+        return this.node(token, {
+          kind: Kind.INT,
+          value: token.value
+        });
+      case TokenKind.FLOAT:
+        this.advanceLexer();
+        return this.node(token, {
+          kind: Kind.FLOAT,
+          value: token.value
+        });
+      case TokenKind.STRING:
+      case TokenKind.BLOCK_STRING:
+        return this.parseStringLiteral();
+      case TokenKind.NAME:
+        this.advanceLexer();
+        switch (token.value) {
+          case "true":
+            return this.node(token, {
+              kind: Kind.BOOLEAN,
+              value: true
+            });
+          case "false":
+            return this.node(token, {
+              kind: Kind.BOOLEAN,
+              value: false
+            });
+          case "null":
+            return this.node(token, {
+              kind: Kind.NULL
+            });
+          default:
+            return this.node(token, {
+              kind: Kind.ENUM,
+              value: token.value
+            });
+        }
+      case TokenKind.DOLLAR:
+        if (isConst) {
+          this.expectToken(TokenKind.DOLLAR);
+          if (this._lexer.token.kind === TokenKind.NAME) {
+            const varName = this._lexer.token.value;
+            throw syntaxError(this._lexer.source, token.start, `Unexpected variable "$${varName}" in constant value.`);
+          } else {
+            throw this.unexpected(token);
+          }
+        }
+        return this.parseVariable();
+      default:
+        throw this.unexpected();
+    }
+  }
+  parseConstValueLiteral() {
+    return this.parseValueLiteral(true);
+  }
+  parseStringLiteral() {
+    const token = this._lexer.token;
+    this.advanceLexer();
+    return this.node(token, {
+      kind: Kind.STRING,
+      value: token.value,
+      block: token.kind === TokenKind.BLOCK_STRING
+    });
+  }
+  parseList(isConst) {
+    const item = () => this.parseValueLiteral(isConst);
+    return this.node(this._lexer.token, {
+      kind: Kind.LIST,
+      values: this.any(TokenKind.BRACKET_L, item, TokenKind.BRACKET_R)
+    });
+  }
+  parseObject(isConst) {
+    const item = () => this.parseObjectField(isConst);
+    return this.node(this._lexer.token, {
+      kind: Kind.OBJECT,
+      fields: this.any(TokenKind.BRACE_L, item, TokenKind.BRACE_R)
+    });
+  }
+  parseObjectField(isConst) {
+    const start = this._lexer.token;
+    const name = this.parseName();
+    this.expectToken(TokenKind.COLON);
+    return this.node(start, {
+      kind: Kind.OBJECT_FIELD,
+      name,
+      value: this.parseValueLiteral(isConst)
+    });
+  }
+  parseDirectives(isConst) {
+    const directives = [];
+    while (this.peek(TokenKind.AT)) {
+      directives.push(this.parseDirective(isConst));
+    }
+    return directives;
+  }
+  parseConstDirectives() {
+    return this.parseDirectives(true);
+  }
+  parseDirective(isConst) {
+    const start = this._lexer.token;
+    this.expectToken(TokenKind.AT);
+    return this.node(start, {
+      kind: Kind.DIRECTIVE,
+      name: this.parseName(),
+      arguments: this.parseArguments(isConst)
+    });
+  }
+  parseTypeReference() {
+    const start = this._lexer.token;
+    let type;
+    if (this.expectOptionalToken(TokenKind.BRACKET_L)) {
+      const innerType = this.parseTypeReference();
+      this.expectToken(TokenKind.BRACKET_R);
+      type = this.node(start, {
+        kind: Kind.LIST_TYPE,
+        type: innerType
+      });
+    } else {
+      type = this.parseNamedType();
+    }
+    if (this.expectOptionalToken(TokenKind.BANG)) {
+      return this.node(start, {
+        kind: Kind.NON_NULL_TYPE,
+        type
+      });
+    }
+    return type;
+  }
+  parseNamedType() {
+    return this.node(this._lexer.token, {
+      kind: Kind.NAMED_TYPE,
+      name: this.parseName()
+    });
+  }
+  peekDescription() {
+    return this.peek(TokenKind.STRING) || this.peek(TokenKind.BLOCK_STRING);
+  }
+  parseDescription() {
+    if (this.peekDescription()) {
+      return this.parseStringLiteral();
+    }
+  }
+  parseSchemaDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("schema");
+    const directives = this.parseConstDirectives();
+    const operationTypes = this.many(TokenKind.BRACE_L, this.parseOperationTypeDefinition, TokenKind.BRACE_R);
+    return this.node(start, {
+      kind: Kind.SCHEMA_DEFINITION,
+      description,
+      directives,
+      operationTypes
+    });
+  }
+  parseOperationTypeDefinition() {
+    const start = this._lexer.token;
+    const operation = this.parseOperationType();
+    this.expectToken(TokenKind.COLON);
+    const type = this.parseNamedType();
+    return this.node(start, {
+      kind: Kind.OPERATION_TYPE_DEFINITION,
+      operation,
+      type
+    });
+  }
+  parseScalarTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("scalar");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    return this.node(start, {
+      kind: Kind.SCALAR_TYPE_DEFINITION,
+      description,
+      name,
+      directives
+    });
+  }
+  parseObjectTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("type");
+    const name = this.parseName();
+    const interfaces = this.parseImplementsInterfaces();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseFieldsDefinition();
+    return this.node(start, {
+      kind: Kind.OBJECT_TYPE_DEFINITION,
+      description,
+      name,
+      interfaces,
+      directives,
+      fields
+    });
+  }
+  parseImplementsInterfaces() {
+    return this.expectOptionalKeyword("implements") ? this.delimitedMany(TokenKind.AMP, this.parseNamedType) : [];
+  }
+  parseFieldsDefinition() {
+    return this.optionalMany(TokenKind.BRACE_L, this.parseFieldDefinition, TokenKind.BRACE_R);
+  }
+  parseFieldDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    const name = this.parseName();
+    const args = this.parseArgumentDefs();
+    this.expectToken(TokenKind.COLON);
+    const type = this.parseTypeReference();
+    const directives = this.parseConstDirectives();
+    return this.node(start, {
+      kind: Kind.FIELD_DEFINITION,
+      description,
+      name,
+      arguments: args,
+      type,
+      directives
+    });
+  }
+  parseArgumentDefs() {
+    return this.optionalMany(TokenKind.PAREN_L, this.parseInputValueDef, TokenKind.PAREN_R);
+  }
+  parseInputValueDef() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    const name = this.parseName();
+    this.expectToken(TokenKind.COLON);
+    const type = this.parseTypeReference();
+    let defaultValue;
+    if (this.expectOptionalToken(TokenKind.EQUALS)) {
+      defaultValue = this.parseConstValueLiteral();
+    }
+    const directives = this.parseConstDirectives();
+    return this.node(start, {
+      kind: Kind.INPUT_VALUE_DEFINITION,
+      description,
+      name,
+      type,
+      defaultValue,
+      directives
+    });
+  }
+  parseInterfaceTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("interface");
+    const name = this.parseName();
+    const interfaces = this.parseImplementsInterfaces();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseFieldsDefinition();
+    return this.node(start, {
+      kind: Kind.INTERFACE_TYPE_DEFINITION,
+      description,
+      name,
+      interfaces,
+      directives,
+      fields
+    });
+  }
+  parseUnionTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("union");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const types = this.parseUnionMemberTypes();
+    return this.node(start, {
+      kind: Kind.UNION_TYPE_DEFINITION,
+      description,
+      name,
+      directives,
+      types
+    });
+  }
+  parseUnionMemberTypes() {
+    return this.expectOptionalToken(TokenKind.EQUALS) ? this.delimitedMany(TokenKind.PIPE, this.parseNamedType) : [];
+  }
+  parseEnumTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("enum");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const values = this.parseEnumValuesDefinition();
+    return this.node(start, {
+      kind: Kind.ENUM_TYPE_DEFINITION,
+      description,
+      name,
+      directives,
+      values
+    });
+  }
+  parseEnumValuesDefinition() {
+    return this.optionalMany(TokenKind.BRACE_L, this.parseEnumValueDefinition, TokenKind.BRACE_R);
+  }
+  parseEnumValueDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    const name = this.parseEnumValueName();
+    const directives = this.parseConstDirectives();
+    return this.node(start, {
+      kind: Kind.ENUM_VALUE_DEFINITION,
+      description,
+      name,
+      directives
+    });
+  }
+  parseEnumValueName() {
+    if (this._lexer.token.value === "true" || this._lexer.token.value === "false" || this._lexer.token.value === "null") {
+      throw syntaxError(this._lexer.source, this._lexer.token.start, `${getTokenDesc(this._lexer.token)} is reserved and cannot be used for an enum value.`);
+    }
+    return this.parseName();
+  }
+  parseInputObjectTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("input");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseInputFieldsDefinition();
+    return this.node(start, {
+      kind: Kind.INPUT_OBJECT_TYPE_DEFINITION,
+      description,
+      name,
+      directives,
+      fields
+    });
+  }
+  parseInputFieldsDefinition() {
+    return this.optionalMany(TokenKind.BRACE_L, this.parseInputValueDef, TokenKind.BRACE_R);
+  }
+  parseTypeSystemExtension() {
+    const keywordToken = this._lexer.lookahead();
+    if (keywordToken.kind === TokenKind.NAME) {
+      switch (keywordToken.value) {
+        case "schema":
+          return this.parseSchemaExtension();
+        case "scalar":
+          return this.parseScalarTypeExtension();
+        case "type":
+          return this.parseObjectTypeExtension();
+        case "interface":
+          return this.parseInterfaceTypeExtension();
+        case "union":
+          return this.parseUnionTypeExtension();
+        case "enum":
+          return this.parseEnumTypeExtension();
+        case "input":
+          return this.parseInputObjectTypeExtension();
+      }
+    }
+    throw this.unexpected(keywordToken);
+  }
+  parseSchemaExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("schema");
+    const directives = this.parseConstDirectives();
+    const operationTypes = this.optionalMany(TokenKind.BRACE_L, this.parseOperationTypeDefinition, TokenKind.BRACE_R);
+    if (directives.length === 0 && operationTypes.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.SCHEMA_EXTENSION,
+      directives,
+      operationTypes
+    });
+  }
+  parseScalarTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("scalar");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    if (directives.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.SCALAR_TYPE_EXTENSION,
+      name,
+      directives
+    });
+  }
+  parseObjectTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("type");
+    const name = this.parseName();
+    const interfaces = this.parseImplementsInterfaces();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseFieldsDefinition();
+    if (interfaces.length === 0 && directives.length === 0 && fields.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.OBJECT_TYPE_EXTENSION,
+      name,
+      interfaces,
+      directives,
+      fields
+    });
+  }
+  parseInterfaceTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("interface");
+    const name = this.parseName();
+    const interfaces = this.parseImplementsInterfaces();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseFieldsDefinition();
+    if (interfaces.length === 0 && directives.length === 0 && fields.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.INTERFACE_TYPE_EXTENSION,
+      name,
+      interfaces,
+      directives,
+      fields
+    });
+  }
+  parseUnionTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("union");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const types = this.parseUnionMemberTypes();
+    if (directives.length === 0 && types.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.UNION_TYPE_EXTENSION,
+      name,
+      directives,
+      types
+    });
+  }
+  parseEnumTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("enum");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const values = this.parseEnumValuesDefinition();
+    if (directives.length === 0 && values.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.ENUM_TYPE_EXTENSION,
+      name,
+      directives,
+      values
+    });
+  }
+  parseInputObjectTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("input");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseInputFieldsDefinition();
+    if (directives.length === 0 && fields.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.INPUT_OBJECT_TYPE_EXTENSION,
+      name,
+      directives,
+      fields
+    });
+  }
+  parseDirectiveDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("directive");
+    this.expectToken(TokenKind.AT);
+    const name = this.parseName();
+    const args = this.parseArgumentDefs();
+    const repeatable = this.expectOptionalKeyword("repeatable");
+    this.expectKeyword("on");
+    const locations = this.parseDirectiveLocations();
+    return this.node(start, {
+      kind: Kind.DIRECTIVE_DEFINITION,
+      description,
+      name,
+      arguments: args,
+      repeatable,
+      locations
+    });
+  }
+  parseDirectiveLocations() {
+    return this.delimitedMany(TokenKind.PIPE, this.parseDirectiveLocation);
+  }
+  parseDirectiveLocation() {
+    const start = this._lexer.token;
+    const name = this.parseName();
+    if (Object.prototype.hasOwnProperty.call(DirectiveLocation, name.value)) {
+      return name;
+    }
+    throw this.unexpected(start);
+  }
+  parseSchemaCoordinate() {
+    const start = this._lexer.token;
+    const ofDirective = this.expectOptionalToken(TokenKind.AT);
+    const name = this.parseName();
+    let memberName;
+    if (!ofDirective && this.expectOptionalToken(TokenKind.DOT)) {
+      memberName = this.parseName();
+    }
+    let argumentName;
+    if ((ofDirective || memberName) && this.expectOptionalToken(TokenKind.PAREN_L)) {
+      argumentName = this.parseName();
+      this.expectToken(TokenKind.COLON);
+      this.expectToken(TokenKind.PAREN_R);
+    }
+    if (ofDirective) {
+      if (argumentName) {
+        return this.node(start, {
+          kind: Kind.DIRECTIVE_ARGUMENT_COORDINATE,
+          name,
+          argumentName
+        });
+      }
+      return this.node(start, {
+        kind: Kind.DIRECTIVE_COORDINATE,
+        name
+      });
+    } else if (memberName) {
+      if (argumentName) {
+        return this.node(start, {
+          kind: Kind.ARGUMENT_COORDINATE,
+          name,
+          fieldName: memberName,
+          argumentName
+        });
+      }
+      return this.node(start, {
+        kind: Kind.MEMBER_COORDINATE,
+        name,
+        memberName
+      });
+    }
+    return this.node(start, {
+      kind: Kind.TYPE_COORDINATE,
+      name
+    });
+  }
+  node(startToken, node) {
+    if (this._options.noLocation !== true) {
+      node.loc = new Location(startToken, this._lexer.lastToken, this._lexer.source);
+    }
+    return node;
+  }
+  peek(kind) {
+    return this._lexer.token.kind === kind;
+  }
+  expectToken(kind) {
+    const token = this._lexer.token;
+    if (token.kind === kind) {
+      this.advanceLexer();
+      return token;
+    }
+    throw syntaxError(this._lexer.source, token.start, `Expected ${getTokenKindDesc(kind)}, found ${getTokenDesc(token)}.`);
+  }
+  expectOptionalToken(kind) {
+    const token = this._lexer.token;
+    if (token.kind === kind) {
+      this.advanceLexer();
+      return true;
+    }
+    return false;
+  }
+  expectKeyword(value) {
+    const token = this._lexer.token;
+    if (token.kind === TokenKind.NAME && token.value === value) {
+      this.advanceLexer();
+    } else {
+      throw syntaxError(this._lexer.source, token.start, `Expected "${value}", found ${getTokenDesc(token)}.`);
+    }
+  }
+  expectOptionalKeyword(value) {
+    const token = this._lexer.token;
+    if (token.kind === TokenKind.NAME && token.value === value) {
+      this.advanceLexer();
+      return true;
+    }
+    return false;
+  }
+  unexpected(atToken) {
+    const token = atToken !== null && atToken !== undefined ? atToken : this._lexer.token;
+    return syntaxError(this._lexer.source, token.start, `Unexpected ${getTokenDesc(token)}.`);
+  }
+  any(openKind, parseFn, closeKind) {
+    this.expectToken(openKind);
+    const nodes = [];
+    while (!this.expectOptionalToken(closeKind)) {
+      nodes.push(parseFn.call(this));
+    }
+    return nodes;
+  }
+  optionalMany(openKind, parseFn, closeKind) {
+    if (this.expectOptionalToken(openKind)) {
+      const nodes = [];
+      do {
+        nodes.push(parseFn.call(this));
+      } while (!this.expectOptionalToken(closeKind));
+      return nodes;
+    }
+    return [];
+  }
+  many(openKind, parseFn, closeKind) {
+    this.expectToken(openKind);
+    const nodes = [];
+    do {
+      nodes.push(parseFn.call(this));
+    } while (!this.expectOptionalToken(closeKind));
+    return nodes;
+  }
+  delimitedMany(delimiterKind, parseFn) {
+    this.expectOptionalToken(delimiterKind);
+    const nodes = [];
+    do {
+      nodes.push(parseFn.call(this));
+    } while (this.expectOptionalToken(delimiterKind));
+    return nodes;
+  }
+  advanceLexer() {
+    const { maxTokens } = this._options;
+    const token = this._lexer.advance();
+    if (token.kind !== TokenKind.EOF) {
+      ++this._tokenCounter;
+      if (maxTokens !== undefined && this._tokenCounter > maxTokens) {
+        throw syntaxError(this._lexer.source, token.start, `Document contains more that ${maxTokens} tokens. Parsing aborted.`);
+      }
+    }
+  }
+}
+function getTokenDesc(token) {
+  const value = token.value;
+  return getTokenKindDesc(token.kind) + (value != null ? ` "${value}"` : "");
+}
+function getTokenKindDesc(kind) {
+  return isPunctuatorTokenKind(kind) ? `"${kind}"` : kind;
+}
+
+// node_modules/graphql/jsutils/didYouMean.mjs
+var MAX_SUGGESTIONS = 5;
+function didYouMean(firstArg, secondArg) {
+  const [subMessage, suggestionsArg] = secondArg ? [firstArg, secondArg] : [undefined, firstArg];
+  let message = " Did you mean ";
+  if (subMessage) {
+    message += subMessage + " ";
+  }
+  const suggestions = suggestionsArg.map((x) => `"${x}"`);
+  switch (suggestions.length) {
+    case 0:
+      return "";
+    case 1:
+      return message + suggestions[0] + "?";
+    case 2:
+      return message + suggestions[0] + " or " + suggestions[1] + "?";
+  }
+  const selected = suggestions.slice(0, MAX_SUGGESTIONS);
+  const lastItem = selected.pop();
+  return message + selected.join(", ") + ", or " + lastItem + "?";
+}
+
+// node_modules/graphql/jsutils/identityFunc.mjs
+function identityFunc(x) {
+  return x;
+}
+
+// node_modules/graphql/jsutils/keyMap.mjs
+function keyMap(list, keyFn) {
+  const result = Object.create(null);
+  for (const item of list) {
+    result[keyFn(item)] = item;
+  }
+  return result;
+}
+
+// node_modules/graphql/jsutils/keyValMap.mjs
+function keyValMap(list, keyFn, valFn) {
+  const result = Object.create(null);
+  for (const item of list) {
+    result[keyFn(item)] = valFn(item);
+  }
+  return result;
+}
+
+// node_modules/graphql/jsutils/mapValue.mjs
+function mapValue(map, fn) {
+  const result = Object.create(null);
+  for (const key of Object.keys(map)) {
+    result[key] = fn(map[key], key);
+  }
+  return result;
+}
+
+// node_modules/graphql/jsutils/naturalCompare.mjs
+function naturalCompare(aStr, bStr) {
+  let aIndex = 0;
+  let bIndex = 0;
+  while (aIndex < aStr.length && bIndex < bStr.length) {
+    let aChar = aStr.charCodeAt(aIndex);
+    let bChar = bStr.charCodeAt(bIndex);
+    if (isDigit2(aChar) && isDigit2(bChar)) {
+      let aNum = 0;
+      do {
+        ++aIndex;
+        aNum = aNum * 10 + aChar - DIGIT_0;
+        aChar = aStr.charCodeAt(aIndex);
+      } while (isDigit2(aChar) && aNum > 0);
+      let bNum = 0;
+      do {
+        ++bIndex;
+        bNum = bNum * 10 + bChar - DIGIT_0;
+        bChar = bStr.charCodeAt(bIndex);
+      } while (isDigit2(bChar) && bNum > 0);
+      if (aNum < bNum) {
+        return -1;
+      }
+      if (aNum > bNum) {
+        return 1;
+      }
+    } else {
+      if (aChar < bChar) {
+        return -1;
+      }
+      if (aChar > bChar) {
+        return 1;
+      }
+      ++aIndex;
+      ++bIndex;
+    }
+  }
+  return aStr.length - bStr.length;
+}
+var DIGIT_0 = 48;
+var DIGIT_9 = 57;
+function isDigit2(code) {
+  return !isNaN(code) && DIGIT_0 <= code && code <= DIGIT_9;
+}
+
+// node_modules/graphql/jsutils/suggestionList.mjs
+function suggestionList(input, options) {
+  const optionsByDistance = Object.create(null);
+  const lexicalDistance = new LexicalDistance(input);
+  const threshold = Math.floor(input.length * 0.4) + 1;
+  for (const option of options) {
+    const distance = lexicalDistance.measure(option, threshold);
+    if (distance !== undefined) {
+      optionsByDistance[option] = distance;
+    }
+  }
+  return Object.keys(optionsByDistance).sort((a, b) => {
+    const distanceDiff = optionsByDistance[a] - optionsByDistance[b];
+    return distanceDiff !== 0 ? distanceDiff : naturalCompare(a, b);
+  });
+}
+
+class LexicalDistance {
+  constructor(input) {
+    this._input = input;
+    this._inputLowerCase = input.toLowerCase();
+    this._inputArray = stringToArray(this._inputLowerCase);
+    this._rows = [
+      new Array(input.length + 1).fill(0),
+      new Array(input.length + 1).fill(0),
+      new Array(input.length + 1).fill(0)
+    ];
+  }
+  measure(option, threshold) {
+    if (this._input === option) {
+      return 0;
+    }
+    const optionLowerCase = option.toLowerCase();
+    if (this._inputLowerCase === optionLowerCase) {
+      return 1;
+    }
+    let a = stringToArray(optionLowerCase);
+    let b = this._inputArray;
+    if (a.length < b.length) {
+      const tmp = a;
+      a = b;
+      b = tmp;
+    }
+    const aLength = a.length;
+    const bLength = b.length;
+    if (aLength - bLength > threshold) {
+      return;
+    }
+    const rows = this._rows;
+    for (let j = 0;j <= bLength; j++) {
+      rows[0][j] = j;
+    }
+    for (let i = 1;i <= aLength; i++) {
+      const upRow = rows[(i - 1) % 3];
+      const currentRow = rows[i % 3];
+      let smallestCell = currentRow[0] = i;
+      for (let j = 1;j <= bLength; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        let currentCell = Math.min(upRow[j] + 1, currentRow[j - 1] + 1, upRow[j - 1] + cost);
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+          const doubleDiagonalCell = rows[(i - 2) % 3][j - 2];
+          currentCell = Math.min(currentCell, doubleDiagonalCell + 1);
+        }
+        if (currentCell < smallestCell) {
+          smallestCell = currentCell;
+        }
+        currentRow[j] = currentCell;
+      }
+      if (smallestCell > threshold) {
+        return;
+      }
+    }
+    const distance = rows[aLength % 3][bLength];
+    return distance <= threshold ? distance : undefined;
+  }
+}
+function stringToArray(str) {
+  const strLength = str.length;
+  const array = new Array(strLength);
+  for (let i = 0;i < strLength; ++i) {
+    array[i] = str.charCodeAt(i);
+  }
+  return array;
+}
+
+// node_modules/graphql/jsutils/toObjMap.mjs
+function toObjMap(obj) {
+  if (obj == null) {
+    return Object.create(null);
+  }
+  if (Object.getPrototypeOf(obj) === null) {
+    return obj;
+  }
+  const map = Object.create(null);
+  for (const [key, value] of Object.entries(obj)) {
+    map[key] = value;
+  }
+  return map;
 }
 
 // node_modules/graphql/language/printString.mjs
@@ -5311,29 +6699,58 @@ function isRequiredInputField(field) {
   return isNonNullType(field.type) && field.defaultValue === undefined;
 }
 
-// node_modules/graphql/language/directiveLocation.mjs
-var DirectiveLocation;
-(function(DirectiveLocation2) {
-  DirectiveLocation2["QUERY"] = "QUERY";
-  DirectiveLocation2["MUTATION"] = "MUTATION";
-  DirectiveLocation2["SUBSCRIPTION"] = "SUBSCRIPTION";
-  DirectiveLocation2["FIELD"] = "FIELD";
-  DirectiveLocation2["FRAGMENT_DEFINITION"] = "FRAGMENT_DEFINITION";
-  DirectiveLocation2["FRAGMENT_SPREAD"] = "FRAGMENT_SPREAD";
-  DirectiveLocation2["INLINE_FRAGMENT"] = "INLINE_FRAGMENT";
-  DirectiveLocation2["VARIABLE_DEFINITION"] = "VARIABLE_DEFINITION";
-  DirectiveLocation2["SCHEMA"] = "SCHEMA";
-  DirectiveLocation2["SCALAR"] = "SCALAR";
-  DirectiveLocation2["OBJECT"] = "OBJECT";
-  DirectiveLocation2["FIELD_DEFINITION"] = "FIELD_DEFINITION";
-  DirectiveLocation2["ARGUMENT_DEFINITION"] = "ARGUMENT_DEFINITION";
-  DirectiveLocation2["INTERFACE"] = "INTERFACE";
-  DirectiveLocation2["UNION"] = "UNION";
-  DirectiveLocation2["ENUM"] = "ENUM";
-  DirectiveLocation2["ENUM_VALUE"] = "ENUM_VALUE";
-  DirectiveLocation2["INPUT_OBJECT"] = "INPUT_OBJECT";
-  DirectiveLocation2["INPUT_FIELD_DEFINITION"] = "INPUT_FIELD_DEFINITION";
-})(DirectiveLocation || (DirectiveLocation = {}));
+// node_modules/graphql/utilities/typeComparators.mjs
+function isEqualType(typeA, typeB) {
+  if (typeA === typeB) {
+    return true;
+  }
+  if (isNonNullType(typeA) && isNonNullType(typeB)) {
+    return isEqualType(typeA.ofType, typeB.ofType);
+  }
+  if (isListType(typeA) && isListType(typeB)) {
+    return isEqualType(typeA.ofType, typeB.ofType);
+  }
+  return false;
+}
+function isTypeSubTypeOf(schema, maybeSubType, superType) {
+  if (maybeSubType === superType) {
+    return true;
+  }
+  if (isNonNullType(superType)) {
+    if (isNonNullType(maybeSubType)) {
+      return isTypeSubTypeOf(schema, maybeSubType.ofType, superType.ofType);
+    }
+    return false;
+  }
+  if (isNonNullType(maybeSubType)) {
+    return isTypeSubTypeOf(schema, maybeSubType.ofType, superType);
+  }
+  if (isListType(superType)) {
+    if (isListType(maybeSubType)) {
+      return isTypeSubTypeOf(schema, maybeSubType.ofType, superType.ofType);
+    }
+    return false;
+  }
+  if (isListType(maybeSubType)) {
+    return false;
+  }
+  return isAbstractType(superType) && (isInterfaceType(maybeSubType) || isObjectType(maybeSubType)) && schema.isSubType(superType, maybeSubType);
+}
+function doTypesOverlap(schema, typeA, typeB) {
+  if (typeA === typeB) {
+    return true;
+  }
+  if (isAbstractType(typeA)) {
+    if (isAbstractType(typeB)) {
+      return schema.getPossibleTypes(typeA).some((type) => schema.isSubType(typeB, type));
+    }
+    return schema.isSubType(typeA, typeB);
+  }
+  if (isAbstractType(typeB)) {
+    return schema.isSubType(typeB, typeA);
+  }
+  return false;
+}
 
 // node_modules/graphql/type/scalars.mjs
 var GRAPHQL_MAX_INT = 2147483647;
@@ -6416,58 +7833,6 @@ function collectReferencedTypes(type, typeSet) {
   }
   return typeSet;
 }
-// node_modules/graphql/utilities/typeComparators.mjs
-function isEqualType(typeA, typeB) {
-  if (typeA === typeB) {
-    return true;
-  }
-  if (isNonNullType(typeA) && isNonNullType(typeB)) {
-    return isEqualType(typeA.ofType, typeB.ofType);
-  }
-  if (isListType(typeA) && isListType(typeB)) {
-    return isEqualType(typeA.ofType, typeB.ofType);
-  }
-  return false;
-}
-function isTypeSubTypeOf(schema, maybeSubType, superType) {
-  if (maybeSubType === superType) {
-    return true;
-  }
-  if (isNonNullType(superType)) {
-    if (isNonNullType(maybeSubType)) {
-      return isTypeSubTypeOf(schema, maybeSubType.ofType, superType.ofType);
-    }
-    return false;
-  }
-  if (isNonNullType(maybeSubType)) {
-    return isTypeSubTypeOf(schema, maybeSubType.ofType, superType);
-  }
-  if (isListType(superType)) {
-    if (isListType(maybeSubType)) {
-      return isTypeSubTypeOf(schema, maybeSubType.ofType, superType.ofType);
-    }
-    return false;
-  }
-  if (isListType(maybeSubType)) {
-    return false;
-  }
-  return isAbstractType(superType) && (isInterfaceType(maybeSubType) || isObjectType(maybeSubType)) && schema.isSubType(superType, maybeSubType);
-}
-function doTypesOverlap(schema, typeA, typeB) {
-  if (typeA === typeB) {
-    return true;
-  }
-  if (isAbstractType(typeA)) {
-    if (isAbstractType(typeB)) {
-      return schema.getPossibleTypes(typeA).some((type) => schema.isSubType(typeB, type));
-    }
-    return schema.isSubType(typeA, typeB);
-  }
-  if (isAbstractType(typeB)) {
-    return schema.isSubType(typeB, typeA);
-  }
-  return false;
-}
 
 // node_modules/graphql/type/validate.mjs
 function validateSchema(schema) {
@@ -6801,1473 +8166,6 @@ function getDeprecatedDirectiveNode(definitionNode) {
   var _definitionNode$direc;
   return definitionNode === null || definitionNode === undefined ? undefined : (_definitionNode$direc = definitionNode.directives) === null || _definitionNode$direc === undefined ? undefined : _definitionNode$direc.find((node) => node.name.value === GraphQLDeprecatedDirective.name);
 }
-// node_modules/graphql/language/source.mjs
-class Source {
-  constructor(body, name = "GraphQL request", locationOffset = {
-    line: 1,
-    column: 1
-  }) {
-    typeof body === "string" || devAssert(false, `Body must be a string. Received: ${inspect(body)}.`);
-    this.body = body;
-    this.name = name;
-    this.locationOffset = locationOffset;
-    this.locationOffset.line > 0 || devAssert(false, "line in locationOffset is 1-indexed and must be positive.");
-    this.locationOffset.column > 0 || devAssert(false, "column in locationOffset is 1-indexed and must be positive.");
-  }
-  get [Symbol.toStringTag]() {
-    return "Source";
-  }
-}
-function isSource(source) {
-  return instanceOf(source, Source);
-}
-// node_modules/graphql/language/tokenKind.mjs
-var TokenKind;
-(function(TokenKind2) {
-  TokenKind2["SOF"] = "<SOF>";
-  TokenKind2["EOF"] = "<EOF>";
-  TokenKind2["BANG"] = "!";
-  TokenKind2["DOLLAR"] = "$";
-  TokenKind2["AMP"] = "&";
-  TokenKind2["PAREN_L"] = "(";
-  TokenKind2["PAREN_R"] = ")";
-  TokenKind2["DOT"] = ".";
-  TokenKind2["SPREAD"] = "...";
-  TokenKind2["COLON"] = ":";
-  TokenKind2["EQUALS"] = "=";
-  TokenKind2["AT"] = "@";
-  TokenKind2["BRACKET_L"] = "[";
-  TokenKind2["BRACKET_R"] = "]";
-  TokenKind2["BRACE_L"] = "{";
-  TokenKind2["PIPE"] = "|";
-  TokenKind2["BRACE_R"] = "}";
-  TokenKind2["NAME"] = "Name";
-  TokenKind2["INT"] = "Int";
-  TokenKind2["FLOAT"] = "Float";
-  TokenKind2["STRING"] = "String";
-  TokenKind2["BLOCK_STRING"] = "BlockString";
-  TokenKind2["COMMENT"] = "Comment";
-})(TokenKind || (TokenKind = {}));
-
-// node_modules/graphql/error/syntaxError.mjs
-function syntaxError(source, position, description) {
-  return new GraphQLError(`Syntax Error: ${description}`, {
-    source,
-    positions: [position]
-  });
-}
-
-// node_modules/graphql/language/lexer.mjs
-class Lexer {
-  constructor(source) {
-    const startOfFileToken = new Token(TokenKind.SOF, 0, 0, 0, 0);
-    this.source = source;
-    this.lastToken = startOfFileToken;
-    this.token = startOfFileToken;
-    this.line = 1;
-    this.lineStart = 0;
-  }
-  get [Symbol.toStringTag]() {
-    return "Lexer";
-  }
-  advance() {
-    this.lastToken = this.token;
-    const token = this.token = this.lookahead();
-    return token;
-  }
-  lookahead() {
-    let token = this.token;
-    if (token.kind !== TokenKind.EOF) {
-      do {
-        if (token.next) {
-          token = token.next;
-        } else {
-          const nextToken = readNextToken(this, token.end);
-          token.next = nextToken;
-          nextToken.prev = token;
-          token = nextToken;
-        }
-      } while (token.kind === TokenKind.COMMENT);
-    }
-    return token;
-  }
-}
-function isPunctuatorTokenKind(kind) {
-  return kind === TokenKind.BANG || kind === TokenKind.DOLLAR || kind === TokenKind.AMP || kind === TokenKind.PAREN_L || kind === TokenKind.PAREN_R || kind === TokenKind.DOT || kind === TokenKind.SPREAD || kind === TokenKind.COLON || kind === TokenKind.EQUALS || kind === TokenKind.AT || kind === TokenKind.BRACKET_L || kind === TokenKind.BRACKET_R || kind === TokenKind.BRACE_L || kind === TokenKind.PIPE || kind === TokenKind.BRACE_R;
-}
-function isUnicodeScalarValue(code) {
-  return code >= 0 && code <= 55295 || code >= 57344 && code <= 1114111;
-}
-function isSupplementaryCodePoint(body, location) {
-  return isLeadingSurrogate(body.charCodeAt(location)) && isTrailingSurrogate(body.charCodeAt(location + 1));
-}
-function isLeadingSurrogate(code) {
-  return code >= 55296 && code <= 56319;
-}
-function isTrailingSurrogate(code) {
-  return code >= 56320 && code <= 57343;
-}
-function printCodePointAt(lexer, location) {
-  const code = lexer.source.body.codePointAt(location);
-  if (code === undefined) {
-    return TokenKind.EOF;
-  } else if (code >= 32 && code <= 126) {
-    const char = String.fromCodePoint(code);
-    return char === '"' ? `'"'` : `"${char}"`;
-  }
-  return "U+" + code.toString(16).toUpperCase().padStart(4, "0");
-}
-function createToken2(lexer, kind, start, end, value) {
-  const line = lexer.line;
-  const col = 1 + start - lexer.lineStart;
-  return new Token(kind, start, end, line, col, value);
-}
-function readNextToken(lexer, start) {
-  const body = lexer.source.body;
-  const bodyLength = body.length;
-  let position = start;
-  while (position < bodyLength) {
-    const code = body.charCodeAt(position);
-    switch (code) {
-      case 65279:
-      case 9:
-      case 32:
-      case 44:
-        ++position;
-        continue;
-      case 10:
-        ++position;
-        ++lexer.line;
-        lexer.lineStart = position;
-        continue;
-      case 13:
-        if (body.charCodeAt(position + 1) === 10) {
-          position += 2;
-        } else {
-          ++position;
-        }
-        ++lexer.line;
-        lexer.lineStart = position;
-        continue;
-      case 35:
-        return readComment(lexer, position);
-      case 33:
-        return createToken2(lexer, TokenKind.BANG, position, position + 1);
-      case 36:
-        return createToken2(lexer, TokenKind.DOLLAR, position, position + 1);
-      case 38:
-        return createToken2(lexer, TokenKind.AMP, position, position + 1);
-      case 40:
-        return createToken2(lexer, TokenKind.PAREN_L, position, position + 1);
-      case 41:
-        return createToken2(lexer, TokenKind.PAREN_R, position, position + 1);
-      case 46:
-        if (body.charCodeAt(position + 1) === 46 && body.charCodeAt(position + 2) === 46) {
-          return createToken2(lexer, TokenKind.SPREAD, position, position + 3);
-        }
-        break;
-      case 58:
-        return createToken2(lexer, TokenKind.COLON, position, position + 1);
-      case 61:
-        return createToken2(lexer, TokenKind.EQUALS, position, position + 1);
-      case 64:
-        return createToken2(lexer, TokenKind.AT, position, position + 1);
-      case 91:
-        return createToken2(lexer, TokenKind.BRACKET_L, position, position + 1);
-      case 93:
-        return createToken2(lexer, TokenKind.BRACKET_R, position, position + 1);
-      case 123:
-        return createToken2(lexer, TokenKind.BRACE_L, position, position + 1);
-      case 124:
-        return createToken2(lexer, TokenKind.PIPE, position, position + 1);
-      case 125:
-        return createToken2(lexer, TokenKind.BRACE_R, position, position + 1);
-      case 34:
-        if (body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34) {
-          return readBlockString(lexer, position);
-        }
-        return readString4(lexer, position);
-    }
-    if (isDigit2(code) || code === 45) {
-      return readNumber2(lexer, position, code);
-    }
-    if (isNameStart(code)) {
-      return readName(lexer, position);
-    }
-    throw syntaxError(lexer.source, position, code === 39 ? `Unexpected single quote character ('), did you mean to use a double quote (")?` : isUnicodeScalarValue(code) || isSupplementaryCodePoint(body, position) ? `Unexpected character: ${printCodePointAt(lexer, position)}.` : `Invalid character: ${printCodePointAt(lexer, position)}.`);
-  }
-  return createToken2(lexer, TokenKind.EOF, bodyLength, bodyLength);
-}
-function readComment(lexer, start) {
-  const body = lexer.source.body;
-  const bodyLength = body.length;
-  let position = start + 1;
-  while (position < bodyLength) {
-    const code = body.charCodeAt(position);
-    if (code === 10 || code === 13) {
-      break;
-    }
-    if (isUnicodeScalarValue(code)) {
-      ++position;
-    } else if (isSupplementaryCodePoint(body, position)) {
-      position += 2;
-    } else {
-      break;
-    }
-  }
-  return createToken2(lexer, TokenKind.COMMENT, start, position, body.slice(start + 1, position));
-}
-function readNumber2(lexer, start, firstCode) {
-  const body = lexer.source.body;
-  let position = start;
-  let code = firstCode;
-  let isFloat = false;
-  if (code === 45) {
-    code = body.charCodeAt(++position);
-  }
-  if (code === 48) {
-    code = body.charCodeAt(++position);
-    if (isDigit2(code)) {
-      throw syntaxError(lexer.source, position, `Invalid number, unexpected digit after 0: ${printCodePointAt(lexer, position)}.`);
-    }
-  } else {
-    position = readDigits(lexer, position, code);
-    code = body.charCodeAt(position);
-  }
-  if (code === 46) {
-    isFloat = true;
-    code = body.charCodeAt(++position);
-    position = readDigits(lexer, position, code);
-    code = body.charCodeAt(position);
-  }
-  if (code === 69 || code === 101) {
-    isFloat = true;
-    code = body.charCodeAt(++position);
-    if (code === 43 || code === 45) {
-      code = body.charCodeAt(++position);
-    }
-    position = readDigits(lexer, position, code);
-    code = body.charCodeAt(position);
-  }
-  if (code === 46 || isNameStart(code)) {
-    throw syntaxError(lexer.source, position, `Invalid number, expected digit but got: ${printCodePointAt(lexer, position)}.`);
-  }
-  return createToken2(lexer, isFloat ? TokenKind.FLOAT : TokenKind.INT, start, position, body.slice(start, position));
-}
-function readDigits(lexer, start, firstCode) {
-  if (!isDigit2(firstCode)) {
-    throw syntaxError(lexer.source, start, `Invalid number, expected digit but got: ${printCodePointAt(lexer, start)}.`);
-  }
-  const body = lexer.source.body;
-  let position = start + 1;
-  while (isDigit2(body.charCodeAt(position))) {
-    ++position;
-  }
-  return position;
-}
-function readString4(lexer, start) {
-  const body = lexer.source.body;
-  const bodyLength = body.length;
-  let position = start + 1;
-  let chunkStart = position;
-  let value = "";
-  while (position < bodyLength) {
-    const code = body.charCodeAt(position);
-    if (code === 34) {
-      value += body.slice(chunkStart, position);
-      return createToken2(lexer, TokenKind.STRING, start, position + 1, value);
-    }
-    if (code === 92) {
-      value += body.slice(chunkStart, position);
-      const escape = body.charCodeAt(position + 1) === 117 ? body.charCodeAt(position + 2) === 123 ? readEscapedUnicodeVariableWidth(lexer, position) : readEscapedUnicodeFixedWidth(lexer, position) : readEscapedCharacter(lexer, position);
-      value += escape.value;
-      position += escape.size;
-      chunkStart = position;
-      continue;
-    }
-    if (code === 10 || code === 13) {
-      break;
-    }
-    if (isUnicodeScalarValue(code)) {
-      ++position;
-    } else if (isSupplementaryCodePoint(body, position)) {
-      position += 2;
-    } else {
-      throw syntaxError(lexer.source, position, `Invalid character within String: ${printCodePointAt(lexer, position)}.`);
-    }
-  }
-  throw syntaxError(lexer.source, position, "Unterminated string.");
-}
-function readEscapedUnicodeVariableWidth(lexer, position) {
-  const body = lexer.source.body;
-  let point = 0;
-  let size = 3;
-  while (size < 12) {
-    const code = body.charCodeAt(position + size++);
-    if (code === 125) {
-      if (size < 5 || !isUnicodeScalarValue(point)) {
-        break;
-      }
-      return {
-        value: String.fromCodePoint(point),
-        size
-      };
-    }
-    point = point << 4 | readHexDigit(code);
-    if (point < 0) {
-      break;
-    }
-  }
-  throw syntaxError(lexer.source, position, `Invalid Unicode escape sequence: "${body.slice(position, position + size)}".`);
-}
-function readEscapedUnicodeFixedWidth(lexer, position) {
-  const body = lexer.source.body;
-  const code = read16BitHexCode(body, position + 2);
-  if (isUnicodeScalarValue(code)) {
-    return {
-      value: String.fromCodePoint(code),
-      size: 6
-    };
-  }
-  if (isLeadingSurrogate(code)) {
-    if (body.charCodeAt(position + 6) === 92 && body.charCodeAt(position + 7) === 117) {
-      const trailingCode = read16BitHexCode(body, position + 8);
-      if (isTrailingSurrogate(trailingCode)) {
-        return {
-          value: String.fromCodePoint(code, trailingCode),
-          size: 12
-        };
-      }
-    }
-  }
-  throw syntaxError(lexer.source, position, `Invalid Unicode escape sequence: "${body.slice(position, position + 6)}".`);
-}
-function read16BitHexCode(body, position) {
-  return readHexDigit(body.charCodeAt(position)) << 12 | readHexDigit(body.charCodeAt(position + 1)) << 8 | readHexDigit(body.charCodeAt(position + 2)) << 4 | readHexDigit(body.charCodeAt(position + 3));
-}
-function readHexDigit(code) {
-  return code >= 48 && code <= 57 ? code - 48 : code >= 65 && code <= 70 ? code - 55 : code >= 97 && code <= 102 ? code - 87 : -1;
-}
-function readEscapedCharacter(lexer, position) {
-  const body = lexer.source.body;
-  const code = body.charCodeAt(position + 1);
-  switch (code) {
-    case 34:
-      return {
-        value: '"',
-        size: 2
-      };
-    case 92:
-      return {
-        value: "\\",
-        size: 2
-      };
-    case 47:
-      return {
-        value: "/",
-        size: 2
-      };
-    case 98:
-      return {
-        value: "\b",
-        size: 2
-      };
-    case 102:
-      return {
-        value: "\f",
-        size: 2
-      };
-    case 110:
-      return {
-        value: `
-`,
-        size: 2
-      };
-    case 114:
-      return {
-        value: "\r",
-        size: 2
-      };
-    case 116:
-      return {
-        value: "\t",
-        size: 2
-      };
-  }
-  throw syntaxError(lexer.source, position, `Invalid character escape sequence: "${body.slice(position, position + 2)}".`);
-}
-function readBlockString(lexer, start) {
-  const body = lexer.source.body;
-  const bodyLength = body.length;
-  let lineStart = lexer.lineStart;
-  let position = start + 3;
-  let chunkStart = position;
-  let currentLine = "";
-  const blockLines = [];
-  while (position < bodyLength) {
-    const code = body.charCodeAt(position);
-    if (code === 34 && body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34) {
-      currentLine += body.slice(chunkStart, position);
-      blockLines.push(currentLine);
-      const token = createToken2(lexer, TokenKind.BLOCK_STRING, start, position + 3, dedentBlockStringLines(blockLines).join(`
-`));
-      lexer.line += blockLines.length - 1;
-      lexer.lineStart = lineStart;
-      return token;
-    }
-    if (code === 92 && body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34 && body.charCodeAt(position + 3) === 34) {
-      currentLine += body.slice(chunkStart, position);
-      chunkStart = position + 1;
-      position += 4;
-      continue;
-    }
-    if (code === 10 || code === 13) {
-      currentLine += body.slice(chunkStart, position);
-      blockLines.push(currentLine);
-      if (code === 13 && body.charCodeAt(position + 1) === 10) {
-        position += 2;
-      } else {
-        ++position;
-      }
-      currentLine = "";
-      chunkStart = position;
-      lineStart = position;
-      continue;
-    }
-    if (isUnicodeScalarValue(code)) {
-      ++position;
-    } else if (isSupplementaryCodePoint(body, position)) {
-      position += 2;
-    } else {
-      throw syntaxError(lexer.source, position, `Invalid character within String: ${printCodePointAt(lexer, position)}.`);
-    }
-  }
-  throw syntaxError(lexer.source, position, "Unterminated string.");
-}
-function readName(lexer, start) {
-  const body = lexer.source.body;
-  const bodyLength = body.length;
-  let position = start + 1;
-  while (position < bodyLength) {
-    const code = body.charCodeAt(position);
-    if (isNameContinue(code)) {
-      ++position;
-    } else {
-      break;
-    }
-  }
-  return createToken2(lexer, TokenKind.NAME, start, position, body.slice(start, position));
-}
-
-// node_modules/graphql/language/parser.mjs
-function parse(source, options) {
-  const parser = new Parser(source, options);
-  const document = parser.parseDocument();
-  Object.defineProperty(document, "tokenCount", {
-    enumerable: false,
-    value: parser.tokenCount
-  });
-  return document;
-}
-class Parser {
-  constructor(source, options = {}) {
-    const { lexer, ..._options } = options;
-    if (lexer) {
-      this._lexer = lexer;
-    } else {
-      const sourceObj = isSource(source) ? source : new Source(source);
-      this._lexer = new Lexer(sourceObj);
-    }
-    this._options = _options;
-    this._tokenCounter = 0;
-  }
-  get tokenCount() {
-    return this._tokenCounter;
-  }
-  parseName() {
-    const token = this.expectToken(TokenKind.NAME);
-    return this.node(token, {
-      kind: Kind.NAME,
-      value: token.value
-    });
-  }
-  parseDocument() {
-    return this.node(this._lexer.token, {
-      kind: Kind.DOCUMENT,
-      definitions: this.many(TokenKind.SOF, this.parseDefinition, TokenKind.EOF)
-    });
-  }
-  parseDefinition() {
-    if (this.peek(TokenKind.BRACE_L)) {
-      return this.parseOperationDefinition();
-    }
-    const hasDescription = this.peekDescription();
-    const keywordToken = hasDescription ? this._lexer.lookahead() : this._lexer.token;
-    if (hasDescription && keywordToken.kind === TokenKind.BRACE_L) {
-      throw syntaxError(this._lexer.source, this._lexer.token.start, "Unexpected description, descriptions are not supported on shorthand queries.");
-    }
-    if (keywordToken.kind === TokenKind.NAME) {
-      switch (keywordToken.value) {
-        case "schema":
-          return this.parseSchemaDefinition();
-        case "scalar":
-          return this.parseScalarTypeDefinition();
-        case "type":
-          return this.parseObjectTypeDefinition();
-        case "interface":
-          return this.parseInterfaceTypeDefinition();
-        case "union":
-          return this.parseUnionTypeDefinition();
-        case "enum":
-          return this.parseEnumTypeDefinition();
-        case "input":
-          return this.parseInputObjectTypeDefinition();
-        case "directive":
-          return this.parseDirectiveDefinition();
-      }
-      switch (keywordToken.value) {
-        case "query":
-        case "mutation":
-        case "subscription":
-          return this.parseOperationDefinition();
-        case "fragment":
-          return this.parseFragmentDefinition();
-      }
-      if (hasDescription) {
-        throw syntaxError(this._lexer.source, this._lexer.token.start, "Unexpected description, only GraphQL definitions support descriptions.");
-      }
-      switch (keywordToken.value) {
-        case "extend":
-          return this.parseTypeSystemExtension();
-      }
-    }
-    throw this.unexpected(keywordToken);
-  }
-  parseOperationDefinition() {
-    const start = this._lexer.token;
-    if (this.peek(TokenKind.BRACE_L)) {
-      return this.node(start, {
-        kind: Kind.OPERATION_DEFINITION,
-        operation: OperationTypeNode.QUERY,
-        description: undefined,
-        name: undefined,
-        variableDefinitions: [],
-        directives: [],
-        selectionSet: this.parseSelectionSet()
-      });
-    }
-    const description = this.parseDescription();
-    const operation = this.parseOperationType();
-    let name;
-    if (this.peek(TokenKind.NAME)) {
-      name = this.parseName();
-    }
-    return this.node(start, {
-      kind: Kind.OPERATION_DEFINITION,
-      operation,
-      description,
-      name,
-      variableDefinitions: this.parseVariableDefinitions(),
-      directives: this.parseDirectives(false),
-      selectionSet: this.parseSelectionSet()
-    });
-  }
-  parseOperationType() {
-    const operationToken = this.expectToken(TokenKind.NAME);
-    switch (operationToken.value) {
-      case "query":
-        return OperationTypeNode.QUERY;
-      case "mutation":
-        return OperationTypeNode.MUTATION;
-      case "subscription":
-        return OperationTypeNode.SUBSCRIPTION;
-    }
-    throw this.unexpected(operationToken);
-  }
-  parseVariableDefinitions() {
-    return this.optionalMany(TokenKind.PAREN_L, this.parseVariableDefinition, TokenKind.PAREN_R);
-  }
-  parseVariableDefinition() {
-    return this.node(this._lexer.token, {
-      kind: Kind.VARIABLE_DEFINITION,
-      description: this.parseDescription(),
-      variable: this.parseVariable(),
-      type: (this.expectToken(TokenKind.COLON), this.parseTypeReference()),
-      defaultValue: this.expectOptionalToken(TokenKind.EQUALS) ? this.parseConstValueLiteral() : undefined,
-      directives: this.parseConstDirectives()
-    });
-  }
-  parseVariable() {
-    const start = this._lexer.token;
-    this.expectToken(TokenKind.DOLLAR);
-    return this.node(start, {
-      kind: Kind.VARIABLE,
-      name: this.parseName()
-    });
-  }
-  parseSelectionSet() {
-    return this.node(this._lexer.token, {
-      kind: Kind.SELECTION_SET,
-      selections: this.many(TokenKind.BRACE_L, this.parseSelection, TokenKind.BRACE_R)
-    });
-  }
-  parseSelection() {
-    return this.peek(TokenKind.SPREAD) ? this.parseFragment() : this.parseField();
-  }
-  parseField() {
-    const start = this._lexer.token;
-    const nameOrAlias = this.parseName();
-    let alias;
-    let name;
-    if (this.expectOptionalToken(TokenKind.COLON)) {
-      alias = nameOrAlias;
-      name = this.parseName();
-    } else {
-      name = nameOrAlias;
-    }
-    return this.node(start, {
-      kind: Kind.FIELD,
-      alias,
-      name,
-      arguments: this.parseArguments(false),
-      directives: this.parseDirectives(false),
-      selectionSet: this.peek(TokenKind.BRACE_L) ? this.parseSelectionSet() : undefined
-    });
-  }
-  parseArguments(isConst) {
-    const item = isConst ? this.parseConstArgument : this.parseArgument;
-    return this.optionalMany(TokenKind.PAREN_L, item, TokenKind.PAREN_R);
-  }
-  parseArgument(isConst = false) {
-    const start = this._lexer.token;
-    const name = this.parseName();
-    this.expectToken(TokenKind.COLON);
-    return this.node(start, {
-      kind: Kind.ARGUMENT,
-      name,
-      value: this.parseValueLiteral(isConst)
-    });
-  }
-  parseConstArgument() {
-    return this.parseArgument(true);
-  }
-  parseFragment() {
-    const start = this._lexer.token;
-    this.expectToken(TokenKind.SPREAD);
-    const hasTypeCondition = this.expectOptionalKeyword("on");
-    if (!hasTypeCondition && this.peek(TokenKind.NAME)) {
-      return this.node(start, {
-        kind: Kind.FRAGMENT_SPREAD,
-        name: this.parseFragmentName(),
-        directives: this.parseDirectives(false)
-      });
-    }
-    return this.node(start, {
-      kind: Kind.INLINE_FRAGMENT,
-      typeCondition: hasTypeCondition ? this.parseNamedType() : undefined,
-      directives: this.parseDirectives(false),
-      selectionSet: this.parseSelectionSet()
-    });
-  }
-  parseFragmentDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("fragment");
-    if (this._options.allowLegacyFragmentVariables === true) {
-      return this.node(start, {
-        kind: Kind.FRAGMENT_DEFINITION,
-        description,
-        name: this.parseFragmentName(),
-        variableDefinitions: this.parseVariableDefinitions(),
-        typeCondition: (this.expectKeyword("on"), this.parseNamedType()),
-        directives: this.parseDirectives(false),
-        selectionSet: this.parseSelectionSet()
-      });
-    }
-    return this.node(start, {
-      kind: Kind.FRAGMENT_DEFINITION,
-      description,
-      name: this.parseFragmentName(),
-      typeCondition: (this.expectKeyword("on"), this.parseNamedType()),
-      directives: this.parseDirectives(false),
-      selectionSet: this.parseSelectionSet()
-    });
-  }
-  parseFragmentName() {
-    if (this._lexer.token.value === "on") {
-      throw this.unexpected();
-    }
-    return this.parseName();
-  }
-  parseValueLiteral(isConst) {
-    const token = this._lexer.token;
-    switch (token.kind) {
-      case TokenKind.BRACKET_L:
-        return this.parseList(isConst);
-      case TokenKind.BRACE_L:
-        return this.parseObject(isConst);
-      case TokenKind.INT:
-        this.advanceLexer();
-        return this.node(token, {
-          kind: Kind.INT,
-          value: token.value
-        });
-      case TokenKind.FLOAT:
-        this.advanceLexer();
-        return this.node(token, {
-          kind: Kind.FLOAT,
-          value: token.value
-        });
-      case TokenKind.STRING:
-      case TokenKind.BLOCK_STRING:
-        return this.parseStringLiteral();
-      case TokenKind.NAME:
-        this.advanceLexer();
-        switch (token.value) {
-          case "true":
-            return this.node(token, {
-              kind: Kind.BOOLEAN,
-              value: true
-            });
-          case "false":
-            return this.node(token, {
-              kind: Kind.BOOLEAN,
-              value: false
-            });
-          case "null":
-            return this.node(token, {
-              kind: Kind.NULL
-            });
-          default:
-            return this.node(token, {
-              kind: Kind.ENUM,
-              value: token.value
-            });
-        }
-      case TokenKind.DOLLAR:
-        if (isConst) {
-          this.expectToken(TokenKind.DOLLAR);
-          if (this._lexer.token.kind === TokenKind.NAME) {
-            const varName = this._lexer.token.value;
-            throw syntaxError(this._lexer.source, token.start, `Unexpected variable "$${varName}" in constant value.`);
-          } else {
-            throw this.unexpected(token);
-          }
-        }
-        return this.parseVariable();
-      default:
-        throw this.unexpected();
-    }
-  }
-  parseConstValueLiteral() {
-    return this.parseValueLiteral(true);
-  }
-  parseStringLiteral() {
-    const token = this._lexer.token;
-    this.advanceLexer();
-    return this.node(token, {
-      kind: Kind.STRING,
-      value: token.value,
-      block: token.kind === TokenKind.BLOCK_STRING
-    });
-  }
-  parseList(isConst) {
-    const item = () => this.parseValueLiteral(isConst);
-    return this.node(this._lexer.token, {
-      kind: Kind.LIST,
-      values: this.any(TokenKind.BRACKET_L, item, TokenKind.BRACKET_R)
-    });
-  }
-  parseObject(isConst) {
-    const item = () => this.parseObjectField(isConst);
-    return this.node(this._lexer.token, {
-      kind: Kind.OBJECT,
-      fields: this.any(TokenKind.BRACE_L, item, TokenKind.BRACE_R)
-    });
-  }
-  parseObjectField(isConst) {
-    const start = this._lexer.token;
-    const name = this.parseName();
-    this.expectToken(TokenKind.COLON);
-    return this.node(start, {
-      kind: Kind.OBJECT_FIELD,
-      name,
-      value: this.parseValueLiteral(isConst)
-    });
-  }
-  parseDirectives(isConst) {
-    const directives = [];
-    while (this.peek(TokenKind.AT)) {
-      directives.push(this.parseDirective(isConst));
-    }
-    return directives;
-  }
-  parseConstDirectives() {
-    return this.parseDirectives(true);
-  }
-  parseDirective(isConst) {
-    const start = this._lexer.token;
-    this.expectToken(TokenKind.AT);
-    return this.node(start, {
-      kind: Kind.DIRECTIVE,
-      name: this.parseName(),
-      arguments: this.parseArguments(isConst)
-    });
-  }
-  parseTypeReference() {
-    const start = this._lexer.token;
-    let type;
-    if (this.expectOptionalToken(TokenKind.BRACKET_L)) {
-      const innerType = this.parseTypeReference();
-      this.expectToken(TokenKind.BRACKET_R);
-      type = this.node(start, {
-        kind: Kind.LIST_TYPE,
-        type: innerType
-      });
-    } else {
-      type = this.parseNamedType();
-    }
-    if (this.expectOptionalToken(TokenKind.BANG)) {
-      return this.node(start, {
-        kind: Kind.NON_NULL_TYPE,
-        type
-      });
-    }
-    return type;
-  }
-  parseNamedType() {
-    return this.node(this._lexer.token, {
-      kind: Kind.NAMED_TYPE,
-      name: this.parseName()
-    });
-  }
-  peekDescription() {
-    return this.peek(TokenKind.STRING) || this.peek(TokenKind.BLOCK_STRING);
-  }
-  parseDescription() {
-    if (this.peekDescription()) {
-      return this.parseStringLiteral();
-    }
-  }
-  parseSchemaDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("schema");
-    const directives = this.parseConstDirectives();
-    const operationTypes = this.many(TokenKind.BRACE_L, this.parseOperationTypeDefinition, TokenKind.BRACE_R);
-    return this.node(start, {
-      kind: Kind.SCHEMA_DEFINITION,
-      description,
-      directives,
-      operationTypes
-    });
-  }
-  parseOperationTypeDefinition() {
-    const start = this._lexer.token;
-    const operation = this.parseOperationType();
-    this.expectToken(TokenKind.COLON);
-    const type = this.parseNamedType();
-    return this.node(start, {
-      kind: Kind.OPERATION_TYPE_DEFINITION,
-      operation,
-      type
-    });
-  }
-  parseScalarTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("scalar");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    return this.node(start, {
-      kind: Kind.SCALAR_TYPE_DEFINITION,
-      description,
-      name,
-      directives
-    });
-  }
-  parseObjectTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("type");
-    const name = this.parseName();
-    const interfaces = this.parseImplementsInterfaces();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseFieldsDefinition();
-    return this.node(start, {
-      kind: Kind.OBJECT_TYPE_DEFINITION,
-      description,
-      name,
-      interfaces,
-      directives,
-      fields
-    });
-  }
-  parseImplementsInterfaces() {
-    return this.expectOptionalKeyword("implements") ? this.delimitedMany(TokenKind.AMP, this.parseNamedType) : [];
-  }
-  parseFieldsDefinition() {
-    return this.optionalMany(TokenKind.BRACE_L, this.parseFieldDefinition, TokenKind.BRACE_R);
-  }
-  parseFieldDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    const name = this.parseName();
-    const args = this.parseArgumentDefs();
-    this.expectToken(TokenKind.COLON);
-    const type = this.parseTypeReference();
-    const directives = this.parseConstDirectives();
-    return this.node(start, {
-      kind: Kind.FIELD_DEFINITION,
-      description,
-      name,
-      arguments: args,
-      type,
-      directives
-    });
-  }
-  parseArgumentDefs() {
-    return this.optionalMany(TokenKind.PAREN_L, this.parseInputValueDef, TokenKind.PAREN_R);
-  }
-  parseInputValueDef() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    const name = this.parseName();
-    this.expectToken(TokenKind.COLON);
-    const type = this.parseTypeReference();
-    let defaultValue;
-    if (this.expectOptionalToken(TokenKind.EQUALS)) {
-      defaultValue = this.parseConstValueLiteral();
-    }
-    const directives = this.parseConstDirectives();
-    return this.node(start, {
-      kind: Kind.INPUT_VALUE_DEFINITION,
-      description,
-      name,
-      type,
-      defaultValue,
-      directives
-    });
-  }
-  parseInterfaceTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("interface");
-    const name = this.parseName();
-    const interfaces = this.parseImplementsInterfaces();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseFieldsDefinition();
-    return this.node(start, {
-      kind: Kind.INTERFACE_TYPE_DEFINITION,
-      description,
-      name,
-      interfaces,
-      directives,
-      fields
-    });
-  }
-  parseUnionTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("union");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const types = this.parseUnionMemberTypes();
-    return this.node(start, {
-      kind: Kind.UNION_TYPE_DEFINITION,
-      description,
-      name,
-      directives,
-      types
-    });
-  }
-  parseUnionMemberTypes() {
-    return this.expectOptionalToken(TokenKind.EQUALS) ? this.delimitedMany(TokenKind.PIPE, this.parseNamedType) : [];
-  }
-  parseEnumTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("enum");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const values = this.parseEnumValuesDefinition();
-    return this.node(start, {
-      kind: Kind.ENUM_TYPE_DEFINITION,
-      description,
-      name,
-      directives,
-      values
-    });
-  }
-  parseEnumValuesDefinition() {
-    return this.optionalMany(TokenKind.BRACE_L, this.parseEnumValueDefinition, TokenKind.BRACE_R);
-  }
-  parseEnumValueDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    const name = this.parseEnumValueName();
-    const directives = this.parseConstDirectives();
-    return this.node(start, {
-      kind: Kind.ENUM_VALUE_DEFINITION,
-      description,
-      name,
-      directives
-    });
-  }
-  parseEnumValueName() {
-    if (this._lexer.token.value === "true" || this._lexer.token.value === "false" || this._lexer.token.value === "null") {
-      throw syntaxError(this._lexer.source, this._lexer.token.start, `${getTokenDesc(this._lexer.token)} is reserved and cannot be used for an enum value.`);
-    }
-    return this.parseName();
-  }
-  parseInputObjectTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("input");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseInputFieldsDefinition();
-    return this.node(start, {
-      kind: Kind.INPUT_OBJECT_TYPE_DEFINITION,
-      description,
-      name,
-      directives,
-      fields
-    });
-  }
-  parseInputFieldsDefinition() {
-    return this.optionalMany(TokenKind.BRACE_L, this.parseInputValueDef, TokenKind.BRACE_R);
-  }
-  parseTypeSystemExtension() {
-    const keywordToken = this._lexer.lookahead();
-    if (keywordToken.kind === TokenKind.NAME) {
-      switch (keywordToken.value) {
-        case "schema":
-          return this.parseSchemaExtension();
-        case "scalar":
-          return this.parseScalarTypeExtension();
-        case "type":
-          return this.parseObjectTypeExtension();
-        case "interface":
-          return this.parseInterfaceTypeExtension();
-        case "union":
-          return this.parseUnionTypeExtension();
-        case "enum":
-          return this.parseEnumTypeExtension();
-        case "input":
-          return this.parseInputObjectTypeExtension();
-      }
-    }
-    throw this.unexpected(keywordToken);
-  }
-  parseSchemaExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("schema");
-    const directives = this.parseConstDirectives();
-    const operationTypes = this.optionalMany(TokenKind.BRACE_L, this.parseOperationTypeDefinition, TokenKind.BRACE_R);
-    if (directives.length === 0 && operationTypes.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.SCHEMA_EXTENSION,
-      directives,
-      operationTypes
-    });
-  }
-  parseScalarTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("scalar");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    if (directives.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.SCALAR_TYPE_EXTENSION,
-      name,
-      directives
-    });
-  }
-  parseObjectTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("type");
-    const name = this.parseName();
-    const interfaces = this.parseImplementsInterfaces();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseFieldsDefinition();
-    if (interfaces.length === 0 && directives.length === 0 && fields.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.OBJECT_TYPE_EXTENSION,
-      name,
-      interfaces,
-      directives,
-      fields
-    });
-  }
-  parseInterfaceTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("interface");
-    const name = this.parseName();
-    const interfaces = this.parseImplementsInterfaces();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseFieldsDefinition();
-    if (interfaces.length === 0 && directives.length === 0 && fields.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.INTERFACE_TYPE_EXTENSION,
-      name,
-      interfaces,
-      directives,
-      fields
-    });
-  }
-  parseUnionTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("union");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const types = this.parseUnionMemberTypes();
-    if (directives.length === 0 && types.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.UNION_TYPE_EXTENSION,
-      name,
-      directives,
-      types
-    });
-  }
-  parseEnumTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("enum");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const values = this.parseEnumValuesDefinition();
-    if (directives.length === 0 && values.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.ENUM_TYPE_EXTENSION,
-      name,
-      directives,
-      values
-    });
-  }
-  parseInputObjectTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("input");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseInputFieldsDefinition();
-    if (directives.length === 0 && fields.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.INPUT_OBJECT_TYPE_EXTENSION,
-      name,
-      directives,
-      fields
-    });
-  }
-  parseDirectiveDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("directive");
-    this.expectToken(TokenKind.AT);
-    const name = this.parseName();
-    const args = this.parseArgumentDefs();
-    const repeatable = this.expectOptionalKeyword("repeatable");
-    this.expectKeyword("on");
-    const locations = this.parseDirectiveLocations();
-    return this.node(start, {
-      kind: Kind.DIRECTIVE_DEFINITION,
-      description,
-      name,
-      arguments: args,
-      repeatable,
-      locations
-    });
-  }
-  parseDirectiveLocations() {
-    return this.delimitedMany(TokenKind.PIPE, this.parseDirectiveLocation);
-  }
-  parseDirectiveLocation() {
-    const start = this._lexer.token;
-    const name = this.parseName();
-    if (Object.prototype.hasOwnProperty.call(DirectiveLocation, name.value)) {
-      return name;
-    }
-    throw this.unexpected(start);
-  }
-  parseSchemaCoordinate() {
-    const start = this._lexer.token;
-    const ofDirective = this.expectOptionalToken(TokenKind.AT);
-    const name = this.parseName();
-    let memberName;
-    if (!ofDirective && this.expectOptionalToken(TokenKind.DOT)) {
-      memberName = this.parseName();
-    }
-    let argumentName;
-    if ((ofDirective || memberName) && this.expectOptionalToken(TokenKind.PAREN_L)) {
-      argumentName = this.parseName();
-      this.expectToken(TokenKind.COLON);
-      this.expectToken(TokenKind.PAREN_R);
-    }
-    if (ofDirective) {
-      if (argumentName) {
-        return this.node(start, {
-          kind: Kind.DIRECTIVE_ARGUMENT_COORDINATE,
-          name,
-          argumentName
-        });
-      }
-      return this.node(start, {
-        kind: Kind.DIRECTIVE_COORDINATE,
-        name
-      });
-    } else if (memberName) {
-      if (argumentName) {
-        return this.node(start, {
-          kind: Kind.ARGUMENT_COORDINATE,
-          name,
-          fieldName: memberName,
-          argumentName
-        });
-      }
-      return this.node(start, {
-        kind: Kind.MEMBER_COORDINATE,
-        name,
-        memberName
-      });
-    }
-    return this.node(start, {
-      kind: Kind.TYPE_COORDINATE,
-      name
-    });
-  }
-  node(startToken, node) {
-    if (this._options.noLocation !== true) {
-      node.loc = new Location(startToken, this._lexer.lastToken, this._lexer.source);
-    }
-    return node;
-  }
-  peek(kind) {
-    return this._lexer.token.kind === kind;
-  }
-  expectToken(kind) {
-    const token = this._lexer.token;
-    if (token.kind === kind) {
-      this.advanceLexer();
-      return token;
-    }
-    throw syntaxError(this._lexer.source, token.start, `Expected ${getTokenKindDesc(kind)}, found ${getTokenDesc(token)}.`);
-  }
-  expectOptionalToken(kind) {
-    const token = this._lexer.token;
-    if (token.kind === kind) {
-      this.advanceLexer();
-      return true;
-    }
-    return false;
-  }
-  expectKeyword(value) {
-    const token = this._lexer.token;
-    if (token.kind === TokenKind.NAME && token.value === value) {
-      this.advanceLexer();
-    } else {
-      throw syntaxError(this._lexer.source, token.start, `Expected "${value}", found ${getTokenDesc(token)}.`);
-    }
-  }
-  expectOptionalKeyword(value) {
-    const token = this._lexer.token;
-    if (token.kind === TokenKind.NAME && token.value === value) {
-      this.advanceLexer();
-      return true;
-    }
-    return false;
-  }
-  unexpected(atToken) {
-    const token = atToken !== null && atToken !== undefined ? atToken : this._lexer.token;
-    return syntaxError(this._lexer.source, token.start, `Unexpected ${getTokenDesc(token)}.`);
-  }
-  any(openKind, parseFn, closeKind) {
-    this.expectToken(openKind);
-    const nodes = [];
-    while (!this.expectOptionalToken(closeKind)) {
-      nodes.push(parseFn.call(this));
-    }
-    return nodes;
-  }
-  optionalMany(openKind, parseFn, closeKind) {
-    if (this.expectOptionalToken(openKind)) {
-      const nodes = [];
-      do {
-        nodes.push(parseFn.call(this));
-      } while (!this.expectOptionalToken(closeKind));
-      return nodes;
-    }
-    return [];
-  }
-  many(openKind, parseFn, closeKind) {
-    this.expectToken(openKind);
-    const nodes = [];
-    do {
-      nodes.push(parseFn.call(this));
-    } while (!this.expectOptionalToken(closeKind));
-    return nodes;
-  }
-  delimitedMany(delimiterKind, parseFn) {
-    this.expectOptionalToken(delimiterKind);
-    const nodes = [];
-    do {
-      nodes.push(parseFn.call(this));
-    } while (this.expectOptionalToken(delimiterKind));
-    return nodes;
-  }
-  advanceLexer() {
-    const { maxTokens } = this._options;
-    const token = this._lexer.advance();
-    if (token.kind !== TokenKind.EOF) {
-      ++this._tokenCounter;
-      if (maxTokens !== undefined && this._tokenCounter > maxTokens) {
-        throw syntaxError(this._lexer.source, token.start, `Document contains more that ${maxTokens} tokens. Parsing aborted.`);
-      }
-    }
-  }
-}
-function getTokenDesc(token) {
-  const value = token.value;
-  return getTokenKindDesc(token.kind) + (value != null ? ` "${value}"` : "");
-}
-function getTokenKindDesc(kind) {
-  return isPunctuatorTokenKind(kind) ? `"${kind}"` : kind;
-}
-// node_modules/graphql/language/predicates.mjs
-function isExecutableDefinitionNode(node) {
-  return node.kind === Kind.OPERATION_DEFINITION || node.kind === Kind.FRAGMENT_DEFINITION;
-}
-function isTypeSystemDefinitionNode(node) {
-  return node.kind === Kind.SCHEMA_DEFINITION || isTypeDefinitionNode(node) || node.kind === Kind.DIRECTIVE_DEFINITION;
-}
-function isTypeDefinitionNode(node) {
-  return node.kind === Kind.SCALAR_TYPE_DEFINITION || node.kind === Kind.OBJECT_TYPE_DEFINITION || node.kind === Kind.INTERFACE_TYPE_DEFINITION || node.kind === Kind.UNION_TYPE_DEFINITION || node.kind === Kind.ENUM_TYPE_DEFINITION || node.kind === Kind.INPUT_OBJECT_TYPE_DEFINITION;
-}
-function isTypeSystemExtensionNode(node) {
-  return node.kind === Kind.SCHEMA_EXTENSION || isTypeExtensionNode(node);
-}
-function isTypeExtensionNode(node) {
-  return node.kind === Kind.SCALAR_TYPE_EXTENSION || node.kind === Kind.OBJECT_TYPE_EXTENSION || node.kind === Kind.INTERFACE_TYPE_EXTENSION || node.kind === Kind.UNION_TYPE_EXTENSION || node.kind === Kind.ENUM_TYPE_EXTENSION || node.kind === Kind.INPUT_OBJECT_TYPE_EXTENSION;
-}
-// node_modules/graphql/jsutils/Path.mjs
-function addPath(prev, key, typename) {
-  return {
-    prev,
-    key,
-    typename
-  };
-}
-function pathToArray(path) {
-  const flattened = [];
-  let curr = path;
-  while (curr) {
-    flattened.push(curr.key);
-    curr = curr.prev;
-  }
-  return flattened.reverse();
-}
-
-// node_modules/graphql/jsutils/isPromise.mjs
-function isPromise(value) {
-  return typeof (value === null || value === undefined ? undefined : value.then) === "function";
-}
-
-// node_modules/graphql/jsutils/memoize3.mjs
-function memoize3(fn) {
-  let cache0;
-  return function memoized(a1, a2, a3) {
-    if (cache0 === undefined) {
-      cache0 = new WeakMap;
-    }
-    let cache1 = cache0.get(a1);
-    if (cache1 === undefined) {
-      cache1 = new WeakMap;
-      cache0.set(a1, cache1);
-    }
-    let cache2 = cache1.get(a2);
-    if (cache2 === undefined) {
-      cache2 = new WeakMap;
-      cache1.set(a2, cache2);
-    }
-    let fnResult = cache2.get(a3);
-    if (fnResult === undefined) {
-      fnResult = fn(a1, a2, a3);
-      cache2.set(a3, fnResult);
-    }
-    return fnResult;
-  };
-}
-
-// node_modules/graphql/jsutils/promiseForObject.mjs
-function promiseForObject(object) {
-  return Promise.all(Object.values(object)).then((resolvedValues) => {
-    const resolvedObject = Object.create(null);
-    for (const [i, key] of Object.keys(object).entries()) {
-      resolvedObject[key] = resolvedValues[i];
-    }
-    return resolvedObject;
-  });
-}
-
-// node_modules/graphql/jsutils/promiseReduce.mjs
-function promiseReduce(values, callbackFn, initialValue) {
-  let accumulator = initialValue;
-  for (const value of values) {
-    accumulator = isPromise(accumulator) ? accumulator.then((resolved) => callbackFn(resolved, value)) : callbackFn(accumulator, value);
-  }
-  return accumulator;
-}
-
-// node_modules/graphql/jsutils/toError.mjs
-function toError(thrownValue) {
-  return thrownValue instanceof Error ? thrownValue : new NonErrorThrown(thrownValue);
-}
-
-class NonErrorThrown extends Error {
-  constructor(thrownValue) {
-    super("Unexpected error value: " + inspect(thrownValue));
-    this.name = "NonErrorThrown";
-    this.thrownValue = thrownValue;
-  }
-}
-
-// node_modules/graphql/error/locatedError.mjs
-function locatedError(rawOriginalError, nodes, path) {
-  var _nodes;
-  const originalError = toError(rawOriginalError);
-  if (isLocatedGraphQLError(originalError)) {
-    return originalError;
-  }
-  return new GraphQLError(originalError.message, {
-    nodes: (_nodes = originalError.nodes) !== null && _nodes !== undefined ? _nodes : nodes,
-    source: originalError.source,
-    positions: originalError.positions,
-    path,
-    originalError
-  });
-}
-function isLocatedGraphQLError(error) {
-  return Array.isArray(error.path);
-}
 
 // node_modules/graphql/utilities/typeFromAST.mjs
 function typeFromAST(schema, typeNode) {
@@ -8285,969 +8183,6 @@ function typeFromAST(schema, typeNode) {
   }
 }
 
-// node_modules/graphql/jsutils/printPathArray.mjs
-function printPathArray(path) {
-  return path.map((key) => typeof key === "number" ? "[" + key.toString() + "]" : "." + key).join("");
-}
-
-// node_modules/graphql/utilities/coerceInputValue.mjs
-function coerceInputValue(inputValue, type, onError = defaultOnError) {
-  return coerceInputValueImpl(inputValue, type, onError, undefined);
-}
-function defaultOnError(path, invalidValue, error) {
-  let errorPrefix = "Invalid value " + inspect(invalidValue);
-  if (path.length > 0) {
-    errorPrefix += ` at "value${printPathArray(path)}"`;
-  }
-  error.message = errorPrefix + ": " + error.message;
-  throw error;
-}
-function coerceInputValueImpl(inputValue, type, onError, path) {
-  if (isNonNullType(type)) {
-    if (inputValue != null) {
-      return coerceInputValueImpl(inputValue, type.ofType, onError, path);
-    }
-    onError(pathToArray(path), inputValue, new GraphQLError(`Expected non-nullable type "${inspect(type)}" not to be null.`));
-    return;
-  }
-  if (inputValue == null) {
-    return null;
-  }
-  if (isListType(type)) {
-    const itemType = type.ofType;
-    if (isIterableObject(inputValue)) {
-      return Array.from(inputValue, (itemValue, index) => {
-        const itemPath = addPath(path, index, undefined);
-        return coerceInputValueImpl(itemValue, itemType, onError, itemPath);
-      });
-    }
-    return [coerceInputValueImpl(inputValue, itemType, onError, path)];
-  }
-  if (isInputObjectType(type)) {
-    if (!isObjectLike(inputValue) || Array.isArray(inputValue)) {
-      onError(pathToArray(path), inputValue, new GraphQLError(`Expected type "${type.name}" to be an object.`));
-      return;
-    }
-    const coercedValue = {};
-    const fieldDefs = type.getFields();
-    for (const field of Object.values(fieldDefs)) {
-      const fieldValue = inputValue[field.name];
-      if (fieldValue === undefined) {
-        if (field.defaultValue !== undefined) {
-          coercedValue[field.name] = field.defaultValue;
-        } else if (isNonNullType(field.type)) {
-          const typeStr = inspect(field.type);
-          onError(pathToArray(path), inputValue, new GraphQLError(`Field "${field.name}" of required type "${typeStr}" was not provided.`));
-        }
-        continue;
-      }
-      coercedValue[field.name] = coerceInputValueImpl(fieldValue, field.type, onError, addPath(path, field.name, type.name));
-    }
-    for (const fieldName of Object.keys(inputValue)) {
-      if (!fieldDefs[fieldName]) {
-        const suggestions = suggestionList(fieldName, Object.keys(type.getFields()));
-        onError(pathToArray(path), inputValue, new GraphQLError(`Field "${fieldName}" is not defined by type "${type.name}".` + didYouMean(suggestions)));
-      }
-    }
-    if (type.isOneOf) {
-      const keys = Object.keys(coercedValue);
-      if (keys.length !== 1) {
-        onError(pathToArray(path), inputValue, new GraphQLError(`Exactly one key must be specified for OneOf type "${type.name}".`));
-      }
-      const key = keys[0];
-      const value = coercedValue[key];
-      if (value === null) {
-        onError(pathToArray(path).concat(key), value, new GraphQLError(`Field "${key}" must be non-null.`));
-      }
-    }
-    return coercedValue;
-  }
-  if (isLeafType(type)) {
-    let parseResult;
-    try {
-      parseResult = type.parseValue(inputValue);
-    } catch (error) {
-      if (error instanceof GraphQLError) {
-        onError(pathToArray(path), inputValue, error);
-      } else {
-        onError(pathToArray(path), inputValue, new GraphQLError(`Expected type "${type.name}". ` + error.message, {
-          originalError: error
-        }));
-      }
-      return;
-    }
-    if (parseResult === undefined) {
-      onError(pathToArray(path), inputValue, new GraphQLError(`Expected type "${type.name}".`));
-    }
-    return parseResult;
-  }
-  invariant(false, "Unexpected input type: " + inspect(type));
-}
-
-// node_modules/graphql/utilities/valueFromAST.mjs
-function valueFromAST(valueNode, type, variables) {
-  if (!valueNode) {
-    return;
-  }
-  if (valueNode.kind === Kind.VARIABLE) {
-    const variableName = valueNode.name.value;
-    if (variables == null || variables[variableName] === undefined) {
-      return;
-    }
-    const variableValue = variables[variableName];
-    if (variableValue === null && isNonNullType(type)) {
-      return;
-    }
-    return variableValue;
-  }
-  if (isNonNullType(type)) {
-    if (valueNode.kind === Kind.NULL) {
-      return;
-    }
-    return valueFromAST(valueNode, type.ofType, variables);
-  }
-  if (valueNode.kind === Kind.NULL) {
-    return null;
-  }
-  if (isListType(type)) {
-    const itemType = type.ofType;
-    if (valueNode.kind === Kind.LIST) {
-      const coercedValues = [];
-      for (const itemNode of valueNode.values) {
-        if (isMissingVariable(itemNode, variables)) {
-          if (isNonNullType(itemType)) {
-            return;
-          }
-          coercedValues.push(null);
-        } else {
-          const itemValue = valueFromAST(itemNode, itemType, variables);
-          if (itemValue === undefined) {
-            return;
-          }
-          coercedValues.push(itemValue);
-        }
-      }
-      return coercedValues;
-    }
-    const coercedValue = valueFromAST(valueNode, itemType, variables);
-    if (coercedValue === undefined) {
-      return;
-    }
-    return [coercedValue];
-  }
-  if (isInputObjectType(type)) {
-    if (valueNode.kind !== Kind.OBJECT) {
-      return;
-    }
-    const coercedObj = Object.create(null);
-    const fieldNodes = keyMap(valueNode.fields, (field) => field.name.value);
-    for (const field of Object.values(type.getFields())) {
-      const fieldNode = fieldNodes[field.name];
-      if (!fieldNode || isMissingVariable(fieldNode.value, variables)) {
-        if (field.defaultValue !== undefined) {
-          coercedObj[field.name] = field.defaultValue;
-        } else if (isNonNullType(field.type)) {
-          return;
-        }
-        continue;
-      }
-      const fieldValue = valueFromAST(fieldNode.value, field.type, variables);
-      if (fieldValue === undefined) {
-        return;
-      }
-      coercedObj[field.name] = fieldValue;
-    }
-    if (type.isOneOf) {
-      const keys = Object.keys(coercedObj);
-      if (keys.length !== 1) {
-        return;
-      }
-      if (coercedObj[keys[0]] === null) {
-        return;
-      }
-    }
-    return coercedObj;
-  }
-  if (isLeafType(type)) {
-    let result;
-    try {
-      result = type.parseLiteral(valueNode, variables);
-    } catch (_error) {
-      return;
-    }
-    if (result === undefined) {
-      return;
-    }
-    return result;
-  }
-  invariant(false, "Unexpected input type: " + inspect(type));
-}
-function isMissingVariable(valueNode, variables) {
-  return valueNode.kind === Kind.VARIABLE && (variables == null || variables[valueNode.name.value] === undefined);
-}
-
-// node_modules/graphql/execution/values.mjs
-function getVariableValues(schema, varDefNodes, inputs, options) {
-  const errors = [];
-  const maxErrors = options === null || options === undefined ? undefined : options.maxErrors;
-  try {
-    const coerced = coerceVariableValues(schema, varDefNodes, inputs, (error) => {
-      if (maxErrors != null && errors.length >= maxErrors) {
-        throw new GraphQLError("Too many errors processing variables, error limit reached. Execution aborted.");
-      }
-      errors.push(error);
-    });
-    if (errors.length === 0) {
-      return {
-        coerced
-      };
-    }
-  } catch (error) {
-    errors.push(error);
-  }
-  return {
-    errors
-  };
-}
-function coerceVariableValues(schema, varDefNodes, inputs, onError) {
-  const coercedValues = {};
-  for (const varDefNode of varDefNodes) {
-    const varName = varDefNode.variable.name.value;
-    const varType = typeFromAST(schema, varDefNode.type);
-    if (!isInputType(varType)) {
-      const varTypeStr = print(varDefNode.type);
-      onError(new GraphQLError(`Variable "$${varName}" expected value of type "${varTypeStr}" which cannot be used as an input type.`, {
-        nodes: varDefNode.type
-      }));
-      continue;
-    }
-    if (!hasOwnProperty(inputs, varName)) {
-      if (varDefNode.defaultValue) {
-        coercedValues[varName] = valueFromAST(varDefNode.defaultValue, varType);
-      } else if (isNonNullType(varType)) {
-        const varTypeStr = inspect(varType);
-        onError(new GraphQLError(`Variable "$${varName}" of required type "${varTypeStr}" was not provided.`, {
-          nodes: varDefNode
-        }));
-      }
-      continue;
-    }
-    const value = inputs[varName];
-    if (value === null && isNonNullType(varType)) {
-      const varTypeStr = inspect(varType);
-      onError(new GraphQLError(`Variable "$${varName}" of non-null type "${varTypeStr}" must not be null.`, {
-        nodes: varDefNode
-      }));
-      continue;
-    }
-    coercedValues[varName] = coerceInputValue(value, varType, (path, invalidValue, error) => {
-      let prefix = `Variable "$${varName}" got invalid value ` + inspect(invalidValue);
-      if (path.length > 0) {
-        prefix += ` at "${varName}${printPathArray(path)}"`;
-      }
-      onError(new GraphQLError(prefix + "; " + error.message, {
-        nodes: varDefNode,
-        originalError: error
-      }));
-    });
-  }
-  return coercedValues;
-}
-function getArgumentValues(def, node, variableValues) {
-  var _node$arguments;
-  const coercedValues = {};
-  const argumentNodes = (_node$arguments = node.arguments) !== null && _node$arguments !== undefined ? _node$arguments : [];
-  const argNodeMap = keyMap(argumentNodes, (arg) => arg.name.value);
-  for (const argDef of def.args) {
-    const name = argDef.name;
-    const argType = argDef.type;
-    const argumentNode = argNodeMap[name];
-    if (!argumentNode) {
-      if (argDef.defaultValue !== undefined) {
-        coercedValues[name] = argDef.defaultValue;
-      } else if (isNonNullType(argType)) {
-        throw new GraphQLError(`Argument "${name}" of required type "${inspect(argType)}" ` + "was not provided.", {
-          nodes: node
-        });
-      }
-      continue;
-    }
-    const valueNode = argumentNode.value;
-    let isNull = valueNode.kind === Kind.NULL;
-    if (valueNode.kind === Kind.VARIABLE) {
-      const variableName = valueNode.name.value;
-      if (variableValues == null || !hasOwnProperty(variableValues, variableName)) {
-        if (argDef.defaultValue !== undefined) {
-          coercedValues[name] = argDef.defaultValue;
-        } else if (isNonNullType(argType)) {
-          throw new GraphQLError(`Argument "${name}" of required type "${inspect(argType)}" ` + `was provided the variable "$${variableName}" which was not provided a runtime value.`, {
-            nodes: valueNode
-          });
-        }
-        continue;
-      }
-      isNull = variableValues[variableName] == null;
-    }
-    if (isNull && isNonNullType(argType)) {
-      throw new GraphQLError(`Argument "${name}" of non-null type "${inspect(argType)}" ` + "must not be null.", {
-        nodes: valueNode
-      });
-    }
-    const coercedValue = valueFromAST(valueNode, argType, variableValues);
-    if (coercedValue === undefined) {
-      throw new GraphQLError(`Argument "${name}" has invalid value ${print(valueNode)}.`, {
-        nodes: valueNode
-      });
-    }
-    coercedValues[name] = coercedValue;
-  }
-  return coercedValues;
-}
-function getDirectiveValues(directiveDef, node, variableValues) {
-  var _node$directives;
-  const directiveNode = (_node$directives = node.directives) === null || _node$directives === undefined ? undefined : _node$directives.find((directive) => directive.name.value === directiveDef.name);
-  if (directiveNode) {
-    return getArgumentValues(directiveDef, directiveNode, variableValues);
-  }
-}
-function hasOwnProperty(obj, prop) {
-  return Object.prototype.hasOwnProperty.call(obj, prop);
-}
-
-// node_modules/graphql/execution/collectFields.mjs
-function collectFields(schema, fragments, variableValues, runtimeType, selectionSet) {
-  const fields = new Map;
-  collectFieldsImpl(schema, fragments, variableValues, runtimeType, selectionSet, fields, new Set);
-  return fields;
-}
-function collectSubfields(schema, fragments, variableValues, returnType, fieldNodes) {
-  const subFieldNodes = new Map;
-  const visitedFragmentNames = new Set;
-  for (const node of fieldNodes) {
-    if (node.selectionSet) {
-      collectFieldsImpl(schema, fragments, variableValues, returnType, node.selectionSet, subFieldNodes, visitedFragmentNames);
-    }
-  }
-  return subFieldNodes;
-}
-function collectFieldsImpl(schema, fragments, variableValues, runtimeType, selectionSet, fields, visitedFragmentNames) {
-  for (const selection of selectionSet.selections) {
-    switch (selection.kind) {
-      case Kind.FIELD: {
-        if (!shouldIncludeNode(variableValues, selection)) {
-          continue;
-        }
-        const name = getFieldEntryKey(selection);
-        const fieldList = fields.get(name);
-        if (fieldList !== undefined) {
-          fieldList.push(selection);
-        } else {
-          fields.set(name, [selection]);
-        }
-        break;
-      }
-      case Kind.INLINE_FRAGMENT: {
-        if (!shouldIncludeNode(variableValues, selection) || !doesFragmentConditionMatch(schema, selection, runtimeType)) {
-          continue;
-        }
-        collectFieldsImpl(schema, fragments, variableValues, runtimeType, selection.selectionSet, fields, visitedFragmentNames);
-        break;
-      }
-      case Kind.FRAGMENT_SPREAD: {
-        const fragName = selection.name.value;
-        if (visitedFragmentNames.has(fragName) || !shouldIncludeNode(variableValues, selection)) {
-          continue;
-        }
-        visitedFragmentNames.add(fragName);
-        const fragment = fragments[fragName];
-        if (!fragment || !doesFragmentConditionMatch(schema, fragment, runtimeType)) {
-          continue;
-        }
-        collectFieldsImpl(schema, fragments, variableValues, runtimeType, fragment.selectionSet, fields, visitedFragmentNames);
-        break;
-      }
-    }
-  }
-}
-function shouldIncludeNode(variableValues, node) {
-  const skip = getDirectiveValues(GraphQLSkipDirective, node, variableValues);
-  if ((skip === null || skip === undefined ? undefined : skip.if) === true) {
-    return false;
-  }
-  const include = getDirectiveValues(GraphQLIncludeDirective, node, variableValues);
-  if ((include === null || include === undefined ? undefined : include.if) === false) {
-    return false;
-  }
-  return true;
-}
-function doesFragmentConditionMatch(schema, fragment, type) {
-  const typeConditionNode = fragment.typeCondition;
-  if (!typeConditionNode) {
-    return true;
-  }
-  const conditionalType = typeFromAST(schema, typeConditionNode);
-  if (conditionalType === type) {
-    return true;
-  }
-  if (isAbstractType(conditionalType)) {
-    return schema.isSubType(conditionalType, type);
-  }
-  return false;
-}
-function getFieldEntryKey(node) {
-  return node.alias ? node.alias.value : node.name.value;
-}
-
-// node_modules/graphql/execution/execute.mjs
-var collectSubfields2 = memoize3((exeContext, returnType, fieldNodes) => collectSubfields(exeContext.schema, exeContext.fragments, exeContext.variableValues, returnType, fieldNodes));
-
-class CollectedErrors {
-  constructor() {
-    this._errorPositions = new Set;
-    this._errors = [];
-  }
-  get errors() {
-    return this._errors;
-  }
-  add(error, path) {
-    if (this._hasNulledPosition(path)) {
-      return;
-    }
-    this._errorPositions.add(path);
-    this._errors.push(error);
-  }
-  _hasNulledPosition(startPath) {
-    let path = startPath;
-    while (path !== undefined) {
-      if (this._errorPositions.has(path)) {
-        return true;
-      }
-      path = path.prev;
-    }
-    return this._errorPositions.has(undefined);
-  }
-}
-function execute(args) {
-  arguments.length < 2 || devAssert(false, "graphql@16 dropped long-deprecated support for positional arguments, please pass an object instead.");
-  const { schema, document, variableValues, rootValue } = args;
-  assertValidExecutionArguments(schema, document, variableValues);
-  const exeContext = buildExecutionContext(args);
-  if (!("schema" in exeContext)) {
-    return {
-      errors: exeContext
-    };
-  }
-  try {
-    const { operation } = exeContext;
-    const result = executeOperation(exeContext, operation, rootValue);
-    if (isPromise(result)) {
-      return result.then((data) => buildResponse(data, exeContext.collectedErrors.errors), (error) => {
-        exeContext.collectedErrors.add(error, undefined);
-        return buildResponse(null, exeContext.collectedErrors.errors);
-      });
-    }
-    return buildResponse(result, exeContext.collectedErrors.errors);
-  } catch (error) {
-    exeContext.collectedErrors.add(error, undefined);
-    return buildResponse(null, exeContext.collectedErrors.errors);
-  }
-}
-function buildResponse(data, errors) {
-  return errors.length === 0 ? {
-    data
-  } : {
-    errors,
-    data
-  };
-}
-function assertValidExecutionArguments(schema, document, rawVariableValues) {
-  document || devAssert(false, "Must provide document.");
-  assertValidSchema(schema);
-  rawVariableValues == null || isObjectLike(rawVariableValues) || devAssert(false, "Variables must be provided as an Object where each property is a variable value. Perhaps look to see if an unparsed JSON string was provided.");
-}
-function buildExecutionContext(args) {
-  var _definition$name, _operation$variableDe, _options$maxCoercionE;
-  const {
-    schema,
-    document,
-    rootValue,
-    contextValue,
-    variableValues: rawVariableValues,
-    operationName,
-    fieldResolver,
-    typeResolver,
-    subscribeFieldResolver,
-    options
-  } = args;
-  let operation;
-  const fragments = Object.create(null);
-  for (const definition of document.definitions) {
-    switch (definition.kind) {
-      case Kind.OPERATION_DEFINITION:
-        if (operationName == null) {
-          if (operation !== undefined) {
-            return [
-              new GraphQLError("Must provide operation name if query contains multiple operations.")
-            ];
-          }
-          operation = definition;
-        } else if (((_definition$name = definition.name) === null || _definition$name === undefined ? undefined : _definition$name.value) === operationName) {
-          operation = definition;
-        }
-        break;
-      case Kind.FRAGMENT_DEFINITION:
-        fragments[definition.name.value] = definition;
-        break;
-      default:
-    }
-  }
-  if (!operation) {
-    if (operationName != null) {
-      return [new GraphQLError(`Unknown operation named "${operationName}".`)];
-    }
-    return [new GraphQLError("Must provide an operation.")];
-  }
-  const variableDefinitions = (_operation$variableDe = operation.variableDefinitions) !== null && _operation$variableDe !== undefined ? _operation$variableDe : [];
-  const coercedVariableValues = getVariableValues(schema, variableDefinitions, rawVariableValues !== null && rawVariableValues !== undefined ? rawVariableValues : {}, {
-    maxErrors: (_options$maxCoercionE = options === null || options === undefined ? undefined : options.maxCoercionErrors) !== null && _options$maxCoercionE !== undefined ? _options$maxCoercionE : 50
-  });
-  if (coercedVariableValues.errors) {
-    return coercedVariableValues.errors;
-  }
-  return {
-    schema,
-    fragments,
-    rootValue,
-    contextValue,
-    operation,
-    variableValues: coercedVariableValues.coerced,
-    fieldResolver: fieldResolver !== null && fieldResolver !== undefined ? fieldResolver : defaultFieldResolver,
-    typeResolver: typeResolver !== null && typeResolver !== undefined ? typeResolver : defaultTypeResolver,
-    subscribeFieldResolver: subscribeFieldResolver !== null && subscribeFieldResolver !== undefined ? subscribeFieldResolver : defaultFieldResolver,
-    collectedErrors: new CollectedErrors
-  };
-}
-function executeOperation(exeContext, operation, rootValue) {
-  const rootType = exeContext.schema.getRootType(operation.operation);
-  if (rootType == null) {
-    throw new GraphQLError(`Schema is not configured to execute ${operation.operation} operation.`, {
-      nodes: operation
-    });
-  }
-  const rootFields = collectFields(exeContext.schema, exeContext.fragments, exeContext.variableValues, rootType, operation.selectionSet);
-  const path = undefined;
-  switch (operation.operation) {
-    case OperationTypeNode.QUERY:
-      return executeFields(exeContext, rootType, rootValue, path, rootFields);
-    case OperationTypeNode.MUTATION:
-      return executeFieldsSerially(exeContext, rootType, rootValue, path, rootFields);
-    case OperationTypeNode.SUBSCRIPTION:
-      return executeFields(exeContext, rootType, rootValue, path, rootFields);
-  }
-}
-function executeFieldsSerially(exeContext, parentType, sourceValue, path, fields) {
-  return promiseReduce(fields.entries(), (results, [responseName, fieldNodes]) => {
-    const fieldPath = addPath(path, responseName, parentType.name);
-    const result = executeField(exeContext, parentType, sourceValue, fieldNodes, fieldPath);
-    if (result === undefined) {
-      return results;
-    }
-    if (isPromise(result)) {
-      return result.then((resolvedResult) => {
-        results[responseName] = resolvedResult;
-        return results;
-      });
-    }
-    results[responseName] = result;
-    return results;
-  }, Object.create(null));
-}
-function executeFields(exeContext, parentType, sourceValue, path, fields) {
-  const results = Object.create(null);
-  let containsPromise = false;
-  try {
-    for (const [responseName, fieldNodes] of fields.entries()) {
-      const fieldPath = addPath(path, responseName, parentType.name);
-      const result = executeField(exeContext, parentType, sourceValue, fieldNodes, fieldPath);
-      if (result !== undefined) {
-        results[responseName] = result;
-        if (isPromise(result)) {
-          containsPromise = true;
-        }
-      }
-    }
-  } catch (error) {
-    if (containsPromise) {
-      return promiseForObject(results).finally(() => {
-        throw error;
-      });
-    }
-    throw error;
-  }
-  if (!containsPromise) {
-    return results;
-  }
-  return promiseForObject(results);
-}
-function executeField(exeContext, parentType, source, fieldNodes, path) {
-  var _fieldDef$resolve;
-  const fieldDef = getFieldDef(exeContext.schema, parentType, fieldNodes[0]);
-  if (!fieldDef) {
-    return;
-  }
-  const returnType = fieldDef.type;
-  const resolveFn = (_fieldDef$resolve = fieldDef.resolve) !== null && _fieldDef$resolve !== undefined ? _fieldDef$resolve : exeContext.fieldResolver;
-  const info = buildResolveInfo(exeContext, fieldDef, fieldNodes, parentType, path);
-  try {
-    const args = getArgumentValues(fieldDef, fieldNodes[0], exeContext.variableValues);
-    const contextValue = exeContext.contextValue;
-    const result = resolveFn(source, args, contextValue, info);
-    let completed;
-    if (isPromise(result)) {
-      completed = result.then((resolved) => completeValue(exeContext, returnType, fieldNodes, info, path, resolved));
-    } else {
-      completed = completeValue(exeContext, returnType, fieldNodes, info, path, result);
-    }
-    if (isPromise(completed)) {
-      return completed.then(undefined, (rawError) => {
-        const error = locatedError(rawError, fieldNodes, pathToArray(path));
-        return handleFieldError(error, returnType, path, exeContext);
-      });
-    }
-    return completed;
-  } catch (rawError) {
-    const error = locatedError(rawError, fieldNodes, pathToArray(path));
-    return handleFieldError(error, returnType, path, exeContext);
-  }
-}
-function buildResolveInfo(exeContext, fieldDef, fieldNodes, parentType, path) {
-  return {
-    fieldName: fieldDef.name,
-    fieldNodes,
-    returnType: fieldDef.type,
-    parentType,
-    path,
-    schema: exeContext.schema,
-    fragments: exeContext.fragments,
-    rootValue: exeContext.rootValue,
-    operation: exeContext.operation,
-    variableValues: exeContext.variableValues
-  };
-}
-function handleFieldError(error, returnType, path, exeContext) {
-  if (isNonNullType(returnType)) {
-    throw error;
-  }
-  exeContext.collectedErrors.add(error, path);
-  return null;
-}
-function completeValue(exeContext, returnType, fieldNodes, info, path, result) {
-  if (result instanceof Error) {
-    throw result;
-  }
-  if (isNonNullType(returnType)) {
-    const completed = completeValue(exeContext, returnType.ofType, fieldNodes, info, path, result);
-    if (completed === null) {
-      throw new Error(`Cannot return null for non-nullable field ${info.parentType.name}.${info.fieldName}.`);
-    }
-    return completed;
-  }
-  if (result == null) {
-    return null;
-  }
-  if (isListType(returnType)) {
-    return completeListValue(exeContext, returnType, fieldNodes, info, path, result);
-  }
-  if (isLeafType(returnType)) {
-    return completeLeafValue(returnType, result);
-  }
-  if (isAbstractType(returnType)) {
-    return completeAbstractValue(exeContext, returnType, fieldNodes, info, path, result);
-  }
-  if (isObjectType(returnType)) {
-    return completeObjectValue(exeContext, returnType, fieldNodes, info, path, result);
-  }
-  invariant(false, "Cannot complete value of unexpected output type: " + inspect(returnType));
-}
-function completeListValue(exeContext, returnType, fieldNodes, info, path, result) {
-  if (!isIterableObject(result)) {
-    throw new GraphQLError(`Expected Iterable, but did not find one for field "${info.parentType.name}.${info.fieldName}".`);
-  }
-  const itemType = returnType.ofType;
-  let containsPromise = false;
-  const completedResults = Array.from(result, (item, index) => {
-    const itemPath = addPath(path, index, undefined);
-    try {
-      let completedItem;
-      if (isPromise(item)) {
-        completedItem = item.then((resolved) => completeValue(exeContext, itemType, fieldNodes, info, itemPath, resolved));
-      } else {
-        completedItem = completeValue(exeContext, itemType, fieldNodes, info, itemPath, item);
-      }
-      if (isPromise(completedItem)) {
-        containsPromise = true;
-        return completedItem.then(undefined, (rawError) => {
-          const error = locatedError(rawError, fieldNodes, pathToArray(itemPath));
-          return handleFieldError(error, itemType, itemPath, exeContext);
-        });
-      }
-      return completedItem;
-    } catch (rawError) {
-      const error = locatedError(rawError, fieldNodes, pathToArray(itemPath));
-      return handleFieldError(error, itemType, itemPath, exeContext);
-    }
-  });
-  return containsPromise ? Promise.all(completedResults) : completedResults;
-}
-function completeLeafValue(returnType, result) {
-  const serializedResult = returnType.serialize(result);
-  if (serializedResult == null) {
-    throw new Error(`Expected \`${inspect(returnType)}.serialize(${inspect(result)})\` to ` + `return non-nullable value, returned: ${inspect(serializedResult)}`);
-  }
-  return serializedResult;
-}
-function completeAbstractValue(exeContext, returnType, fieldNodes, info, path, result) {
-  var _returnType$resolveTy;
-  const resolveTypeFn = (_returnType$resolveTy = returnType.resolveType) !== null && _returnType$resolveTy !== undefined ? _returnType$resolveTy : exeContext.typeResolver;
-  const contextValue = exeContext.contextValue;
-  const runtimeType = resolveTypeFn(result, contextValue, info, returnType);
-  if (isPromise(runtimeType)) {
-    return runtimeType.then((resolvedRuntimeType) => completeObjectValue(exeContext, ensureValidRuntimeType(resolvedRuntimeType, exeContext, returnType, fieldNodes, info, result), fieldNodes, info, path, result));
-  }
-  return completeObjectValue(exeContext, ensureValidRuntimeType(runtimeType, exeContext, returnType, fieldNodes, info, result), fieldNodes, info, path, result);
-}
-function ensureValidRuntimeType(runtimeTypeName, exeContext, returnType, fieldNodes, info, result) {
-  if (runtimeTypeName == null) {
-    throw new GraphQLError(`Abstract type "${returnType.name}" must resolve to an Object type at runtime for field "${info.parentType.name}.${info.fieldName}". Either the "${returnType.name}" type should provide a "resolveType" function or each possible type should provide an "isTypeOf" function.`, fieldNodes);
-  }
-  if (isObjectType(runtimeTypeName)) {
-    throw new GraphQLError("Support for returning GraphQLObjectType from resolveType was removed in graphql-js@16.0.0 please return type name instead.");
-  }
-  if (typeof runtimeTypeName !== "string") {
-    throw new GraphQLError(`Abstract type "${returnType.name}" must resolve to an Object type at runtime for field "${info.parentType.name}.${info.fieldName}" with ` + `value ${inspect(result)}, received "${inspect(runtimeTypeName)}".`);
-  }
-  const runtimeType = exeContext.schema.getType(runtimeTypeName);
-  if (runtimeType == null) {
-    throw new GraphQLError(`Abstract type "${returnType.name}" was resolved to a type "${runtimeTypeName}" that does not exist inside the schema.`, {
-      nodes: fieldNodes
-    });
-  }
-  if (!isObjectType(runtimeType)) {
-    throw new GraphQLError(`Abstract type "${returnType.name}" was resolved to a non-object type "${runtimeTypeName}".`, {
-      nodes: fieldNodes
-    });
-  }
-  if (!exeContext.schema.isSubType(returnType, runtimeType)) {
-    throw new GraphQLError(`Runtime Object type "${runtimeType.name}" is not a possible type for "${returnType.name}".`, {
-      nodes: fieldNodes
-    });
-  }
-  return runtimeType;
-}
-function completeObjectValue(exeContext, returnType, fieldNodes, info, path, result) {
-  const subFieldNodes = collectSubfields2(exeContext, returnType, fieldNodes);
-  if (returnType.isTypeOf) {
-    const isTypeOf = returnType.isTypeOf(result, exeContext.contextValue, info);
-    if (isPromise(isTypeOf)) {
-      return isTypeOf.then((resolvedIsTypeOf) => {
-        if (!resolvedIsTypeOf) {
-          throw invalidReturnTypeError(returnType, result, fieldNodes);
-        }
-        return executeFields(exeContext, returnType, result, path, subFieldNodes);
-      });
-    }
-    if (!isTypeOf) {
-      throw invalidReturnTypeError(returnType, result, fieldNodes);
-    }
-  }
-  return executeFields(exeContext, returnType, result, path, subFieldNodes);
-}
-function invalidReturnTypeError(returnType, result, fieldNodes) {
-  return new GraphQLError(`Expected value of type "${returnType.name}" but got: ${inspect(result)}.`, {
-    nodes: fieldNodes
-  });
-}
-var defaultTypeResolver = function(value, contextValue, info, abstractType) {
-  if (isObjectLike(value) && typeof value.__typename === "string") {
-    return value.__typename;
-  }
-  const possibleTypes = info.schema.getPossibleTypes(abstractType);
-  const promisedIsTypeOfResults = [];
-  for (let i = 0;i < possibleTypes.length; i++) {
-    const type = possibleTypes[i];
-    if (type.isTypeOf) {
-      const isTypeOfResult = type.isTypeOf(value, contextValue, info);
-      if (isPromise(isTypeOfResult)) {
-        promisedIsTypeOfResults[i] = isTypeOfResult;
-      } else if (isTypeOfResult) {
-        if (promisedIsTypeOfResults.length) {
-          Promise.allSettled(promisedIsTypeOfResults).catch(() => {});
-        }
-        return type.name;
-      }
-    }
-  }
-  if (promisedIsTypeOfResults.length) {
-    return Promise.all(promisedIsTypeOfResults).then((isTypeOfResults) => {
-      for (let i = 0;i < isTypeOfResults.length; i++) {
-        if (isTypeOfResults[i]) {
-          return possibleTypes[i].name;
-        }
-      }
-    });
-  }
-};
-var defaultFieldResolver = function(source, args, contextValue, info) {
-  if (isObjectLike(source) || typeof source === "function") {
-    const property = source[info.fieldName];
-    if (typeof property === "function") {
-      return source[info.fieldName](args, contextValue, info);
-    }
-    return property;
-  }
-};
-function getFieldDef(schema, parentType, fieldNode) {
-  const fieldName = fieldNode.name.value;
-  if (fieldName === SchemaMetaFieldDef.name && schema.getQueryType() === parentType) {
-    return SchemaMetaFieldDef;
-  } else if (fieldName === TypeMetaFieldDef.name && schema.getQueryType() === parentType) {
-    return TypeMetaFieldDef;
-  } else if (fieldName === TypeNameMetaFieldDef.name) {
-    return TypeNameMetaFieldDef;
-  }
-  return parentType.getFields()[fieldName];
-}
-// node_modules/graphql/jsutils/isAsyncIterable.mjs
-function isAsyncIterable(maybeAsyncIterable) {
-  return typeof (maybeAsyncIterable === null || maybeAsyncIterable === undefined ? undefined : maybeAsyncIterable[Symbol.asyncIterator]) === "function";
-}
-
-// node_modules/graphql/execution/mapAsyncIterator.mjs
-function mapAsyncIterator(iterable, callback) {
-  const iterator = iterable[Symbol.asyncIterator]();
-  async function mapResult(result) {
-    if (result.done) {
-      return result;
-    }
-    try {
-      return {
-        value: await callback(result.value),
-        done: false
-      };
-    } catch (error) {
-      if (typeof iterator.return === "function") {
-        try {
-          await iterator.return();
-        } catch (_e) {}
-      }
-      throw error;
-    }
-  }
-  return {
-    async next() {
-      return mapResult(await iterator.next());
-    },
-    async return() {
-      return typeof iterator.return === "function" ? mapResult(await iterator.return()) : {
-        value: undefined,
-        done: true
-      };
-    },
-    async throw(error) {
-      if (typeof iterator.throw === "function") {
-        return mapResult(await iterator.throw(error));
-      }
-      throw error;
-    },
-    [Symbol.asyncIterator]() {
-      return this;
-    }
-  };
-}
-
-// node_modules/graphql/execution/subscribe.mjs
-async function subscribe(args) {
-  arguments.length < 2 || devAssert(false, "graphql@16 dropped long-deprecated support for positional arguments, please pass an object instead.");
-  const resultOrStream = await createSourceEventStream(args);
-  if (!isAsyncIterable(resultOrStream)) {
-    return resultOrStream;
-  }
-  const mapSourceToResponse = (payload) => execute({ ...args, rootValue: payload });
-  return mapAsyncIterator(resultOrStream, mapSourceToResponse);
-}
-function toNormalizedArgs(args) {
-  const firstArg = args[0];
-  if (firstArg && "document" in firstArg) {
-    return firstArg;
-  }
-  return {
-    schema: firstArg,
-    document: args[1],
-    rootValue: args[2],
-    contextValue: args[3],
-    variableValues: args[4],
-    operationName: args[5],
-    subscribeFieldResolver: args[6]
-  };
-}
-async function createSourceEventStream(...rawArgs) {
-  const args = toNormalizedArgs(rawArgs);
-  const { schema, document, variableValues } = args;
-  assertValidExecutionArguments(schema, document, variableValues);
-  const exeContext = buildExecutionContext(args);
-  if (!("schema" in exeContext)) {
-    return {
-      errors: exeContext
-    };
-  }
-  try {
-    const eventStream = await executeSubscription(exeContext);
-    if (!isAsyncIterable(eventStream)) {
-      throw new Error("Subscription field must return Async Iterable. " + `Received: ${inspect(eventStream)}.`);
-    }
-    return eventStream;
-  } catch (error) {
-    if (error instanceof GraphQLError) {
-      return {
-        errors: [error]
-      };
-    }
-    throw error;
-  }
-}
-async function executeSubscription(exeContext) {
-  const { schema, fragments, operation, variableValues, rootValue } = exeContext;
-  const rootType = schema.getSubscriptionType();
-  if (rootType == null) {
-    throw new GraphQLError("Schema is not configured to execute subscription operation.", {
-      nodes: operation
-    });
-  }
-  const rootFields = collectFields(schema, fragments, variableValues, rootType, operation.selectionSet);
-  const [responseName, fieldNodes] = [...rootFields.entries()][0];
-  const fieldDef = getFieldDef(schema, rootType, fieldNodes[0]);
-  if (!fieldDef) {
-    const fieldName = fieldNodes[0].name.value;
-    throw new GraphQLError(`The subscription field "${fieldName}" is not defined.`, {
-      nodes: fieldNodes
-    });
-  }
-  const path = addPath(undefined, responseName, rootType.name);
-  const info = buildResolveInfo(exeContext, fieldDef, fieldNodes, rootType, path);
-  try {
-    var _fieldDef$subscribe;
-    const args = getArgumentValues(fieldDef, fieldNodes[0], variableValues);
-    const contextValue = exeContext.contextValue;
-    const resolveFn = (_fieldDef$subscribe = fieldDef.subscribe) !== null && _fieldDef$subscribe !== undefined ? _fieldDef$subscribe : exeContext.subscribeFieldResolver;
-    const eventStream = await resolveFn(rootValue, args, contextValue, info);
-    if (eventStream instanceof Error) {
-      throw eventStream;
-    }
-    return eventStream;
-  } catch (error) {
-    throw locatedError(error, fieldNodes, pathToArray(path));
-  }
-}
 // node_modules/graphql/utilities/TypeInfo.mjs
 class TypeInfo {
   constructor(schema, initialType, getFieldDefFn) {
@@ -9260,7 +8195,7 @@ class TypeInfo {
     this._directive = null;
     this._argument = null;
     this._enumValue = null;
-    this._getFieldDef = getFieldDefFn !== null && getFieldDefFn !== undefined ? getFieldDefFn : getFieldDef2;
+    this._getFieldDef = getFieldDefFn !== null && getFieldDefFn !== undefined ? getFieldDefFn : getFieldDef;
     if (initialType) {
       if (isInputType(initialType)) {
         this._inputTypeStack.push(initialType);
@@ -9443,7 +8378,7 @@ class TypeInfo {
     }
   }
 }
-function getFieldDef2(schema, parentType, fieldNode) {
+function getFieldDef(schema, parentType, fieldNode) {
   const name = fieldNode.name.value;
   if (name === SchemaMetaFieldDef.name && schema.getQueryType() === parentType) {
     return SchemaMetaFieldDef;
@@ -9486,6 +8421,23 @@ function visitWithTypeInfo(typeInfo, visitor) {
       return result;
     }
   };
+}
+
+// node_modules/graphql/language/predicates.mjs
+function isExecutableDefinitionNode(node) {
+  return node.kind === Kind.OPERATION_DEFINITION || node.kind === Kind.FRAGMENT_DEFINITION;
+}
+function isTypeSystemDefinitionNode(node) {
+  return node.kind === Kind.SCHEMA_DEFINITION || isTypeDefinitionNode(node) || node.kind === Kind.DIRECTIVE_DEFINITION;
+}
+function isTypeDefinitionNode(node) {
+  return node.kind === Kind.SCALAR_TYPE_DEFINITION || node.kind === Kind.OBJECT_TYPE_DEFINITION || node.kind === Kind.INTERFACE_TYPE_DEFINITION || node.kind === Kind.UNION_TYPE_DEFINITION || node.kind === Kind.ENUM_TYPE_DEFINITION || node.kind === Kind.INPUT_OBJECT_TYPE_DEFINITION;
+}
+function isTypeSystemExtensionNode(node) {
+  return node.kind === Kind.SCHEMA_EXTENSION || isTypeExtensionNode(node);
+}
+function isTypeExtensionNode(node) {
+  return node.kind === Kind.SCALAR_TYPE_EXTENSION || node.kind === Kind.OBJECT_TYPE_EXTENSION || node.kind === Kind.INTERFACE_TYPE_EXTENSION || node.kind === Kind.UNION_TYPE_EXTENSION || node.kind === Kind.ENUM_TYPE_EXTENSION || node.kind === Kind.INPUT_OBJECT_TYPE_EXTENSION;
 }
 
 // node_modules/graphql/validation/rules/ExecutableDefinitionsRule.mjs
@@ -10582,6 +9534,437 @@ function ScalarLeafsRule(context) {
   };
 }
 
+// node_modules/graphql/jsutils/printPathArray.mjs
+function printPathArray(path) {
+  return path.map((key) => typeof key === "number" ? "[" + key.toString() + "]" : "." + key).join("");
+}
+
+// node_modules/graphql/jsutils/Path.mjs
+function addPath(prev, key, typename) {
+  return {
+    prev,
+    key,
+    typename
+  };
+}
+function pathToArray(path) {
+  const flattened = [];
+  let curr = path;
+  while (curr) {
+    flattened.push(curr.key);
+    curr = curr.prev;
+  }
+  return flattened.reverse();
+}
+
+// node_modules/graphql/utilities/coerceInputValue.mjs
+function coerceInputValue(inputValue, type, onError = defaultOnError) {
+  return coerceInputValueImpl(inputValue, type, onError, undefined);
+}
+function defaultOnError(path, invalidValue, error) {
+  let errorPrefix = "Invalid value " + inspect(invalidValue);
+  if (path.length > 0) {
+    errorPrefix += ` at "value${printPathArray(path)}"`;
+  }
+  error.message = errorPrefix + ": " + error.message;
+  throw error;
+}
+function coerceInputValueImpl(inputValue, type, onError, path) {
+  if (isNonNullType(type)) {
+    if (inputValue != null) {
+      return coerceInputValueImpl(inputValue, type.ofType, onError, path);
+    }
+    onError(pathToArray(path), inputValue, new GraphQLError(`Expected non-nullable type "${inspect(type)}" not to be null.`));
+    return;
+  }
+  if (inputValue == null) {
+    return null;
+  }
+  if (isListType(type)) {
+    const itemType = type.ofType;
+    if (isIterableObject(inputValue)) {
+      return Array.from(inputValue, (itemValue, index) => {
+        const itemPath = addPath(path, index, undefined);
+        return coerceInputValueImpl(itemValue, itemType, onError, itemPath);
+      });
+    }
+    return [coerceInputValueImpl(inputValue, itemType, onError, path)];
+  }
+  if (isInputObjectType(type)) {
+    if (!isObjectLike(inputValue) || Array.isArray(inputValue)) {
+      onError(pathToArray(path), inputValue, new GraphQLError(`Expected type "${type.name}" to be an object.`));
+      return;
+    }
+    const coercedValue = {};
+    const fieldDefs = type.getFields();
+    for (const field of Object.values(fieldDefs)) {
+      const fieldValue = inputValue[field.name];
+      if (fieldValue === undefined) {
+        if (field.defaultValue !== undefined) {
+          coercedValue[field.name] = field.defaultValue;
+        } else if (isNonNullType(field.type)) {
+          const typeStr = inspect(field.type);
+          onError(pathToArray(path), inputValue, new GraphQLError(`Field "${field.name}" of required type "${typeStr}" was not provided.`));
+        }
+        continue;
+      }
+      coercedValue[field.name] = coerceInputValueImpl(fieldValue, field.type, onError, addPath(path, field.name, type.name));
+    }
+    for (const fieldName of Object.keys(inputValue)) {
+      if (!fieldDefs[fieldName]) {
+        const suggestions = suggestionList(fieldName, Object.keys(type.getFields()));
+        onError(pathToArray(path), inputValue, new GraphQLError(`Field "${fieldName}" is not defined by type "${type.name}".` + didYouMean(suggestions)));
+      }
+    }
+    if (type.isOneOf) {
+      const keys = Object.keys(coercedValue);
+      if (keys.length !== 1) {
+        onError(pathToArray(path), inputValue, new GraphQLError(`Exactly one key must be specified for OneOf type "${type.name}".`));
+      }
+      const key = keys[0];
+      const value = coercedValue[key];
+      if (value === null) {
+        onError(pathToArray(path).concat(key), value, new GraphQLError(`Field "${key}" must be non-null.`));
+      }
+    }
+    return coercedValue;
+  }
+  if (isLeafType(type)) {
+    let parseResult;
+    try {
+      parseResult = type.parseValue(inputValue);
+    } catch (error) {
+      if (error instanceof GraphQLError) {
+        onError(pathToArray(path), inputValue, error);
+      } else {
+        onError(pathToArray(path), inputValue, new GraphQLError(`Expected type "${type.name}". ` + error.message, {
+          originalError: error
+        }));
+      }
+      return;
+    }
+    if (parseResult === undefined) {
+      onError(pathToArray(path), inputValue, new GraphQLError(`Expected type "${type.name}".`));
+    }
+    return parseResult;
+  }
+  invariant(false, "Unexpected input type: " + inspect(type));
+}
+
+// node_modules/graphql/utilities/valueFromAST.mjs
+function valueFromAST(valueNode, type, variables) {
+  if (!valueNode) {
+    return;
+  }
+  if (valueNode.kind === Kind.VARIABLE) {
+    const variableName = valueNode.name.value;
+    if (variables == null || variables[variableName] === undefined) {
+      return;
+    }
+    const variableValue = variables[variableName];
+    if (variableValue === null && isNonNullType(type)) {
+      return;
+    }
+    return variableValue;
+  }
+  if (isNonNullType(type)) {
+    if (valueNode.kind === Kind.NULL) {
+      return;
+    }
+    return valueFromAST(valueNode, type.ofType, variables);
+  }
+  if (valueNode.kind === Kind.NULL) {
+    return null;
+  }
+  if (isListType(type)) {
+    const itemType = type.ofType;
+    if (valueNode.kind === Kind.LIST) {
+      const coercedValues = [];
+      for (const itemNode of valueNode.values) {
+        if (isMissingVariable(itemNode, variables)) {
+          if (isNonNullType(itemType)) {
+            return;
+          }
+          coercedValues.push(null);
+        } else {
+          const itemValue = valueFromAST(itemNode, itemType, variables);
+          if (itemValue === undefined) {
+            return;
+          }
+          coercedValues.push(itemValue);
+        }
+      }
+      return coercedValues;
+    }
+    const coercedValue = valueFromAST(valueNode, itemType, variables);
+    if (coercedValue === undefined) {
+      return;
+    }
+    return [coercedValue];
+  }
+  if (isInputObjectType(type)) {
+    if (valueNode.kind !== Kind.OBJECT) {
+      return;
+    }
+    const coercedObj = Object.create(null);
+    const fieldNodes = keyMap(valueNode.fields, (field) => field.name.value);
+    for (const field of Object.values(type.getFields())) {
+      const fieldNode = fieldNodes[field.name];
+      if (!fieldNode || isMissingVariable(fieldNode.value, variables)) {
+        if (field.defaultValue !== undefined) {
+          coercedObj[field.name] = field.defaultValue;
+        } else if (isNonNullType(field.type)) {
+          return;
+        }
+        continue;
+      }
+      const fieldValue = valueFromAST(fieldNode.value, field.type, variables);
+      if (fieldValue === undefined) {
+        return;
+      }
+      coercedObj[field.name] = fieldValue;
+    }
+    if (type.isOneOf) {
+      const keys = Object.keys(coercedObj);
+      if (keys.length !== 1) {
+        return;
+      }
+      if (coercedObj[keys[0]] === null) {
+        return;
+      }
+    }
+    return coercedObj;
+  }
+  if (isLeafType(type)) {
+    let result;
+    try {
+      result = type.parseLiteral(valueNode, variables);
+    } catch (_error) {
+      return;
+    }
+    if (result === undefined) {
+      return;
+    }
+    return result;
+  }
+  invariant(false, "Unexpected input type: " + inspect(type));
+}
+function isMissingVariable(valueNode, variables) {
+  return valueNode.kind === Kind.VARIABLE && (variables == null || variables[valueNode.name.value] === undefined);
+}
+
+// node_modules/graphql/execution/values.mjs
+function getVariableValues(schema, varDefNodes, inputs, options) {
+  const errors = [];
+  const maxErrors = options === null || options === undefined ? undefined : options.maxErrors;
+  try {
+    const coerced = coerceVariableValues(schema, varDefNodes, inputs, (error) => {
+      if (maxErrors != null && errors.length >= maxErrors) {
+        throw new GraphQLError("Too many errors processing variables, error limit reached. Execution aborted.");
+      }
+      errors.push(error);
+    });
+    if (errors.length === 0) {
+      return {
+        coerced
+      };
+    }
+  } catch (error) {
+    errors.push(error);
+  }
+  return {
+    errors
+  };
+}
+function coerceVariableValues(schema, varDefNodes, inputs, onError) {
+  const coercedValues = {};
+  for (const varDefNode of varDefNodes) {
+    const varName = varDefNode.variable.name.value;
+    const varType = typeFromAST(schema, varDefNode.type);
+    if (!isInputType(varType)) {
+      const varTypeStr = print(varDefNode.type);
+      onError(new GraphQLError(`Variable "$${varName}" expected value of type "${varTypeStr}" which cannot be used as an input type.`, {
+        nodes: varDefNode.type
+      }));
+      continue;
+    }
+    if (!hasOwnProperty(inputs, varName)) {
+      if (varDefNode.defaultValue) {
+        coercedValues[varName] = valueFromAST(varDefNode.defaultValue, varType);
+      } else if (isNonNullType(varType)) {
+        const varTypeStr = inspect(varType);
+        onError(new GraphQLError(`Variable "$${varName}" of required type "${varTypeStr}" was not provided.`, {
+          nodes: varDefNode
+        }));
+      }
+      continue;
+    }
+    const value = inputs[varName];
+    if (value === null && isNonNullType(varType)) {
+      const varTypeStr = inspect(varType);
+      onError(new GraphQLError(`Variable "$${varName}" of non-null type "${varTypeStr}" must not be null.`, {
+        nodes: varDefNode
+      }));
+      continue;
+    }
+    coercedValues[varName] = coerceInputValue(value, varType, (path, invalidValue, error) => {
+      let prefix = `Variable "$${varName}" got invalid value ` + inspect(invalidValue);
+      if (path.length > 0) {
+        prefix += ` at "${varName}${printPathArray(path)}"`;
+      }
+      onError(new GraphQLError(prefix + "; " + error.message, {
+        nodes: varDefNode,
+        originalError: error
+      }));
+    });
+  }
+  return coercedValues;
+}
+function getArgumentValues(def, node, variableValues) {
+  var _node$arguments;
+  const coercedValues = {};
+  const argumentNodes = (_node$arguments = node.arguments) !== null && _node$arguments !== undefined ? _node$arguments : [];
+  const argNodeMap = keyMap(argumentNodes, (arg) => arg.name.value);
+  for (const argDef of def.args) {
+    const name = argDef.name;
+    const argType = argDef.type;
+    const argumentNode = argNodeMap[name];
+    if (!argumentNode) {
+      if (argDef.defaultValue !== undefined) {
+        coercedValues[name] = argDef.defaultValue;
+      } else if (isNonNullType(argType)) {
+        throw new GraphQLError(`Argument "${name}" of required type "${inspect(argType)}" ` + "was not provided.", {
+          nodes: node
+        });
+      }
+      continue;
+    }
+    const valueNode = argumentNode.value;
+    let isNull = valueNode.kind === Kind.NULL;
+    if (valueNode.kind === Kind.VARIABLE) {
+      const variableName = valueNode.name.value;
+      if (variableValues == null || !hasOwnProperty(variableValues, variableName)) {
+        if (argDef.defaultValue !== undefined) {
+          coercedValues[name] = argDef.defaultValue;
+        } else if (isNonNullType(argType)) {
+          throw new GraphQLError(`Argument "${name}" of required type "${inspect(argType)}" ` + `was provided the variable "$${variableName}" which was not provided a runtime value.`, {
+            nodes: valueNode
+          });
+        }
+        continue;
+      }
+      isNull = variableValues[variableName] == null;
+    }
+    if (isNull && isNonNullType(argType)) {
+      throw new GraphQLError(`Argument "${name}" of non-null type "${inspect(argType)}" ` + "must not be null.", {
+        nodes: valueNode
+      });
+    }
+    const coercedValue = valueFromAST(valueNode, argType, variableValues);
+    if (coercedValue === undefined) {
+      throw new GraphQLError(`Argument "${name}" has invalid value ${print(valueNode)}.`, {
+        nodes: valueNode
+      });
+    }
+    coercedValues[name] = coercedValue;
+  }
+  return coercedValues;
+}
+function getDirectiveValues(directiveDef, node, variableValues) {
+  var _node$directives;
+  const directiveNode = (_node$directives = node.directives) === null || _node$directives === undefined ? undefined : _node$directives.find((directive) => directive.name.value === directiveDef.name);
+  if (directiveNode) {
+    return getArgumentValues(directiveDef, directiveNode, variableValues);
+  }
+}
+function hasOwnProperty(obj, prop) {
+  return Object.prototype.hasOwnProperty.call(obj, prop);
+}
+
+// node_modules/graphql/execution/collectFields.mjs
+function collectFields(schema, fragments, variableValues, runtimeType, selectionSet) {
+  const fields = new Map;
+  collectFieldsImpl(schema, fragments, variableValues, runtimeType, selectionSet, fields, new Set);
+  return fields;
+}
+function collectSubfields(schema, fragments, variableValues, returnType, fieldNodes) {
+  const subFieldNodes = new Map;
+  const visitedFragmentNames = new Set;
+  for (const node of fieldNodes) {
+    if (node.selectionSet) {
+      collectFieldsImpl(schema, fragments, variableValues, returnType, node.selectionSet, subFieldNodes, visitedFragmentNames);
+    }
+  }
+  return subFieldNodes;
+}
+function collectFieldsImpl(schema, fragments, variableValues, runtimeType, selectionSet, fields, visitedFragmentNames) {
+  for (const selection of selectionSet.selections) {
+    switch (selection.kind) {
+      case Kind.FIELD: {
+        if (!shouldIncludeNode(variableValues, selection)) {
+          continue;
+        }
+        const name = getFieldEntryKey(selection);
+        const fieldList = fields.get(name);
+        if (fieldList !== undefined) {
+          fieldList.push(selection);
+        } else {
+          fields.set(name, [selection]);
+        }
+        break;
+      }
+      case Kind.INLINE_FRAGMENT: {
+        if (!shouldIncludeNode(variableValues, selection) || !doesFragmentConditionMatch(schema, selection, runtimeType)) {
+          continue;
+        }
+        collectFieldsImpl(schema, fragments, variableValues, runtimeType, selection.selectionSet, fields, visitedFragmentNames);
+        break;
+      }
+      case Kind.FRAGMENT_SPREAD: {
+        const fragName = selection.name.value;
+        if (visitedFragmentNames.has(fragName) || !shouldIncludeNode(variableValues, selection)) {
+          continue;
+        }
+        visitedFragmentNames.add(fragName);
+        const fragment = fragments[fragName];
+        if (!fragment || !doesFragmentConditionMatch(schema, fragment, runtimeType)) {
+          continue;
+        }
+        collectFieldsImpl(schema, fragments, variableValues, runtimeType, fragment.selectionSet, fields, visitedFragmentNames);
+        break;
+      }
+    }
+  }
+}
+function shouldIncludeNode(variableValues, node) {
+  const skip = getDirectiveValues(GraphQLSkipDirective, node, variableValues);
+  if ((skip === null || skip === undefined ? undefined : skip.if) === true) {
+    return false;
+  }
+  const include = getDirectiveValues(GraphQLIncludeDirective, node, variableValues);
+  if ((include === null || include === undefined ? undefined : include.if) === false) {
+    return false;
+  }
+  return true;
+}
+function doesFragmentConditionMatch(schema, fragment, type) {
+  const typeConditionNode = fragment.typeCondition;
+  if (!typeConditionNode) {
+    return true;
+  }
+  const conditionalType = typeFromAST(schema, typeConditionNode);
+  if (conditionalType === type) {
+    return true;
+  }
+  if (isAbstractType(conditionalType)) {
+    return schema.isSubType(conditionalType, type);
+  }
+  return false;
+}
+function getFieldEntryKey(node) {
+  return node.alias ? node.alias.value : node.name.value;
+}
+
 // node_modules/graphql/validation/rules/SingleFieldSubscriptionsRule.mjs
 function SingleFieldSubscriptionsRule(context) {
   return {
@@ -11412,6 +10795,635 @@ function validate(schema, documentAST, rules = specifiedRules, options, typeInfo
     }
   }
   return errors;
+}
+
+// node_modules/graphql/jsutils/memoize3.mjs
+function memoize3(fn) {
+  let cache0;
+  return function memoized(a1, a2, a3) {
+    if (cache0 === undefined) {
+      cache0 = new WeakMap;
+    }
+    let cache1 = cache0.get(a1);
+    if (cache1 === undefined) {
+      cache1 = new WeakMap;
+      cache0.set(a1, cache1);
+    }
+    let cache2 = cache1.get(a2);
+    if (cache2 === undefined) {
+      cache2 = new WeakMap;
+      cache1.set(a2, cache2);
+    }
+    let fnResult = cache2.get(a3);
+    if (fnResult === undefined) {
+      fnResult = fn(a1, a2, a3);
+      cache2.set(a3, fnResult);
+    }
+    return fnResult;
+  };
+}
+
+// node_modules/graphql/jsutils/promiseForObject.mjs
+function promiseForObject(object) {
+  return Promise.all(Object.values(object)).then((resolvedValues) => {
+    const resolvedObject = Object.create(null);
+    for (const [i, key] of Object.keys(object).entries()) {
+      resolvedObject[key] = resolvedValues[i];
+    }
+    return resolvedObject;
+  });
+}
+
+// node_modules/graphql/jsutils/promiseReduce.mjs
+function promiseReduce(values, callbackFn, initialValue) {
+  let accumulator = initialValue;
+  for (const value of values) {
+    accumulator = isPromise(accumulator) ? accumulator.then((resolved) => callbackFn(resolved, value)) : callbackFn(accumulator, value);
+  }
+  return accumulator;
+}
+
+// node_modules/graphql/jsutils/toError.mjs
+function toError(thrownValue) {
+  return thrownValue instanceof Error ? thrownValue : new NonErrorThrown(thrownValue);
+}
+
+class NonErrorThrown extends Error {
+  constructor(thrownValue) {
+    super("Unexpected error value: " + inspect(thrownValue));
+    this.name = "NonErrorThrown";
+    this.thrownValue = thrownValue;
+  }
+}
+
+// node_modules/graphql/error/locatedError.mjs
+function locatedError(rawOriginalError, nodes, path) {
+  var _nodes;
+  const originalError = toError(rawOriginalError);
+  if (isLocatedGraphQLError(originalError)) {
+    return originalError;
+  }
+  return new GraphQLError(originalError.message, {
+    nodes: (_nodes = originalError.nodes) !== null && _nodes !== undefined ? _nodes : nodes,
+    source: originalError.source,
+    positions: originalError.positions,
+    path,
+    originalError
+  });
+}
+function isLocatedGraphQLError(error) {
+  return Array.isArray(error.path);
+}
+
+// node_modules/graphql/execution/execute.mjs
+var collectSubfields2 = memoize3((exeContext, returnType, fieldNodes) => collectSubfields(exeContext.schema, exeContext.fragments, exeContext.variableValues, returnType, fieldNodes));
+
+class CollectedErrors {
+  constructor() {
+    this._errorPositions = new Set;
+    this._errors = [];
+  }
+  get errors() {
+    return this._errors;
+  }
+  add(error, path) {
+    if (this._hasNulledPosition(path)) {
+      return;
+    }
+    this._errorPositions.add(path);
+    this._errors.push(error);
+  }
+  _hasNulledPosition(startPath) {
+    let path = startPath;
+    while (path !== undefined) {
+      if (this._errorPositions.has(path)) {
+        return true;
+      }
+      path = path.prev;
+    }
+    return this._errorPositions.has(undefined);
+  }
+}
+function execute(args) {
+  arguments.length < 2 || devAssert(false, "graphql@16 dropped long-deprecated support for positional arguments, please pass an object instead.");
+  const { schema, document, variableValues, rootValue } = args;
+  assertValidExecutionArguments(schema, document, variableValues);
+  const exeContext = buildExecutionContext(args);
+  if (!("schema" in exeContext)) {
+    return {
+      errors: exeContext
+    };
+  }
+  try {
+    const { operation } = exeContext;
+    const result = executeOperation(exeContext, operation, rootValue);
+    if (isPromise(result)) {
+      return result.then((data) => buildResponse(data, exeContext.collectedErrors.errors), (error) => {
+        exeContext.collectedErrors.add(error, undefined);
+        return buildResponse(null, exeContext.collectedErrors.errors);
+      });
+    }
+    return buildResponse(result, exeContext.collectedErrors.errors);
+  } catch (error) {
+    exeContext.collectedErrors.add(error, undefined);
+    return buildResponse(null, exeContext.collectedErrors.errors);
+  }
+}
+function buildResponse(data, errors) {
+  return errors.length === 0 ? {
+    data
+  } : {
+    errors,
+    data
+  };
+}
+function assertValidExecutionArguments(schema, document, rawVariableValues) {
+  document || devAssert(false, "Must provide document.");
+  assertValidSchema(schema);
+  rawVariableValues == null || isObjectLike(rawVariableValues) || devAssert(false, "Variables must be provided as an Object where each property is a variable value. Perhaps look to see if an unparsed JSON string was provided.");
+}
+function buildExecutionContext(args) {
+  var _definition$name, _operation$variableDe, _options$maxCoercionE;
+  const {
+    schema,
+    document,
+    rootValue,
+    contextValue,
+    variableValues: rawVariableValues,
+    operationName,
+    fieldResolver,
+    typeResolver,
+    subscribeFieldResolver,
+    options
+  } = args;
+  let operation;
+  const fragments = Object.create(null);
+  for (const definition of document.definitions) {
+    switch (definition.kind) {
+      case Kind.OPERATION_DEFINITION:
+        if (operationName == null) {
+          if (operation !== undefined) {
+            return [
+              new GraphQLError("Must provide operation name if query contains multiple operations.")
+            ];
+          }
+          operation = definition;
+        } else if (((_definition$name = definition.name) === null || _definition$name === undefined ? undefined : _definition$name.value) === operationName) {
+          operation = definition;
+        }
+        break;
+      case Kind.FRAGMENT_DEFINITION:
+        fragments[definition.name.value] = definition;
+        break;
+      default:
+    }
+  }
+  if (!operation) {
+    if (operationName != null) {
+      return [new GraphQLError(`Unknown operation named "${operationName}".`)];
+    }
+    return [new GraphQLError("Must provide an operation.")];
+  }
+  const variableDefinitions = (_operation$variableDe = operation.variableDefinitions) !== null && _operation$variableDe !== undefined ? _operation$variableDe : [];
+  const coercedVariableValues = getVariableValues(schema, variableDefinitions, rawVariableValues !== null && rawVariableValues !== undefined ? rawVariableValues : {}, {
+    maxErrors: (_options$maxCoercionE = options === null || options === undefined ? undefined : options.maxCoercionErrors) !== null && _options$maxCoercionE !== undefined ? _options$maxCoercionE : 50
+  });
+  if (coercedVariableValues.errors) {
+    return coercedVariableValues.errors;
+  }
+  return {
+    schema,
+    fragments,
+    rootValue,
+    contextValue,
+    operation,
+    variableValues: coercedVariableValues.coerced,
+    fieldResolver: fieldResolver !== null && fieldResolver !== undefined ? fieldResolver : defaultFieldResolver,
+    typeResolver: typeResolver !== null && typeResolver !== undefined ? typeResolver : defaultTypeResolver,
+    subscribeFieldResolver: subscribeFieldResolver !== null && subscribeFieldResolver !== undefined ? subscribeFieldResolver : defaultFieldResolver,
+    collectedErrors: new CollectedErrors
+  };
+}
+function executeOperation(exeContext, operation, rootValue) {
+  const rootType = exeContext.schema.getRootType(operation.operation);
+  if (rootType == null) {
+    throw new GraphQLError(`Schema is not configured to execute ${operation.operation} operation.`, {
+      nodes: operation
+    });
+  }
+  const rootFields = collectFields(exeContext.schema, exeContext.fragments, exeContext.variableValues, rootType, operation.selectionSet);
+  const path = undefined;
+  switch (operation.operation) {
+    case OperationTypeNode.QUERY:
+      return executeFields(exeContext, rootType, rootValue, path, rootFields);
+    case OperationTypeNode.MUTATION:
+      return executeFieldsSerially(exeContext, rootType, rootValue, path, rootFields);
+    case OperationTypeNode.SUBSCRIPTION:
+      return executeFields(exeContext, rootType, rootValue, path, rootFields);
+  }
+}
+function executeFieldsSerially(exeContext, parentType, sourceValue, path, fields) {
+  return promiseReduce(fields.entries(), (results, [responseName, fieldNodes]) => {
+    const fieldPath = addPath(path, responseName, parentType.name);
+    const result = executeField(exeContext, parentType, sourceValue, fieldNodes, fieldPath);
+    if (result === undefined) {
+      return results;
+    }
+    if (isPromise(result)) {
+      return result.then((resolvedResult) => {
+        results[responseName] = resolvedResult;
+        return results;
+      });
+    }
+    results[responseName] = result;
+    return results;
+  }, Object.create(null));
+}
+function executeFields(exeContext, parentType, sourceValue, path, fields) {
+  const results = Object.create(null);
+  let containsPromise = false;
+  try {
+    for (const [responseName, fieldNodes] of fields.entries()) {
+      const fieldPath = addPath(path, responseName, parentType.name);
+      const result = executeField(exeContext, parentType, sourceValue, fieldNodes, fieldPath);
+      if (result !== undefined) {
+        results[responseName] = result;
+        if (isPromise(result)) {
+          containsPromise = true;
+        }
+      }
+    }
+  } catch (error) {
+    if (containsPromise) {
+      return promiseForObject(results).finally(() => {
+        throw error;
+      });
+    }
+    throw error;
+  }
+  if (!containsPromise) {
+    return results;
+  }
+  return promiseForObject(results);
+}
+function executeField(exeContext, parentType, source, fieldNodes, path) {
+  var _fieldDef$resolve;
+  const fieldDef = getFieldDef2(exeContext.schema, parentType, fieldNodes[0]);
+  if (!fieldDef) {
+    return;
+  }
+  const returnType = fieldDef.type;
+  const resolveFn = (_fieldDef$resolve = fieldDef.resolve) !== null && _fieldDef$resolve !== undefined ? _fieldDef$resolve : exeContext.fieldResolver;
+  const info = buildResolveInfo(exeContext, fieldDef, fieldNodes, parentType, path);
+  try {
+    const args = getArgumentValues(fieldDef, fieldNodes[0], exeContext.variableValues);
+    const contextValue = exeContext.contextValue;
+    const result = resolveFn(source, args, contextValue, info);
+    let completed;
+    if (isPromise(result)) {
+      completed = result.then((resolved) => completeValue(exeContext, returnType, fieldNodes, info, path, resolved));
+    } else {
+      completed = completeValue(exeContext, returnType, fieldNodes, info, path, result);
+    }
+    if (isPromise(completed)) {
+      return completed.then(undefined, (rawError) => {
+        const error = locatedError(rawError, fieldNodes, pathToArray(path));
+        return handleFieldError(error, returnType, path, exeContext);
+      });
+    }
+    return completed;
+  } catch (rawError) {
+    const error = locatedError(rawError, fieldNodes, pathToArray(path));
+    return handleFieldError(error, returnType, path, exeContext);
+  }
+}
+function buildResolveInfo(exeContext, fieldDef, fieldNodes, parentType, path) {
+  return {
+    fieldName: fieldDef.name,
+    fieldNodes,
+    returnType: fieldDef.type,
+    parentType,
+    path,
+    schema: exeContext.schema,
+    fragments: exeContext.fragments,
+    rootValue: exeContext.rootValue,
+    operation: exeContext.operation,
+    variableValues: exeContext.variableValues
+  };
+}
+function handleFieldError(error, returnType, path, exeContext) {
+  if (isNonNullType(returnType)) {
+    throw error;
+  }
+  exeContext.collectedErrors.add(error, path);
+  return null;
+}
+function completeValue(exeContext, returnType, fieldNodes, info, path, result) {
+  if (result instanceof Error) {
+    throw result;
+  }
+  if (isNonNullType(returnType)) {
+    const completed = completeValue(exeContext, returnType.ofType, fieldNodes, info, path, result);
+    if (completed === null) {
+      throw new Error(`Cannot return null for non-nullable field ${info.parentType.name}.${info.fieldName}.`);
+    }
+    return completed;
+  }
+  if (result == null) {
+    return null;
+  }
+  if (isListType(returnType)) {
+    return completeListValue(exeContext, returnType, fieldNodes, info, path, result);
+  }
+  if (isLeafType(returnType)) {
+    return completeLeafValue(returnType, result);
+  }
+  if (isAbstractType(returnType)) {
+    return completeAbstractValue(exeContext, returnType, fieldNodes, info, path, result);
+  }
+  if (isObjectType(returnType)) {
+    return completeObjectValue(exeContext, returnType, fieldNodes, info, path, result);
+  }
+  invariant(false, "Cannot complete value of unexpected output type: " + inspect(returnType));
+}
+function completeListValue(exeContext, returnType, fieldNodes, info, path, result) {
+  if (!isIterableObject(result)) {
+    throw new GraphQLError(`Expected Iterable, but did not find one for field "${info.parentType.name}.${info.fieldName}".`);
+  }
+  const itemType = returnType.ofType;
+  let containsPromise = false;
+  const completedResults = Array.from(result, (item, index) => {
+    const itemPath = addPath(path, index, undefined);
+    try {
+      let completedItem;
+      if (isPromise(item)) {
+        completedItem = item.then((resolved) => completeValue(exeContext, itemType, fieldNodes, info, itemPath, resolved));
+      } else {
+        completedItem = completeValue(exeContext, itemType, fieldNodes, info, itemPath, item);
+      }
+      if (isPromise(completedItem)) {
+        containsPromise = true;
+        return completedItem.then(undefined, (rawError) => {
+          const error = locatedError(rawError, fieldNodes, pathToArray(itemPath));
+          return handleFieldError(error, itemType, itemPath, exeContext);
+        });
+      }
+      return completedItem;
+    } catch (rawError) {
+      const error = locatedError(rawError, fieldNodes, pathToArray(itemPath));
+      return handleFieldError(error, itemType, itemPath, exeContext);
+    }
+  });
+  return containsPromise ? Promise.all(completedResults) : completedResults;
+}
+function completeLeafValue(returnType, result) {
+  const serializedResult = returnType.serialize(result);
+  if (serializedResult == null) {
+    throw new Error(`Expected \`${inspect(returnType)}.serialize(${inspect(result)})\` to ` + `return non-nullable value, returned: ${inspect(serializedResult)}`);
+  }
+  return serializedResult;
+}
+function completeAbstractValue(exeContext, returnType, fieldNodes, info, path, result) {
+  var _returnType$resolveTy;
+  const resolveTypeFn = (_returnType$resolveTy = returnType.resolveType) !== null && _returnType$resolveTy !== undefined ? _returnType$resolveTy : exeContext.typeResolver;
+  const contextValue = exeContext.contextValue;
+  const runtimeType = resolveTypeFn(result, contextValue, info, returnType);
+  if (isPromise(runtimeType)) {
+    return runtimeType.then((resolvedRuntimeType) => completeObjectValue(exeContext, ensureValidRuntimeType(resolvedRuntimeType, exeContext, returnType, fieldNodes, info, result), fieldNodes, info, path, result));
+  }
+  return completeObjectValue(exeContext, ensureValidRuntimeType(runtimeType, exeContext, returnType, fieldNodes, info, result), fieldNodes, info, path, result);
+}
+function ensureValidRuntimeType(runtimeTypeName, exeContext, returnType, fieldNodes, info, result) {
+  if (runtimeTypeName == null) {
+    throw new GraphQLError(`Abstract type "${returnType.name}" must resolve to an Object type at runtime for field "${info.parentType.name}.${info.fieldName}". Either the "${returnType.name}" type should provide a "resolveType" function or each possible type should provide an "isTypeOf" function.`, fieldNodes);
+  }
+  if (isObjectType(runtimeTypeName)) {
+    throw new GraphQLError("Support for returning GraphQLObjectType from resolveType was removed in graphql-js@16.0.0 please return type name instead.");
+  }
+  if (typeof runtimeTypeName !== "string") {
+    throw new GraphQLError(`Abstract type "${returnType.name}" must resolve to an Object type at runtime for field "${info.parentType.name}.${info.fieldName}" with ` + `value ${inspect(result)}, received "${inspect(runtimeTypeName)}".`);
+  }
+  const runtimeType = exeContext.schema.getType(runtimeTypeName);
+  if (runtimeType == null) {
+    throw new GraphQLError(`Abstract type "${returnType.name}" was resolved to a type "${runtimeTypeName}" that does not exist inside the schema.`, {
+      nodes: fieldNodes
+    });
+  }
+  if (!isObjectType(runtimeType)) {
+    throw new GraphQLError(`Abstract type "${returnType.name}" was resolved to a non-object type "${runtimeTypeName}".`, {
+      nodes: fieldNodes
+    });
+  }
+  if (!exeContext.schema.isSubType(returnType, runtimeType)) {
+    throw new GraphQLError(`Runtime Object type "${runtimeType.name}" is not a possible type for "${returnType.name}".`, {
+      nodes: fieldNodes
+    });
+  }
+  return runtimeType;
+}
+function completeObjectValue(exeContext, returnType, fieldNodes, info, path, result) {
+  const subFieldNodes = collectSubfields2(exeContext, returnType, fieldNodes);
+  if (returnType.isTypeOf) {
+    const isTypeOf = returnType.isTypeOf(result, exeContext.contextValue, info);
+    if (isPromise(isTypeOf)) {
+      return isTypeOf.then((resolvedIsTypeOf) => {
+        if (!resolvedIsTypeOf) {
+          throw invalidReturnTypeError(returnType, result, fieldNodes);
+        }
+        return executeFields(exeContext, returnType, result, path, subFieldNodes);
+      });
+    }
+    if (!isTypeOf) {
+      throw invalidReturnTypeError(returnType, result, fieldNodes);
+    }
+  }
+  return executeFields(exeContext, returnType, result, path, subFieldNodes);
+}
+function invalidReturnTypeError(returnType, result, fieldNodes) {
+  return new GraphQLError(`Expected value of type "${returnType.name}" but got: ${inspect(result)}.`, {
+    nodes: fieldNodes
+  });
+}
+var defaultTypeResolver = function(value, contextValue, info, abstractType) {
+  if (isObjectLike(value) && typeof value.__typename === "string") {
+    return value.__typename;
+  }
+  const possibleTypes = info.schema.getPossibleTypes(abstractType);
+  const promisedIsTypeOfResults = [];
+  for (let i = 0;i < possibleTypes.length; i++) {
+    const type = possibleTypes[i];
+    if (type.isTypeOf) {
+      const isTypeOfResult = type.isTypeOf(value, contextValue, info);
+      if (isPromise(isTypeOfResult)) {
+        promisedIsTypeOfResults[i] = isTypeOfResult;
+      } else if (isTypeOfResult) {
+        if (promisedIsTypeOfResults.length) {
+          Promise.allSettled(promisedIsTypeOfResults).catch(() => {});
+        }
+        return type.name;
+      }
+    }
+  }
+  if (promisedIsTypeOfResults.length) {
+    return Promise.all(promisedIsTypeOfResults).then((isTypeOfResults) => {
+      for (let i = 0;i < isTypeOfResults.length; i++) {
+        if (isTypeOfResults[i]) {
+          return possibleTypes[i].name;
+        }
+      }
+    });
+  }
+};
+var defaultFieldResolver = function(source, args, contextValue, info) {
+  if (isObjectLike(source) || typeof source === "function") {
+    const property = source[info.fieldName];
+    if (typeof property === "function") {
+      return source[info.fieldName](args, contextValue, info);
+    }
+    return property;
+  }
+};
+function getFieldDef2(schema, parentType, fieldNode) {
+  const fieldName = fieldNode.name.value;
+  if (fieldName === SchemaMetaFieldDef.name && schema.getQueryType() === parentType) {
+    return SchemaMetaFieldDef;
+  } else if (fieldName === TypeMetaFieldDef.name && schema.getQueryType() === parentType) {
+    return TypeMetaFieldDef;
+  } else if (fieldName === TypeNameMetaFieldDef.name) {
+    return TypeNameMetaFieldDef;
+  }
+  return parentType.getFields()[fieldName];
+}
+// node_modules/graphql/jsutils/isAsyncIterable.mjs
+function isAsyncIterable(maybeAsyncIterable) {
+  return typeof (maybeAsyncIterable === null || maybeAsyncIterable === undefined ? undefined : maybeAsyncIterable[Symbol.asyncIterator]) === "function";
+}
+
+// node_modules/graphql/execution/mapAsyncIterator.mjs
+function mapAsyncIterator(iterable, callback) {
+  const iterator = iterable[Symbol.asyncIterator]();
+  async function mapResult(result) {
+    if (result.done) {
+      return result;
+    }
+    try {
+      return {
+        value: await callback(result.value),
+        done: false
+      };
+    } catch (error) {
+      if (typeof iterator.return === "function") {
+        try {
+          await iterator.return();
+        } catch (_e) {}
+      }
+      throw error;
+    }
+  }
+  return {
+    async next() {
+      return mapResult(await iterator.next());
+    },
+    async return() {
+      return typeof iterator.return === "function" ? mapResult(await iterator.return()) : {
+        value: undefined,
+        done: true
+      };
+    },
+    async throw(error) {
+      if (typeof iterator.throw === "function") {
+        return mapResult(await iterator.throw(error));
+      }
+      throw error;
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  };
+}
+
+// node_modules/graphql/execution/subscribe.mjs
+async function subscribe(args) {
+  arguments.length < 2 || devAssert(false, "graphql@16 dropped long-deprecated support for positional arguments, please pass an object instead.");
+  const resultOrStream = await createSourceEventStream(args);
+  if (!isAsyncIterable(resultOrStream)) {
+    return resultOrStream;
+  }
+  const mapSourceToResponse = (payload) => execute({ ...args, rootValue: payload });
+  return mapAsyncIterator(resultOrStream, mapSourceToResponse);
+}
+function toNormalizedArgs(args) {
+  const firstArg = args[0];
+  if (firstArg && "document" in firstArg) {
+    return firstArg;
+  }
+  return {
+    schema: firstArg,
+    document: args[1],
+    rootValue: args[2],
+    contextValue: args[3],
+    variableValues: args[4],
+    operationName: args[5],
+    subscribeFieldResolver: args[6]
+  };
+}
+async function createSourceEventStream(...rawArgs) {
+  const args = toNormalizedArgs(rawArgs);
+  const { schema, document, variableValues } = args;
+  assertValidExecutionArguments(schema, document, variableValues);
+  const exeContext = buildExecutionContext(args);
+  if (!("schema" in exeContext)) {
+    return {
+      errors: exeContext
+    };
+  }
+  try {
+    const eventStream = await executeSubscription(exeContext);
+    if (!isAsyncIterable(eventStream)) {
+      throw new Error("Subscription field must return Async Iterable. " + `Received: ${inspect(eventStream)}.`);
+    }
+    return eventStream;
+  } catch (error) {
+    if (error instanceof GraphQLError) {
+      return {
+        errors: [error]
+      };
+    }
+    throw error;
+  }
+}
+async function executeSubscription(exeContext) {
+  const { schema, fragments, operation, variableValues, rootValue } = exeContext;
+  const rootType = schema.getSubscriptionType();
+  if (rootType == null) {
+    throw new GraphQLError("Schema is not configured to execute subscription operation.", {
+      nodes: operation
+    });
+  }
+  const rootFields = collectFields(schema, fragments, variableValues, rootType, operation.selectionSet);
+  const [responseName, fieldNodes] = [...rootFields.entries()][0];
+  const fieldDef = getFieldDef2(schema, rootType, fieldNodes[0]);
+  if (!fieldDef) {
+    const fieldName = fieldNodes[0].name.value;
+    throw new GraphQLError(`The subscription field "${fieldName}" is not defined.`, {
+      nodes: fieldNodes
+    });
+  }
+  const path = addPath(undefined, responseName, rootType.name);
+  const info = buildResolveInfo(exeContext, fieldDef, fieldNodes, rootType, path);
+  try {
+    var _fieldDef$subscribe;
+    const args = getArgumentValues(fieldDef, fieldNodes[0], variableValues);
+    const contextValue = exeContext.contextValue;
+    const resolveFn = (_fieldDef$subscribe = fieldDef.subscribe) !== null && _fieldDef$subscribe !== undefined ? _fieldDef$subscribe : exeContext.subscribeFieldResolver;
+    const eventStream = await resolveFn(rootValue, args, contextValue, info);
+    if (eventStream instanceof Error) {
+      throw eventStream;
+    }
+    return eventStream;
+  } catch (error) {
+    throw locatedError(error, fieldNodes, pathToArray(path));
+  }
 }
 // node_modules/graphql/utilities/getOperationAST.mjs
 function getOperationAST(documentAST, operationName) {
