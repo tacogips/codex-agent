@@ -108,6 +108,7 @@ describe("ProcessManager", () => {
     const command = pm.list()[0]?.command;
     expect(command).toContain("--image ./one.png");
     expect(command).toContain("--image ./two.png");
+    expect(command).toContain("--image ./two.png -- test prompt");
   });
 
   test("spawnExec includes additional passthrough args", async () => {
@@ -263,6 +264,7 @@ describe("ProcessManager", () => {
         "--skip-git-repo-check",
         "--image",
         "./one.png",
+        "--",
         "session-1",
         "resume prompt",
       ]);

@@ -290,6 +290,9 @@ function buildExecArgs(
       args.push("--image", imagePath);
     }
   }
+  if (options?.images !== undefined && options.images.length > 0) {
+    args.push("--");
+  }
   args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
   return args;
 }
@@ -304,6 +307,9 @@ function buildResumeArgs(
     for (const imagePath of options.images) {
       args.push("--image", imagePath);
     }
+  }
+  if (options?.images !== undefined && options.images.length > 0) {
+    args.push("--");
   }
   args.push(sessionId);
   if (prompt !== undefined && prompt.trim().length > 0) {
