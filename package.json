@@ -15,6 +15,11 @@
       "import": "./dist/main.js",
       "default": "./dist/main.js"
     },
+    "./sdk": {
+      "types": "./src/sdk/index.ts",
+      "import": "./src/sdk/index.ts",
+      "default": "./src/sdk/index.ts"
+    },
     "./sdk/testing": {
       "types": "./src/sdk/mock-session-runner.ts",
       "import": "./src/sdk/mock-session-runner.ts",
