@@ -8,6 +8,8 @@ export interface AgentToolVersions {
 }
 export interface GetCodexCliVersionOptions {
     readonly codexBinary?: string | undefined;
+    readonly cwd?: string | undefined;
+    readonly env?: Readonly<Record<string, string | undefined>> | undefined;
     readonly timeoutMs?: number | undefined;
 }
 export interface GetToolVersionsOptions extends GetCodexCliVersionOptions {

@@ -14,6 +14,8 @@ export interface AgentToolVersions {
 
 export interface GetCodexCliVersionOptions {
   readonly codexBinary?: string | undefined;
+  readonly cwd?: string | undefined;
+  readonly env?: Readonly<Record<string, string | undefined>> | undefined;
   readonly timeoutMs?: number | undefined;
 }
 
@@ -25,10 +27,7 @@ export interface GetToolVersionsOptions extends GetCodexCliVersionOptions {
 export async function getCodexCliVersion(
   options?: GetCodexCliVersionOptions,
 ): Promise<ToolVersionInfo> {
-  return await readToolVersion(
-    options?.codexBinary ?? "codex",
-    options?.timeoutMs,
-  );
+  return await readToolVersion(options?.codexBinary ?? "codex", options);
 }
 
 export async function getToolVersions(
@@ -40,17 +39,15 @@ export async function getToolVersions(
     return { codex };
   }
 
-  const git = await readToolVersion(
-    options.gitBinary ?? "git",
-    options.timeoutMs,
-  );
+  const git = await readToolVersion(options.gitBinary ?? "git", options);
   return { codex, git };
 }
 
 async function readToolVersion(
   binary: string,
-  timeoutMs: number | undefined,
+  options: GetCodexCliVersionOptions | undefined,
 ): Promise<ToolVersionInfo> {
+  const timeoutMs = options?.timeoutMs;
   const effectiveTimeout =
     timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
       ? timeoutMs
@@ -58,8 +55,9 @@ async function readToolVersion(
 
   return await new Promise<ToolVersionInfo>((resolve) => {
     const child = spawn(binary, ["--version"], {
+      cwd: options?.cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: buildProcessEnv(options?.env),
     });
 
     let stdout = "";
@@ -124,6 +122,21 @@ async function readToolVersion(
       });
     }, effectiveTimeout);
   });
+}
+
+function buildProcessEnv(
+  env: Readonly<Record<string, string | undefined>> | undefined,
+): NodeJS.ProcessEnv {
+  const nextEnv: NodeJS.ProcessEnv = { ...process.env };
+  if (env === undefined) {
+    return nextEnv;
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) {
+      nextEnv[key] = value;
+    }
+  }
+  return nextEnv;
 }
 
 function firstLine(value: string): string | null {

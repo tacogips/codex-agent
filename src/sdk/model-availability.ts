@@ -13,6 +13,7 @@ export interface CodexLoginStatusInfo {
 export interface GetCodexLoginStatusOptions {
   readonly codexBinary?: string | undefined;
   readonly cwd?: string | undefined;
+  readonly env?: Readonly<Record<string, string | undefined>> | undefined;
   readonly timeoutMs?: number | undefined;
 }
 
@@ -42,6 +43,21 @@ interface CommandResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly error: string | null;
+}
+
+function buildProcessEnv(
+  env: Readonly<Record<string, string | undefined>> | undefined,
+): NodeJS.ProcessEnv {
+  const nextEnv: NodeJS.ProcessEnv = { ...process.env };
+  if (env === undefined) {
+    return nextEnv;
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) {
+      nextEnv[key] = value;
+    }
+  }
+  return nextEnv;
 }
 
 export async function getCodexLoginStatus(
@@ -161,7 +177,7 @@ async function runCodexCommand(
     const child = spawn(binary, args, {
       cwd: options?.cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: buildProcessEnv(options?.env),
     });
 
     let stdout = "";
@@ -214,7 +230,10 @@ async function runCodexCommand(
         signal !== null
           ? `signal ${signal}`
           : `exit code ${String(code ?? "unknown")}`;
-      const details = firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
+      const details =
+        extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ??
+        firstNonEmptyLine(stderr) ??
+        firstNonEmptyLine(stdout);
       settle({
         exitCode: code ?? null,
         stdout,
@@ -257,6 +276,34 @@ function firstNonEmptyLine(value: string): string | null {
     return null;
   }
   return trimmed.split(/\r?\n/u)[0] ?? null;
+}
+
+function commandOutputText(result: Pick<CommandResult, "stdout" | "stderr">) {
+  return [result.stderr, result.stdout]
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .join("\n");
+}
+
+function extractCodexErrorMessage(value: string): string | null {
+  for (const match of value.matchAll(/ERROR:\s*(?<payload>\{[^\n]+\})/gu)) {
+    const payload = match.groups?.["payload"];
+    if (payload === undefined) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(payload) as {
+        readonly error?: { readonly message?: string };
+      };
+      const message = parsed.error?.message?.trim();
+      if (message !== undefined && message.length > 0) {
+        return message;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 function toErrorMessage(error: unknown): string {

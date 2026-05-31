@@ -2373,22 +2373,24 @@ function parseMaybeJson(value) {
 import { spawn as spawn2 } from "child_process";
 var DEFAULT_TIMEOUT_MS = 5000;
 async function getCodexCliVersion(options) {
-  return await readToolVersion(options?.codexBinary ?? "codex", options?.timeoutMs);
+  return await readToolVersion(options?.codexBinary ?? "codex", options);
 }
 async function getToolVersions(options) {
   const codex = await getCodexCliVersion(options);
   if (options?.includeGit !== true) {
     return { codex };
   }
-  const git = await readToolVersion(options.gitBinary ?? "git", options.timeoutMs);
+  const git = await readToolVersion(options.gitBinary ?? "git", options);
   return { codex, git };
 }
-async function readToolVersion(binary, timeoutMs) {
+async function readToolVersion(binary, options) {
+  const timeoutMs = options?.timeoutMs;
   const effectiveTimeout = timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
   return await new Promise((resolve2) => {
     const child = spawn2(binary, ["--version"], {
+      cwd: options?.cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env }
+      env: buildProcessEnv(options?.env)
     });
     let stdout = "";
     let stderr = "";
@@ -2440,6 +2442,18 @@ async function readToolVersion(binary, timeoutMs) {
     }, effectiveTimeout);
   });
 }
+function buildProcessEnv(env) {
+  const nextEnv = { ...process.env };
+  if (env === undefined) {
+    return nextEnv;
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) {
+      nextEnv[key] = value;
+    }
+  }
+  return nextEnv;
+}
 function firstLine(value) {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
@@ -2451,6 +2465,18 @@ function firstLine(value) {
 import { spawn as spawn3 } from "child_process";
 var DEFAULT_TIMEOUT_MS2 = 15000;
 var DEFAULT_PROBE_PROMPT = "Reply with exactly OK.";
+function buildProcessEnv2(env) {
+  const nextEnv = { ...process.env };
+  if (env === undefined) {
+    return nextEnv;
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) {
+      nextEnv[key] = value;
+    }
+  }
+  return nextEnv;
+}
 async function getCodexLoginStatus(options) {
   const result = await runCodexCommand(options?.codexBinary ?? "codex", ["login", "status"], options);
   const status = firstNonEmptyLine(result.stdout) ?? firstNonEmptyLine(result.stderr);
@@ -2534,7 +2560,7 @@ async function runCodexCommand(binary, args, options) {
     const child = spawn3(binary, args, {
       cwd: options?.cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env }
+      env: buildProcessEnv2(options?.env)
     });
     let stdout = "";
     let stderr = "";
@@ -2577,7 +2603,7 @@ async function runCodexCommand(binary, args, options) {
         return;
       }
       const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-      const details = firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
+      const details = extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ?? firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
       settle({
         exitCode: code ?? null,
         stdout,
@@ -2611,6 +2637,28 @@ function firstNonEmptyLine(value) {
     return null;
   }
   return trimmed.split(/\r?\n/u)[0] ?? null;
+}
+function commandOutputText(result) {
+  return [result.stderr, result.stdout].map((value) => value.trim()).filter((value) => value.length > 0).join(`
+`);
+}
+function extractCodexErrorMessage(value) {
+  for (const match of value.matchAll(/ERROR:\s*(?<payload>\{[^\n]+\})/gu)) {
+    const payload = match.groups?.["payload"];
+    if (payload === undefined) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(payload);
+      const message = parsed.error?.message?.trim();
+      if (message !== undefined && message.length > 0) {
+        return message;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 function toErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);

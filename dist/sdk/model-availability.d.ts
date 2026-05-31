@@ -7,6 +7,7 @@ export interface CodexLoginStatusInfo {
 export interface GetCodexLoginStatusOptions {
     readonly codexBinary?: string | undefined;
     readonly cwd?: string | undefined;
+    readonly env?: Readonly<Record<string, string | undefined>> | undefined;
     readonly timeoutMs?: number | undefined;
 }
 export interface CodexModelProbeInfo {

@@ -49,6 +49,25 @@ describe("getCodexCliVersion", () => {
       error: "version command failed (exit code 7): permission denied",
     });
   });
+
+  it("passes explicit environment overrides to the version command", async () => {
+    const script = await createExecutable(
+      "fake-codex-env.sh",
+      "printf 'codex %s\\n' " + '"$' + '{CODEX_AGENT_TEST_VERSION:-missing}"',
+    );
+
+    const result = await getCodexCliVersion({
+      codexBinary: script,
+      env: {
+        CODEX_AGENT_TEST_VERSION: "from-env",
+      },
+    });
+
+    expect(result).toEqual({
+      version: "codex from-env",
+      error: null,
+    });
+  });
 });
 
 describe("getToolVersions", () => {

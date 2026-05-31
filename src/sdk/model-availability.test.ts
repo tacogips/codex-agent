@@ -146,6 +146,68 @@ esac
     });
   });
 
+  it("prefers structured Codex JSON error messages over progress stderr", async () => {
+    const codexBinary = await createExecutable(`
+case "$1:$2" in
+  "login:status")
+    printf 'Logged in using ChatGPT\\n'
+    ;;
+  "exec:--skip-git-repo-check")
+    echo 'Reading additional input from stdin...' 1>&2
+    echo 'ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The gpt-5 model is not supported for this account."}}' 1>&2
+    exit 11
+    ;;
+  *)
+    echo "unexpected args: $*" 1>&2
+    exit 1
+    ;;
+esac
+`);
+
+    const result = await checkCodexModelAvailability({
+      codexBinary,
+      model: "gpt-5",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.auth.ok).toBe(true);
+    expect(result.probe.error).toBe(
+      "command failed (exit code 11): The gpt-5 model is not supported for this account.",
+    );
+  });
+
+  it("passes explicit environment overrides to Codex probes", async () => {
+    const codexBinary = await createExecutable(`
+if [[ "\${CODEX_AGENT_TEST_ENV:-}" != "ready" ]]; then
+  echo "missing env" 1>&2
+  exit 13
+fi
+case "$1:$2" in
+  "login:status")
+    printf 'Logged in using ChatGPT\\n'
+    ;;
+  "exec:--skip-git-repo-check")
+    printf 'OK\\n'
+    ;;
+  *)
+    echo "unexpected args: $*" 1>&2
+    exit 1
+    ;;
+esac
+`);
+
+    const result = await checkCodexModelAvailability({
+      codexBinary,
+      model: "gpt-5.4",
+      env: {
+        CODEX_AGENT_TEST_ENV: "ready",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.probe.output).toBe("OK");
+  });
+
   it("reports unavailable auth alongside a failed probe", async () => {
     const codexBinary = await createExecutable(`
 case "$1:$2" in
