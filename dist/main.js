@@ -1,4 +1,258 @@
 // @bun
+// src/sdk/mock-session-runner.ts
+import { EventEmitter } from "events";
+
+class MockCodexRunningSession extends EventEmitter {
+  #sessionId;
+  #initialMessages;
+  #autoComplete;
+  #autoCompleteResult;
+  #queue = [];
+  #closed = false;
+  #messageCount = 0;
+  #activationScheduled = false;
+  #activated = false;
+  #initialMessagesFlushed = false;
+  #waiter;
+  #completionResolver;
+  #completion;
+  constructor(options) {
+    super();
+    this.#sessionId = options.sessionId;
+    this.#initialMessages = [...options.messages ?? []];
+    this.#autoComplete = options.autoComplete !== false;
+    this.#autoCompleteResult = options.result;
+    this.#completion = new Promise((resolve) => {
+      this.#completionResolver = resolve;
+    });
+    this.on("newListener", (eventName) => {
+      if (eventName === "message" || eventName === "complete") {
+        this.#scheduleActivation();
+      }
+    });
+  }
+  get sessionId() {
+    return this.#sessionId;
+  }
+  getState() {
+    return { status: this.#closed ? "completed" : "running" };
+  }
+  pushMessage(message) {
+    this.#flushInitialMessages();
+    this.#pushMessage(message);
+  }
+  complete(result = {}) {
+    this.#flushInitialMessages();
+    this.#complete(result);
+  }
+  async* messages() {
+    this.#activate();
+    while (!this.#closed || this.#queue.length > 0) {
+      while (this.#queue.length > 0) {
+        const message = this.#queue.shift();
+        if (message !== undefined) {
+          yield message;
+        }
+      }
+      if (this.#closed) {
+        break;
+      }
+      await new Promise((resolve) => {
+        this.#waiter = resolve;
+      });
+    }
+  }
+  async waitForCompletion() {
+    this.#activate();
+    return await this.#completion;
+  }
+  async cancel() {
+    this.complete({ success: false, exitCode: 130 });
+  }
+  #scheduleActivation() {
+    if (this.#activated || this.#activationScheduled) {
+      return;
+    }
+    this.#activationScheduled = true;
+    queueMicrotask(() => {
+      this.#activationScheduled = false;
+      this.#activate();
+    });
+  }
+  #activate() {
+    if (this.#activated) {
+      return;
+    }
+    this.#activated = true;
+    this.#flushInitialMessages();
+    if (this.#autoComplete) {
+      this.#complete(this.#autoCompleteResult);
+    }
+  }
+  #flushInitialMessages() {
+    if (this.#initialMessagesFlushed) {
+      return;
+    }
+    this.#initialMessagesFlushed = true;
+    for (const message of this.#initialMessages) {
+      if (this.#closed) {
+        return;
+      }
+      this.#pushMessage(message);
+    }
+  }
+  #pushMessage(message) {
+    if (this.#closed) {
+      throw new Error(`mock codex session '${this.#sessionId}' is closed`);
+    }
+    this.#messageCount += 1;
+    this.#queue.push(message);
+    this.emit("message", message);
+    this.#wake();
+  }
+  #complete(result = {}) {
+    if (this.#closed) {
+      return;
+    }
+    this.#closed = true;
+    const completed = buildSessionResult(result, this.#messageCount);
+    this.emit("complete", completed);
+    this.#completionResolver?.(completed);
+    this.#completionResolver = undefined;
+    this.#wake();
+  }
+  #wake() {
+    const waiter = this.#waiter;
+    this.#waiter = undefined;
+    waiter?.();
+  }
+}
+
+class MockCodexSessionRunner {
+  startSessionCalls = [];
+  resumeSessionCalls = [];
+  #startSessions = [];
+  #resumeSessions = [];
+  enqueueStartSession(session) {
+    this.#startSessions.push(session);
+  }
+  enqueueResumeSession(session) {
+    this.#resumeSessions.push(session);
+  }
+  async startSession(config) {
+    this.startSessionCalls.push({ config });
+    return this.#shiftSession(this.#startSessions, "start");
+  }
+  async resumeSession(sessionId, prompt, options) {
+    this.resumeSessionCalls.push({
+      sessionId,
+      ...prompt === undefined ? {} : { prompt },
+      ...options === undefined ? {} : { options }
+    });
+    return this.#shiftSession(this.#resumeSessions, "resume");
+  }
+  #shiftSession(sessions, kind) {
+    const session = sessions.shift();
+    if (session === undefined) {
+      throw new Error(`mock codex ${kind} session was not enqueued`);
+    }
+    return session;
+  }
+}
+function createMockCodexSessionRunner(input = {}) {
+  const runner = new MockCodexSessionRunner;
+  for (const session of input.startSessions ?? []) {
+    runner.enqueueStartSession(session);
+  }
+  for (const session of input.resumeSessions ?? []) {
+    runner.enqueueResumeSession(session);
+  }
+  return runner;
+}
+function buildSessionResult(input, fallbackMessageCount) {
+  return {
+    success: input.success ?? (input.exitCode === undefined || input.exitCode === 0),
+    exitCode: input.exitCode ?? (input.success === false ? 1 : 0),
+    stats: {
+      startedAt: input.startedAt ?? "2026-01-01T00:00:00.000Z",
+      completedAt: input.completedAt ?? "2026-01-01T00:00:01.000Z",
+      messageCount: input.messageCount ?? fallbackMessageCount
+    }
+  };
+}
+
+// src/sdk/events.ts
+class BasicSdkEventEmitter {
+  handlers = new Map;
+  on(event, handler) {
+    const set = this.handlers.get(event) ?? new Set;
+    set.add(handler);
+    this.handlers.set(event, set);
+  }
+  off(event, handler) {
+    this.handlers.get(event)?.delete(handler);
+  }
+  emit(event, payload) {
+    const set = this.handlers.get(event);
+    if (set === undefined) {
+      return;
+    }
+    for (const handler of set) {
+      handler(payload);
+    }
+  }
+}
+// src/sdk/tool-registry.ts
+function tool(config) {
+  if (config.name.trim().length === 0) {
+    throw new Error("tool name is required");
+  }
+  return {
+    name: config.name,
+    description: config.description,
+    async run(input, context) {
+      return await config.run(input, context);
+    }
+  };
+}
+
+class ToolRegistry {
+  tools = new Map;
+  register(registeredTool) {
+    this.tools.set(registeredTool.name, registeredTool);
+  }
+  get(name) {
+    const value = this.tools.get(name);
+    if (value === undefined) {
+      return null;
+    }
+    return value;
+  }
+  list() {
+    return Array.from(this.tools.keys()).sort();
+  }
+  async run(name, input, context) {
+    const registered = this.get(name);
+    if (registered === null) {
+      throw new Error(`tool not found: ${name}`);
+    }
+    return registered.run(input, context);
+  }
+}
+// src/sdk/session-runner.ts
+import { EventEmitter as EventEmitter3 } from "events";
+import { stat as stat3 } from "fs/promises";
+
+// src/process/manager.ts
+import { spawn } from "child_process";
+import { createInterface as createInterface2 } from "readline";
+import { randomUUID } from "crypto";
+
+// src/rollout/reader.ts
+import { readFile } from "fs/promises";
+import { createReadStream } from "fs";
+import { createInterface } from "readline";
+
 // src/types/rollout.ts
 function isSessionMeta(item) {
   return item.type === "session_meta";
@@ -15,15 +269,8 @@ function isCompacted(item) {
 function isTurnContext(item) {
   return item.type === "turn_context";
 }
-// src/session/index.ts
-import { readdir, stat } from "fs/promises";
-import { join as join2, resolve } from "path";
-import { homedir } from "os";
 
 // src/rollout/reader.ts
-import { readFile } from "fs/promises";
-import { createReadStream } from "fs";
-import { createInterface } from "readline";
 function parseRolloutLine(line) {
   const trimmed = line.trim();
   if (trimmed === "") {
@@ -516,6 +763,291 @@ function isInjectedOrFrameworkUserMessage(message) {
   return message.sourceTag === "agents_instructions" || message.sourceTag === "environment_context" || message.sourceTag === "turn_aborted";
 }
 
+// src/process/manager.ts
+var DEFAULT_BINARY = "codex";
+
+class ProcessManager {
+  processes = new Map;
+  binary;
+  constructor(binary) {
+    this.binary = binary ?? DEFAULT_BINARY;
+  }
+  async spawnExec(prompt, options) {
+    const stream = this.spawnExecStream(prompt, options);
+    const lines = [];
+    for await (const line of stream.lines) {
+      lines.push(line);
+    }
+    const exitCode = await stream.completion;
+    return { exitCode, lines };
+  }
+  spawnExecStream(prompt, options) {
+    const args = buildExecArgs(prompt, options);
+    const binary = options?.codexBinary ?? this.binary;
+    const cwd = options?.cwd;
+    const child = spawn(binary, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: buildSpawnEnvironment(options)
+    });
+    drainPipe(child.stderr);
+    const id = randomUUID();
+    const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
+    this.processes.set(id, managed);
+    const completion = waitForExit(child).then((exitCode) => {
+      managed.status = "exited";
+      managed.exitCode = exitCode;
+      return exitCode;
+    });
+    return {
+      process: toCodexProcess(managed),
+      lines: streamJsonlOutput(child),
+      completion
+    };
+  }
+  spawnResume(sessionId, options, prompt) {
+    const stream = this.spawnResumeStream(sessionId, options, prompt);
+    drainAsyncIterable(stream.lines);
+    return stream.process;
+  }
+  spawnResumeStream(sessionId, options, prompt) {
+    const args = buildResumeArgs(sessionId, options, prompt);
+    const binary = options?.codexBinary ?? this.binary;
+    const cwd = options?.cwd;
+    const child = spawn(binary, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: buildSpawnEnvironment(options)
+    });
+    drainPipe(child.stderr);
+    const id = randomUUID();
+    const managed = createManagedProcess(id, child, binary + " " + args.join(" "), `resume ${sessionId}`);
+    this.processes.set(id, managed);
+    const completion = waitForExit(child).then((exitCode) => {
+      managed.status = "exited";
+      managed.exitCode = exitCode;
+      return exitCode;
+    });
+    return {
+      process: toCodexProcess(managed),
+      lines: streamJsonlOutput(child),
+      completion
+    };
+  }
+  spawnFork(sessionId, nthMessage, options) {
+    const args = ["fork", sessionId];
+    if (nthMessage !== undefined) {
+      args.push("--nth-message", String(nthMessage));
+    }
+    args.push(...buildCommonArgs(options));
+    return this.spawnTracked(args, options, `fork ${sessionId}`);
+  }
+  list() {
+    return Array.from(this.processes.values()).map(toCodexProcess);
+  }
+  get(id) {
+    const managed = this.processes.get(id);
+    if (managed === undefined) {
+      return null;
+    }
+    return toCodexProcess(managed);
+  }
+  kill(id) {
+    const managed = this.processes.get(id);
+    if (managed === undefined) {
+      return false;
+    }
+    if (managed.status !== "running") {
+      return false;
+    }
+    managed.child.kill("SIGTERM");
+    managed.status = "killed";
+    return true;
+  }
+  writeInput(id, input) {
+    const managed = this.processes.get(id);
+    if (managed === undefined || managed.status !== "running") {
+      return false;
+    }
+    if (managed.child.stdin === null) {
+      return false;
+    }
+    managed.child.stdin.write(input);
+    return true;
+  }
+  killAll() {
+    for (const managed of this.processes.values()) {
+      if (managed.status === "running") {
+        managed.child.kill("SIGTERM");
+        managed.status = "killed";
+      }
+    }
+  }
+  prune() {
+    let count = 0;
+    for (const [id, managed] of this.processes) {
+      if (managed.status !== "running") {
+        this.processes.delete(id);
+        count++;
+      }
+    }
+    return count;
+  }
+  spawnTracked(args, options, prompt) {
+    const binary = options?.codexBinary ?? this.binary;
+    const cwd = options?.cwd;
+    const child = spawn(binary, args, {
+      cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: buildSpawnEnvironment(options)
+    });
+    drainPipe(child.stdout);
+    drainPipe(child.stderr);
+    const id = randomUUID();
+    const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
+    this.processes.set(id, managed);
+    child.on("exit", (code) => {
+      managed.status = "exited";
+      managed.exitCode = code ?? 1;
+    });
+    return toCodexProcess(managed);
+  }
+}
+function buildExecArgs(prompt, options) {
+  const args = ["exec", "--json", ...buildCommonArgs(options)];
+  if (options?.images !== undefined) {
+    for (const imagePath of options.images) {
+      args.push("--image", imagePath);
+    }
+  }
+  if (options?.images !== undefined && options.images.length > 0) {
+    args.push("--");
+  }
+  args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
+  return args;
+}
+function buildResumeArgs(sessionId, options, prompt) {
+  const args = ["exec", "resume", "--json", ...buildCommonArgs(options)];
+  if (options?.images !== undefined) {
+    for (const imagePath of options.images) {
+      args.push("--image", imagePath);
+    }
+  }
+  if (options?.images !== undefined && options.images.length > 0) {
+    args.push("--");
+  }
+  args.push(sessionId);
+  if (prompt !== undefined && prompt.trim().length > 0) {
+    args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
+  }
+  return args;
+}
+function buildPromptWithSystemPrompt(prompt, systemPrompt) {
+  if (systemPrompt === undefined || systemPrompt.trim().length === 0) {
+    return prompt;
+  }
+  return `${systemPrompt}
+
+${prompt}`;
+}
+function buildCommonArgs(options) {
+  const args = [];
+  if (options?.model !== undefined) {
+    args.push("--model", options.model);
+  }
+  if (options?.fullAuto === true) {
+    args.push("--full-auto");
+  }
+  if (options?.sandbox !== undefined) {
+    args.push("--sandbox", options.sandbox);
+  }
+  if (options?.approvalMode !== undefined) {
+    args.push("--ask-for-approval", options.approvalMode);
+  }
+  if (options?.configOverrides !== undefined) {
+    for (const override of options.configOverrides) {
+      args.push("-c", override);
+    }
+  }
+  if (options?.additionalArgs !== undefined) {
+    args.push(...options.additionalArgs);
+  }
+  return args;
+}
+function buildSpawnEnvironment(options) {
+  return {
+    ...process.env,
+    ...options?.environmentVariables
+  };
+}
+function createManagedProcess(id, child, command, prompt) {
+  return {
+    id,
+    child,
+    command,
+    prompt,
+    startedAt: new Date,
+    status: "running",
+    exitCode: undefined
+  };
+}
+function toCodexProcess(managed) {
+  return {
+    id: managed.id,
+    pid: managed.child.pid ?? -1,
+    command: managed.command,
+    prompt: managed.prompt,
+    startedAt: managed.startedAt,
+    status: managed.status,
+    exitCode: managed.exitCode
+  };
+}
+async function* streamJsonlOutput(child) {
+  if (child.stdout === null) {
+    return;
+  }
+  const rl = createInterface2({ input: child.stdout, crlfDelay: Infinity });
+  try {
+    for await (const line of rl) {
+      const parsed = parseRolloutLine(line);
+      if (parsed !== null) {
+        yield parsed;
+      }
+    }
+  } finally {
+    rl.close();
+  }
+}
+function waitForExit(child) {
+  if (child.exitCode !== null) {
+    return Promise.resolve(child.exitCode);
+  }
+  return new Promise((resolve) => {
+    child.once("exit", (code) => {
+      resolve(code ?? 1);
+    });
+    child.once("error", () => {
+      resolve(1);
+    });
+  });
+}
+function drainPipe(stream) {
+  if (stream === null) {
+    return;
+  }
+  stream.resume();
+}
+function drainAsyncIterable(lines) {
+  (async () => {
+    for await (const _ of lines) {}
+  })();
+}
+
+// src/session/index.ts
+import { readdir, stat } from "fs/promises";
+import { join as join2, resolve } from "path";
+import { homedir } from "os";
+
 // src/session/sqlite.ts
 import { Database } from "bun:sqlite";
 import { join } from "path";
@@ -850,6 +1382,1710 @@ async function readSortedFiles(parent, order) {
   } catch {
     return [];
   }
+}
+
+// src/rollout/watcher.ts
+import { watch } from "fs";
+import { open, stat as stat2 } from "fs/promises";
+import { join as join3 } from "path";
+import { EventEmitter as EventEmitter2 } from "events";
+var ROLLOUT_PREFIX2 = "rollout-";
+var ROLLOUT_EXT2 = ".jsonl";
+var DEBOUNCE_MS = 100;
+
+class RolloutWatcher extends EventEmitter2 {
+  fileWatchers = new Map;
+  dirWatchers = new Map;
+  closed = false;
+  async watchFile(path, options) {
+    if (this.closed) {
+      return;
+    }
+    if (this.fileWatchers.has(path)) {
+      return;
+    }
+    const fileSize = await getFileSize(path);
+    const requestedOffset = options?.startOffset;
+    const startOffset = requestedOffset !== undefined && Number.isFinite(requestedOffset) ? Math.max(0, Math.floor(requestedOffset)) : fileSize;
+    const state = {
+      path,
+      offset: startOffset,
+      watcher: null,
+      debounceTimer: null,
+      inFlightRead: null,
+      pendingRead: false
+    };
+    const watcher = watch(path, () => {
+      this.debouncedReadAppended(state);
+    });
+    watcher.on("error", (err) => {
+      this.emit("error", err);
+    });
+    state.watcher = watcher;
+    this.fileWatchers.set(path, state);
+    this.enqueueRead(state);
+  }
+  watchDirectory(dir) {
+    if (this.closed) {
+      return;
+    }
+    if (this.dirWatchers.has(dir)) {
+      return;
+    }
+    const watcher = watch(dir, { recursive: true }, (_event, filename) => {
+      if (filename === null) {
+        return;
+      }
+      const basename = filename.split("/").pop() ?? filename;
+      if (basename.startsWith(ROLLOUT_PREFIX2) && basename.endsWith(ROLLOUT_EXT2)) {
+        const fullPath = join3(dir, filename);
+        this.emit("newSession", fullPath);
+      }
+    });
+    watcher.on("error", (err) => {
+      this.emit("error", err);
+    });
+    this.dirWatchers.set(dir, watcher);
+  }
+  stop() {
+    this.closed = true;
+    for (const state of this.fileWatchers.values()) {
+      if (state.debounceTimer !== null) {
+        clearTimeout(state.debounceTimer);
+      }
+      state.watcher?.close();
+    }
+    this.fileWatchers.clear();
+    for (const watcher of this.dirWatchers.values()) {
+      watcher.close();
+    }
+    this.dirWatchers.clear();
+    this.removeAllListeners();
+  }
+  async flush() {
+    if (this.closed) {
+      return;
+    }
+    for (const state of this.fileWatchers.values()) {
+      await this.enqueueRead(state);
+    }
+  }
+  get isClosed() {
+    return this.closed;
+  }
+  debouncedReadAppended(state) {
+    if (state.debounceTimer !== null) {
+      clearTimeout(state.debounceTimer);
+    }
+    state.debounceTimer = setTimeout(() => {
+      state.debounceTimer = null;
+      this.enqueueRead(state);
+    }, DEBOUNCE_MS);
+  }
+  async enqueueRead(state) {
+    if (state.inFlightRead !== null) {
+      state.pendingRead = true;
+      await state.inFlightRead;
+      return;
+    }
+    const run = (async () => {
+      do {
+        state.pendingRead = false;
+        await this.readAppendedLines(state);
+      } while (state.pendingRead && !this.closed);
+    })();
+    state.inFlightRead = run;
+    try {
+      await run;
+    } finally {
+      state.inFlightRead = null;
+    }
+  }
+  async readAppendedLines(state) {
+    if (this.closed) {
+      return;
+    }
+    try {
+      const currentSize = await getFileSize(state.path);
+      if (currentSize <= state.offset) {
+        return;
+      }
+      const fd = await open(state.path, "r");
+      try {
+        const bytesToRead = currentSize - state.offset;
+        const buffer = new Uint8Array(bytesToRead);
+        await fd.read(buffer, 0, bytesToRead, state.offset);
+        state.offset = currentSize;
+        const text = new TextDecoder().decode(buffer);
+        const lines = text.split(`
+`);
+        for (const line of lines) {
+          const parsed = parseRolloutLine(line);
+          if (parsed !== null) {
+            this.emit("line", state.path, parsed);
+          }
+        }
+      } finally {
+        await fd.close();
+      }
+    } catch (err) {
+      this.emit("error", err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+}
+async function getFileSize(path) {
+  try {
+    const s = await stat2(path);
+    return s.size;
+  } catch {
+    return 0;
+  }
+}
+function sessionsWatchDir(codexHome) {
+  return join3(codexHome, "sessions");
+}
+
+// src/sdk/session-runner.ts
+class RunningSession extends EventEmitter3 {
+  _sessionId;
+  allowSessionIdUpdate;
+  pm;
+  processId;
+  startedAt;
+  streamGranularity;
+  state;
+  stopHook = null;
+  constructor(sessionId, pm, processId, startedAt, streamGranularity, allowSessionIdUpdate = true) {
+    super();
+    this._sessionId = sessionId;
+    this.allowSessionIdUpdate = allowSessionIdUpdate;
+    this.pm = pm;
+    this.processId = processId;
+    this.startedAt = startedAt;
+    this.streamGranularity = streamGranularity;
+    let resolveCompletion = null;
+    const completionPromise = new Promise((resolve2) => {
+      resolveCompletion = resolve2;
+    });
+    this.state = {
+      completed: false,
+      completionResolver: resolveCompletion,
+      completionPromise,
+      queued: [],
+      waiter: null,
+      messageCount: 0
+    };
+  }
+  get sessionId() {
+    return this._sessionId;
+  }
+  setStopHook(stop) {
+    this.stopHook = stop;
+  }
+  pushLine(line) {
+    if (this.allowSessionIdUpdate && isSessionMeta(line) && this._sessionId !== line.payload.meta.id) {
+      this._sessionId = line.payload.meta.id;
+      this.emit("sessionId", this._sessionId);
+    }
+    this.state.messageCount += 1;
+    this.emit("message", line);
+    const chunks = this.streamGranularity === "char" ? toCharStreamChunks(line, this._sessionId) : [line];
+    for (const chunk of chunks) {
+      this.state.queued.push(chunk);
+    }
+    if (this.state.waiter !== null) {
+      const waiter = this.state.waiter;
+      this.state.waiter = null;
+      waiter();
+    }
+  }
+  finish(exitCode) {
+    if (this.state.completed) {
+      return;
+    }
+    this.state.completed = true;
+    const completedAt = new Date;
+    const result = {
+      success: exitCode === 0,
+      exitCode,
+      stats: {
+        startedAt: this.startedAt.toISOString(),
+        completedAt: completedAt.toISOString(),
+        messageCount: this.state.messageCount
+      }
+    };
+    this.emit("complete", result);
+    if (this.state.completionResolver !== null) {
+      this.state.completionResolver(result);
+      this.state.completionResolver = null;
+    }
+    if (this.state.waiter !== null) {
+      const waiter = this.state.waiter;
+      this.state.waiter = null;
+      waiter();
+    }
+  }
+  async* messages() {
+    while (!this.state.completed || this.state.queued.length > 0) {
+      while (this.state.queued.length > 0) {
+        const line = this.state.queued.shift();
+        if (line !== undefined) {
+          yield line;
+        }
+      }
+      if (this.state.completed) {
+        break;
+      }
+      await new Promise((resolve2) => {
+        this.state.waiter = resolve2;
+      });
+    }
+  }
+  async waitForCompletion() {
+    return await this.state.completionPromise;
+  }
+  async cancel() {
+    this.stopHook?.();
+    this.pm.kill(this.processId);
+  }
+  async interrupt() {
+    this.pm.writeInput(this.processId, "\x03");
+  }
+  async pause() {}
+  async resume() {}
+}
+
+class SessionRunner {
+  options;
+  pm;
+  active = new Set;
+  constructor(options) {
+    this.options = options ?? {};
+    this.pm = new ProcessManager(options?.codexBinary);
+  }
+  async startSession(config) {
+    if (config.resumeSessionId !== undefined) {
+      return await this.resumeSession(config.resumeSessionId, config.prompt, {
+        cwd: config.cwd,
+        model: config.model,
+        systemPrompt: config.systemPrompt,
+        sandbox: config.sandbox,
+        approvalMode: config.approvalMode,
+        fullAuto: config.fullAuto,
+        additionalArgs: config.additionalArgs,
+        configOverrides: config.configOverrides,
+        images: config.images,
+        streamGranularity: config.streamGranularity,
+        environmentVariables: config.environmentVariables
+      });
+    }
+    const startedAt = new Date;
+    const options = this.toProcessOptions(config);
+    const execStream = this.pm.spawnExecStream(config.prompt, options);
+    const session = new RunningSession(`pending-${startedAt.getTime()}`, this.pm, execStream.process.id, startedAt, options.streamGranularity ?? "event");
+    this.trackSession(session);
+    this.forwardExecStream(execStream, session);
+    return session;
+  }
+  async resumeSession(sessionId, prompt, options) {
+    const codexHome = this.resolveCodexHome(options);
+    const sessionInfo = await findSession(sessionId, codexHome);
+    const includeExisting = this.options.includeExistingOnResume === true;
+    const preResumeRolloutOffset = sessionInfo !== null ? await getRolloutSize(sessionInfo.rolloutPath) : undefined;
+    const existingRolloutLines = includeExisting && sessionInfo !== null ? await readRollout(sessionInfo.rolloutPath) : undefined;
+    const startedAt = new Date;
+    const resumeStream = this.pm.spawnResumeStream(sessionId, {
+      ...options,
+      codexBinary: this.options.codexBinary
+    }, prompt);
+    const running = new RunningSession(sessionId, this.pm, resumeStream.process.id, startedAt, options?.streamGranularity ?? "event", false);
+    this.trackSession(running);
+    const seenLineKeys = new Set;
+    const pushLineIfNew = (line) => {
+      const key = stableLineKey(line);
+      if (seenLineKeys.has(key)) {
+        return;
+      }
+      seenLineKeys.add(key);
+      running.pushLine(line);
+    };
+    const watcher = new RolloutWatcher;
+    watcher.on("line", (_path, line) => {
+      pushLineIfNew(line);
+    });
+    let attachPromise = null;
+    if (sessionInfo !== null) {
+      if (includeExisting) {
+        for (const line of existingRolloutLines ?? []) {
+          pushLineIfNew(line);
+        }
+      }
+      await watcher.watchFile(sessionInfo.rolloutPath, {
+        startOffset: preResumeRolloutOffset
+      });
+    } else {
+      attachPromise = this.attachWatchWhenSessionAppears(sessionId, codexHome, watcher, includeExisting);
+    }
+    running.setStopHook(() => watcher.stop());
+    const streamForwardPromise = (async () => {
+      for await (const line of resumeStream.lines) {
+        pushLineIfNew(line);
+      }
+    })();
+    resumeStream.completion.then(async (exitCode) => {
+      await streamForwardPromise;
+      if (attachPromise !== null) {
+        await attachPromise;
+      }
+      await watcher.flush();
+      watcher.stop();
+      running.finish(exitCode);
+    });
+    return running;
+  }
+  async attachWatchWhenSessionAppears(sessionId, codexHome, watcher, includeExisting) {
+    for (let attempt = 0;attempt < 20; attempt += 1) {
+      if (watcher.isClosed) {
+        return;
+      }
+      const discovered = await findSession(sessionId, codexHome);
+      if (discovered !== null) {
+        if (includeExisting) {
+          const existing = await readRollout(discovered.rolloutPath);
+          for (const line of existing) {
+            watcher.emit("line", discovered.rolloutPath, line);
+          }
+          await watcher.watchFile(discovered.rolloutPath);
+        } else {
+          await watcher.watchFile(discovered.rolloutPath, { startOffset: 0 });
+        }
+        return;
+      }
+      await sleep(100);
+    }
+  }
+  listActiveSessions() {
+    return Array.from(this.active);
+  }
+  trackSession(session) {
+    this.active.add(session);
+    session.on("complete", () => {
+      this.active.delete(session);
+    });
+  }
+  toProcessOptions(config) {
+    return {
+      codexBinary: this.options.codexBinary,
+      cwd: config.cwd,
+      systemPrompt: config.systemPrompt,
+      model: config.model,
+      sandbox: config.sandbox,
+      approvalMode: config.approvalMode,
+      fullAuto: config.fullAuto,
+      additionalArgs: config.additionalArgs,
+      configOverrides: config.configOverrides,
+      images: config.images,
+      streamGranularity: config.streamGranularity,
+      environmentVariables: config.environmentVariables
+    };
+  }
+  resolveCodexHome(options) {
+    return options?.environmentVariables?.["CODEX_HOME"] ?? this.options.codexHome;
+  }
+  forwardExecStream(stream, session) {
+    (async () => {
+      for await (const line of stream.lines) {
+        session.pushLine(line);
+      }
+    })();
+    stream.completion.then((exitCode) => {
+      session.finish(exitCode);
+    });
+  }
+}
+function toCharStreamChunks(line, sessionId) {
+  const textSegments = extractAssistantTextSegments(line);
+  if (textSegments.length === 0) {
+    return [line];
+  }
+  const chunks = [];
+  for (const segment of textSegments) {
+    for (const char of Array.from(segment)) {
+      chunks.push({
+        kind: "char",
+        char,
+        sessionId,
+        timestamp: line.timestamp,
+        sourceType: line.type,
+        source: line
+      });
+    }
+  }
+  return chunks;
+}
+function extractAssistantTextSegments(line) {
+  if (line.type === "event_msg") {
+    const payload2 = toRecord3(line.payload);
+    if (payload2?.["type"] === "AgentMessage" && typeof payload2["message"] === "string") {
+      return [payload2["message"]];
+    }
+    return [];
+  }
+  if (line.type !== "response_item") {
+    return [];
+  }
+  const payload = toRecord3(line.payload);
+  if (payload?.["type"] !== "message" || payload["role"] !== "assistant" || !Array.isArray(payload["content"])) {
+    return [];
+  }
+  const segments = [];
+  for (const item of payload["content"]) {
+    const content = toRecord3(item);
+    if (content === null) {
+      continue;
+    }
+    if ((content["type"] === "output_text" || content["type"] === "input_text") && typeof content["text"] === "string" && content["text"].length > 0) {
+      segments.push(content["text"]);
+    }
+  }
+  return segments;
+}
+function toRecord3(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+function sleep(ms) {
+  return new Promise((resolve2) => {
+    setTimeout(resolve2, ms);
+  });
+}
+function stableLineKey(line) {
+  return JSON.stringify(toCanonicalJsonValue(line));
+}
+function toCanonicalJsonValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => toCanonicalJsonValue(item));
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+  const record = value;
+  const canonical = {};
+  for (const key of Object.keys(record).sort()) {
+    canonical[key] = toCanonicalJsonValue(record[key]);
+  }
+  return canonical;
+}
+async function getRolloutSize(path) {
+  try {
+    const info = await stat3(path);
+    return info.size;
+  } catch {
+    return 0;
+  }
+}
+// src/sdk/agent-runner.ts
+import { mkdtemp, rm, writeFile } from "fs/promises";
+import { tmpdir } from "os";
+import { extname, join as join4 } from "path";
+import { randomUUID as randomUUID2 } from "crypto";
+async function* runAgent(request, options) {
+  const runner = new SessionRunner(options);
+  const normalized = await normalizeAttachments(request.attachments);
+  const resumed = isResumeRequest(request);
+  const normalizedMode = request.streamMode === "normalized";
+  let currentSessionId = resumed ? request.sessionId : undefined;
+  try {
+    const session = await startFromRequest(runner, request, normalized.imagePaths);
+    currentSessionId = session.sessionId;
+    const iterator = session.messages();
+    const normalizerState = createNormalizerState();
+    if (resumed) {
+      const startedEvent = {
+        type: "session.started",
+        sessionId: session.sessionId,
+        resumed: true
+      };
+      yield startedEvent;
+    } else {
+      const firstChunk = await iterator.next();
+      if (firstChunk.done) {
+        const startedEvent = {
+          type: "session.started",
+          sessionId: session.sessionId,
+          resumed: false
+        };
+        yield startedEvent;
+      } else {
+        const startedSessionId = resolveSessionId(session.sessionId, firstChunk.value);
+        currentSessionId = startedSessionId;
+        const startedEvent = {
+          type: "session.started",
+          sessionId: startedSessionId,
+          resumed: false
+        };
+        yield startedEvent;
+        if (normalizedMode) {
+          for (const event of normalizeChunkToEvents(firstChunk.value, startedSessionId, normalizerState, false)) {
+            yield event;
+          }
+        } else {
+          yield {
+            type: "session.message",
+            sessionId: startedSessionId,
+            chunk: firstChunk.value
+          };
+        }
+      }
+    }
+    while (true) {
+      const nextChunk = await iterator.next();
+      if (nextChunk.done) {
+        break;
+      }
+      const resolvedSessionId2 = resolveSessionId(session.sessionId, nextChunk.value);
+      currentSessionId = resolvedSessionId2;
+      if (normalizedMode) {
+        for (const event of normalizeChunkToEvents(nextChunk.value, resolvedSessionId2, normalizerState, false)) {
+          yield event;
+        }
+      } else {
+        yield {
+          type: "session.message",
+          sessionId: resolvedSessionId2,
+          chunk: nextChunk.value
+        };
+      }
+    }
+    const result = await session.waitForCompletion();
+    const resolvedSessionId = currentSessionId ?? session.sessionId;
+    if (normalizedMode) {
+      yield {
+        type: "session.completed",
+        sessionId: resolvedSessionId,
+        success: result.success,
+        exitCode: result.exitCode
+      };
+    } else {
+      yield {
+        type: "session.completed",
+        sessionId: resolvedSessionId,
+        result
+      };
+    }
+  } catch (error) {
+    yield {
+      type: "session.error",
+      sessionId: currentSessionId,
+      error: toError(error)
+    };
+  } finally {
+    await normalized.cleanup();
+  }
+}
+async function* toNormalizedEvents(chunks) {
+  const state = createNormalizerState();
+  let fallbackSessionId = "unknown-session";
+  for await (const chunk of chunks) {
+    fallbackSessionId = resolveSessionId(fallbackSessionId, chunk);
+    for (const event of normalizeChunkToEvents(chunk, fallbackSessionId, state, true)) {
+      yield event;
+    }
+  }
+}
+async function startFromRequest(runner, request, imagePaths) {
+  if (isResumeRequest(request)) {
+    const session = await runner.resumeSession(request.sessionId, request.prompt, {
+      cwd: request.cwd,
+      model: request.model,
+      sandbox: request.sandbox,
+      approvalMode: request.approvalMode,
+      fullAuto: request.fullAuto,
+      additionalArgs: request.additionalArgs,
+      configOverrides: request.configOverrides,
+      images: imagePaths,
+      streamGranularity: request.streamGranularity,
+      environmentVariables: request.environmentVariables
+    });
+    return session;
+  }
+  const config = {
+    prompt: request.prompt,
+    cwd: request.cwd,
+    model: request.model,
+    sandbox: request.sandbox,
+    approvalMode: request.approvalMode,
+    fullAuto: request.fullAuto,
+    additionalArgs: request.additionalArgs,
+    configOverrides: request.configOverrides,
+    images: imagePaths,
+    streamGranularity: request.streamGranularity,
+    environmentVariables: request.environmentVariables
+  };
+  return await runner.startSession(config);
+}
+async function normalizeAttachments(attachments) {
+  if (attachments === undefined || attachments.length === 0) {
+    return {
+      imagePaths: [],
+      cleanup: async () => {
+        return;
+      }
+    };
+  }
+  const paths = [];
+  const tempDirs = [];
+  for (const attachment of attachments) {
+    if (attachment.type === "path") {
+      paths.push(attachment.path);
+      continue;
+    }
+    const tempDir = await mkdtemp(join4(tmpdir(), "codex-agent-attachment-"));
+    tempDirs.push(tempDir);
+    const parsed = parseBase64Input(attachment.data);
+    const mediaType = attachment.mediaType ?? parsed.mediaType;
+    const ext = extensionForMediaType(mediaType);
+    const fileName = sanitizeFileName(attachment.filename, ext);
+    const filePath = join4(tempDir, fileName);
+    const body = parsed.body;
+    const content = Uint8Array.from(Buffer.from(body, "base64"));
+    await writeFile(filePath, content);
+    paths.push(filePath);
+  }
+  return {
+    imagePaths: paths,
+    cleanup: async () => {
+      await Promise.all(tempDirs.map(async (dir) => {
+        await rm(dir, { recursive: true, force: true });
+      }));
+    }
+  };
+}
+function parseBase64Input(data) {
+  if (!data.startsWith("data:")) {
+    return { body: data };
+  }
+  const marker = ";base64,";
+  const markerIndex = data.indexOf(marker);
+  if (markerIndex < 0) {
+    return { body: data };
+  }
+  const mediaType = data.slice(5, markerIndex);
+  const body = data.slice(markerIndex + marker.length);
+  if (mediaType.length === 0) {
+    return { body };
+  }
+  return { body, mediaType };
+}
+function extensionForMediaType(mediaType) {
+  if (mediaType === undefined) {
+    return ".img";
+  }
+  switch (mediaType.toLowerCase()) {
+    case "image/png":
+      return ".png";
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/gif":
+      return ".gif";
+    default:
+      return ".img";
+  }
+}
+function sanitizeFileName(filename, defaultExt) {
+  if (filename === undefined || filename.trim().length === 0) {
+    return `${randomUUID2()}${defaultExt}`;
+  }
+  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  if (safe.length === 0) {
+    return `${randomUUID2()}${defaultExt}`;
+  }
+  if (extname(safe).length > 0) {
+    return safe;
+  }
+  return `${safe}${defaultExt}`;
+}
+function resolveSessionId(fallbackSessionId, chunk) {
+  if (isCharChunk(chunk)) {
+    return chunk.sessionId;
+  }
+  if (chunk.type === "session_meta" && typeof chunk.payload === "object" && chunk.payload !== null && "meta" in chunk.payload) {
+    const payload = chunk.payload;
+    const candidate = payload.meta?.id;
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return fallbackSessionId;
+}
+function isCharChunk(chunk) {
+  return chunk.kind === "char";
+}
+function toError(value) {
+  if (value instanceof Error) {
+    return value;
+  }
+  return new Error(typeof value === "string" ? value : "Unknown runAgent error");
+}
+function isResumeRequest(request) {
+  return typeof request.sessionId === "string";
+}
+function createNormalizerState() {
+  return {
+    startedSessionIds: new Set,
+    assistantSnapshots: new Map,
+    toolNamesByCallId: new Map
+  };
+}
+function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionStarted) {
+  const sessionId = resolveSessionId(fallbackSessionId, chunk);
+  const events = [];
+  if (isCharChunk(chunk)) {
+    events.push(...toAssistantTextEvents(sessionId, chunk.char, state));
+    return events;
+  }
+  if (chunk.type === "session_meta") {
+    if (includeSessionStarted && !state.startedSessionIds.has(sessionId)) {
+      state.startedSessionIds.add(sessionId);
+      events.push({
+        type: "session.started",
+        sessionId,
+        resumed: false
+      });
+    }
+    return events;
+  }
+  if (chunk.type === "event_msg") {
+    const payload2 = toRecord4(chunk.payload);
+    if (payload2 === null) {
+      return events;
+    }
+    const payloadType = readString3(payload2["type"]);
+    if (payloadType === "AgentMessage") {
+      const message = readString3(payload2["message"]);
+      if (message !== undefined) {
+        events.push(...toAssistantTextEvents(sessionId, message, state));
+      }
+      return events;
+    }
+    if (payloadType === "AgentReasoning") {
+      const message = readString3(payload2["text"]);
+      events.push({
+        type: "activity",
+        sessionId,
+        ...message !== undefined ? { message } : {}
+      });
+      return events;
+    }
+    if (payloadType === "ExecCommandBegin") {
+      const callId = readString3(payload2["call_id"]);
+      const command = readStringArray(payload2["command"]);
+      const input = {
+        callId,
+        turnId: readString3(payload2["turn_id"]),
+        cwd: readString3(payload2["cwd"]),
+        command
+      };
+      events.push({
+        type: "tool.call",
+        sessionId,
+        name: "local_shell",
+        input
+      });
+      return events;
+    }
+    if (payloadType === "ExecCommandEnd") {
+      const callId = readString3(payload2["call_id"]);
+      const exitCode = readNumber(payload2["exit_code"]);
+      const output = {
+        callId,
+        turnId: readString3(payload2["turn_id"]),
+        cwd: readString3(payload2["cwd"]),
+        command: readStringArray(payload2["command"]),
+        exitCode,
+        aggregatedOutput: payload2["aggregated_output"]
+      };
+      events.push({
+        type: "tool.result",
+        sessionId,
+        name: "local_shell",
+        isError: exitCode !== undefined ? exitCode !== 0 : false,
+        output
+      });
+      return events;
+    }
+    if (payloadType === "Error") {
+      events.push({
+        type: "session.error",
+        sessionId,
+        error: new Error(readString3(payload2["message"]) ?? "Unknown rollout error")
+      });
+      return events;
+    }
+    events.push({
+      type: "activity",
+      sessionId,
+      message: payloadType ?? "event_msg"
+    });
+    return events;
+  }
+  if (chunk.type !== "response_item") {
+    return events;
+  }
+  const payload = toRecord4(chunk.payload);
+  if (payload === null) {
+    return events;
+  }
+  const itemType = readString3(payload["type"]);
+  if (itemType === "function_call") {
+    const name = readString3(payload["name"]) ?? "unknown-tool";
+    const callId = readString3(payload["call_id"]);
+    if (callId !== undefined) {
+      state.toolNamesByCallId.set(callId, name);
+    }
+    events.push({
+      type: "tool.call",
+      sessionId,
+      name,
+      input: parseMaybeJson(readString3(payload["arguments"]))
+    });
+    return events;
+  }
+  if (itemType === "function_call_output") {
+    const callId = readString3(payload["call_id"]);
+    const output = payload["output"];
+    const outputRecord = toRecord4(output);
+    const isError = outputRecord?.["is_error"] === true || readString3(outputRecord?.["status"]) === "error";
+    events.push({
+      type: "tool.result",
+      sessionId,
+      name: (callId !== undefined ? state.toolNamesByCallId.get(callId) : undefined) ?? "unknown-tool",
+      isError,
+      output
+    });
+    return events;
+  }
+  if (itemType === "local_shell_call") {
+    const status = readString3(payload["status"]);
+    const action = payload["action"];
+    const output = payload["output"];
+    const callId = readString3(payload["call_id"]);
+    const isTerminalStatus = status === "completed" || status === "failed" || status === "error";
+    if (isTerminalStatus) {
+      events.push({
+        type: "tool.result",
+        sessionId,
+        name: "local_shell",
+        isError: status !== "completed",
+        output: {
+          callId,
+          status,
+          action,
+          output
+        }
+      });
+      return events;
+    }
+    events.push({
+      type: "tool.call",
+      sessionId,
+      name: "local_shell",
+      input: {
+        callId,
+        status,
+        action
+      }
+    });
+    return events;
+  }
+  if (itemType === "message" && readString3(payload["role"]) === "assistant" && Array.isArray(payload["content"])) {
+    for (const item of payload["content"]) {
+      const content = toRecord4(item);
+      if (content === null) {
+        continue;
+      }
+      const contentType = readString3(content["type"]);
+      if (contentType !== "output_text" && contentType !== "input_text") {
+        continue;
+      }
+      const text = readString3(content["text"]);
+      if (text !== undefined && text.length > 0) {
+        events.push(...toAssistantTextEvents(sessionId, text, state));
+      }
+    }
+    return events;
+  }
+  return events;
+}
+function toAssistantTextEvents(sessionId, text, state) {
+  const previous = state.assistantSnapshots.get(sessionId) ?? "";
+  const content = `${previous}${text}`;
+  state.assistantSnapshots.set(sessionId, content);
+  return [
+    {
+      type: "assistant.delta",
+      sessionId,
+      text
+    },
+    {
+      type: "assistant.snapshot",
+      sessionId,
+      content
+    }
+  ];
+}
+function toRecord4(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+function readString3(value) {
+  return typeof value === "string" ? value : undefined;
+}
+function readNumber(value) {
+  return typeof value === "number" ? value : undefined;
+}
+function readStringArray(value) {
+  if (!Array.isArray(value)) {
+    return;
+  }
+  const strings = value.filter((item) => typeof item === "string");
+  return strings.length > 0 ? strings : undefined;
+}
+function parseMaybeJson(value) {
+  if (value === undefined) {
+    return;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+// src/sdk/tool-versions.ts
+import { spawn as spawn2 } from "child_process";
+var DEFAULT_TIMEOUT_MS = 5000;
+async function getCodexCliVersion(options) {
+  return await readToolVersion(options?.codexBinary ?? "codex", options?.timeoutMs);
+}
+async function getToolVersions(options) {
+  const codex = await getCodexCliVersion(options);
+  if (options?.includeGit !== true) {
+    return { codex };
+  }
+  const git = await readToolVersion(options.gitBinary ?? "git", options.timeoutMs);
+  return { codex, git };
+}
+async function readToolVersion(binary, timeoutMs) {
+  const effectiveTimeout = timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  return await new Promise((resolve2) => {
+    const child = spawn2(binary, ["--version"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env }
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const settle = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve2(result);
+    };
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      settle({ version: null, error: message });
+    });
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        const line = firstLine(stdout);
+        if (line !== null) {
+          settle({ version: line, error: null });
+          return;
+        }
+        settle({
+          version: null,
+          error: "version command succeeded but produced no output"
+        });
+        return;
+      }
+      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+      const details = firstLine(stderr);
+      const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
+      settle({ version: null, error: message });
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      settle({
+        version: null,
+        error: `version command timed out after ${effectiveTimeout}ms`
+      });
+    }, effectiveTimeout);
+  });
+}
+function firstLine(value) {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return trimmed.split(/\r?\n/u)[0] ?? null;
+}
+// src/sdk/model-availability.ts
+import { spawn as spawn3 } from "child_process";
+var DEFAULT_TIMEOUT_MS2 = 15000;
+var DEFAULT_PROBE_PROMPT = "Reply with exactly OK.";
+async function getCodexLoginStatus(options) {
+  const result = await runCodexCommand(options?.codexBinary ?? "codex", ["login", "status"], options);
+  const status = firstNonEmptyLine(result.stdout) ?? firstNonEmptyLine(result.stderr);
+  if (result.error !== null) {
+    return {
+      ok: false,
+      status,
+      error: status !== null && looksUnauthenticated(status) ? status : result.error,
+      exitCode: result.exitCode
+    };
+  }
+  if (status === null) {
+    return {
+      ok: false,
+      status: null,
+      error: "login status command succeeded but produced no output",
+      exitCode: result.exitCode
+    };
+  }
+  if (looksUnauthenticated(status)) {
+    return {
+      ok: false,
+      status,
+      error: status,
+      exitCode: result.exitCode
+    };
+  }
+  return {
+    ok: true,
+    status,
+    error: null,
+    exitCode: result.exitCode
+  };
+}
+async function checkCodexModelAvailability(options) {
+  const model = options.model.trim();
+  if (model.length === 0) {
+    throw new Error("model is required");
+  }
+  const [auth, probe] = await Promise.all([
+    getCodexLoginStatus(options),
+    runModelProbe({
+      ...options,
+      model
+    })
+  ]);
+  return {
+    ok: auth.ok && probe.ok,
+    model,
+    auth,
+    probe
+  };
+}
+async function runModelProbe(options) {
+  const args = [
+    "exec",
+    "--skip-git-repo-check",
+    "--ephemeral",
+    "--color",
+    "never",
+    "--sandbox",
+    "read-only"
+  ];
+  if (options.cwd !== undefined) {
+    args.push("--cd", options.cwd);
+  }
+  args.push("--model", options.model, options.prompt ?? DEFAULT_PROBE_PROMPT);
+  const result = await runCodexCommand(options.codexBinary ?? "codex", args, options);
+  const output = firstNonEmptyLine(result.stdout);
+  return {
+    ok: result.error === null,
+    model: options.model,
+    output,
+    error: result.error,
+    exitCode: result.exitCode
+  };
+}
+async function runCodexCommand(binary, args, options) {
+  const timeoutMs = normalizeTimeout(options?.timeoutMs);
+  return await new Promise((resolve2) => {
+    const child = spawn3(binary, args, {
+      cwd: options?.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env }
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timer;
+    const settle = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      resolve2(result);
+    };
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      settle({
+        exitCode: null,
+        stdout,
+        stderr,
+        error: toErrorMessage(error)
+      });
+    });
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        settle({
+          exitCode: 0,
+          stdout,
+          stderr,
+          error: null
+        });
+        return;
+      }
+      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+      const details = firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
+      settle({
+        exitCode: code ?? null,
+        stdout,
+        stderr,
+        error: details === null ? `command failed (${reason})` : `command failed (${reason}): ${details}`
+      });
+    });
+    timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      settle({
+        exitCode: null,
+        stdout,
+        stderr,
+        error: `command timed out after ${timeoutMs}ms`
+      });
+    }, timeoutMs);
+  });
+}
+function normalizeTimeout(value) {
+  if (value !== undefined && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  return DEFAULT_TIMEOUT_MS2;
+}
+function looksUnauthenticated(status) {
+  return /not\s+logged|logged\s*out|unauthenticated|no\s+stored\s+credentials/iu.test(status);
+}
+function firstNonEmptyLine(value) {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return trimmed.split(/\r?\n/u)[0] ?? null;
+}
+function toErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+// src/sdk/usage-stats.ts
+import { readdir as readdir2 } from "fs/promises";
+import { join as join5 } from "path";
+var ROLLOUT_PREFIX3 = "rollout-";
+var ROLLOUT_EXT3 = ".jsonl";
+var DEFAULT_RECENT_DAYS = 14;
+var DEFAULT_CACHE_TTL_MS = 5000;
+var usageStatsCache = null;
+async function getCodexUsageStats(options) {
+  const sessionsDir = options?.codexSessionsDir ?? join5(resolveCodexHome(), "sessions");
+  const recentDays = normalizeRecentDays(options?.recentDays);
+  const now = resolveNowMs(options?.now);
+  const cacheKey = `${sessionsDir}::${String(recentDays)}`;
+  if (usageStatsCache !== null && usageStatsCache.key === cacheKey && usageStatsCache.expiresAt > now) {
+    return usageStatsCache.value;
+  }
+  const rolloutFiles = await listRolloutFiles(sessionsDir);
+  if (rolloutFiles === null) {
+    cacheUsageStats(cacheKey, now, null);
+    return null;
+  }
+  const lastComputedDate = dateKeyFromEpochMs(now);
+  const firstRecentDayEpochMs = dayStartEpochMs(now) - (recentDays - 1) * 86400000;
+  let totalSessions = 0;
+  let totalMessages = 0;
+  let firstSessionDate = null;
+  const modelUsageMap = new Map;
+  const dailyActivityMap = new Map;
+  const tokenCountStateByKey = new Map;
+  for (const rolloutFile of rolloutFiles) {
+    let hadParsableLine = false;
+    let sessionDateForFile = null;
+    try {
+      for await (const line of streamEvents(rolloutFile)) {
+        hadParsableLine = true;
+        const lineDate = dateKeyFromTimestamp(line.timestamp);
+        if (lineDate !== null && (sessionDateForFile === null || lineDate < sessionDateForFile)) {
+          sessionDateForFile = lineDate;
+        }
+        if (isSessionMeta(line)) {
+          const sessionMetaTimestamp = extractSessionMetaTimestamp(line.payload);
+          if (sessionMetaTimestamp !== undefined) {
+            const sessionMetaDate = dateKeyFromTimestamp(sessionMetaTimestamp);
+            if (sessionMetaDate !== null && (sessionDateForFile === null || sessionMetaDate < sessionDateForFile)) {
+              sessionDateForFile = sessionMetaDate;
+            }
+          }
+        }
+        if (isUserOrAssistantMessage(line)) {
+          totalMessages += 1;
+          if (lineDate !== null) {
+            getOrCreateDailyActivity(dailyActivityMap, lineDate).messageCount += 1;
+          }
+        }
+        const toolCalls = extractToolCallCount(line);
+        if (toolCalls > 0 && lineDate !== null) {
+          getOrCreateDailyActivity(dailyActivityMap, lineDate).toolCallCount += toolCalls;
+        }
+        const rawUsageEvent = extractUsageEvent(line);
+        const usageEvent = normalizeUsageEventForAggregation(rawUsageEvent, tokenCountStateByKey);
+        if (usageEvent === null || usageEvent.totalTokens <= 0) {
+          continue;
+        }
+        const model = usageEvent.model;
+        const modelUsage = getOrCreateModelUsage(modelUsageMap, model);
+        modelUsage.inputTokens += usageEvent.inputTokens;
+        modelUsage.outputTokens += usageEvent.outputTokens;
+        modelUsage.cacheReadInputTokens += usageEvent.cacheReadInputTokens;
+        modelUsage.cacheCreationInputTokens += usageEvent.cacheCreationInputTokens;
+        if (lineDate !== null) {
+          const daily = getOrCreateDailyActivity(dailyActivityMap, lineDate);
+          const prev = daily.tokensByModel.get(model) ?? 0;
+          daily.tokensByModel.set(model, prev + usageEvent.totalTokens);
+        }
+      }
+    } catch {
+      continue;
+    }
+    if (!hadParsableLine) {
+      continue;
+    }
+    totalSessions += 1;
+    if (sessionDateForFile !== null) {
+      if (firstSessionDate === null || sessionDateForFile < firstSessionDate) {
+        firstSessionDate = sessionDateForFile;
+      }
+      getOrCreateDailyActivity(dailyActivityMap, sessionDateForFile).sessionCount += 1;
+    }
+  }
+  const recentDailyActivity = [];
+  for (let offset = 0;offset < recentDays; offset += 1) {
+    const epochMs = firstRecentDayEpochMs + offset * 86400000;
+    const date = dateKeyFromEpochMs(epochMs);
+    const activity = dailyActivityMap.get(date);
+    if (activity === undefined) {
+      recentDailyActivity.push({ date });
+      continue;
+    }
+    const tokensByModel = mapToRecord(activity.tokensByModel);
+    recentDailyActivity.push({
+      date,
+      ...activity.messageCount > 0 ? { messageCount: activity.messageCount } : {},
+      ...activity.sessionCount > 0 ? { sessionCount: activity.sessionCount } : {},
+      ...activity.toolCallCount > 0 ? { toolCallCount: activity.toolCallCount } : {},
+      ...Object.keys(tokensByModel).length > 0 ? { tokensByModel } : {}
+    });
+  }
+  const result = {
+    totalSessions,
+    totalMessages,
+    firstSessionDate,
+    lastComputedDate,
+    modelUsage: mapToRecord(modelUsageMap),
+    recentDailyActivity
+  };
+  cacheUsageStats(cacheKey, now, result);
+  return result;
+}
+function normalizeRecentDays(value) {
+  if (value === undefined) {
+    return DEFAULT_RECENT_DAYS;
+  }
+  if (!Number.isFinite(value)) {
+    return DEFAULT_RECENT_DAYS;
+  }
+  const floored = Math.floor(value);
+  return floored > 0 ? floored : DEFAULT_RECENT_DAYS;
+}
+function resolveNowMs(value) {
+  if (value instanceof Date) {
+    const epochMs = value.getTime();
+    return Number.isFinite(epochMs) ? epochMs : Date.now();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return Date.now();
+}
+async function listRolloutFiles(sessionsDir) {
+  try {
+    const files = [];
+    await collectRolloutFilesRecursive(sessionsDir, files);
+    files.sort();
+    return files;
+  } catch {
+    return null;
+  }
+}
+async function collectRolloutFilesRecursive(dirPath, out) {
+  const entries = await readdir2(dirPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = join5(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      await collectRolloutFilesRecursive(fullPath, out);
+      continue;
+    }
+    if (entry.isFile() && entry.name.startsWith(ROLLOUT_PREFIX3) && entry.name.endsWith(ROLLOUT_EXT3)) {
+      out.push(fullPath);
+    }
+  }
+}
+function cacheUsageStats(key, nowEpochMs, value) {
+  usageStatsCache = {
+    key,
+    expiresAt: nowEpochMs + DEFAULT_CACHE_TTL_MS,
+    value
+  };
+}
+function getOrCreateModelUsage(modelUsageMap, model) {
+  const existing = modelUsageMap.get(model);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0
+  };
+  modelUsageMap.set(model, created);
+  return created;
+}
+function getOrCreateDailyActivity(activityMap, date) {
+  const existing = activityMap.get(date);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = {
+    messageCount: 0,
+    sessionCount: 0,
+    toolCallCount: 0,
+    tokensByModel: new Map
+  };
+  activityMap.set(date, created);
+  return created;
+}
+function mapToRecord(value) {
+  const result = {};
+  for (const [key, entry] of value.entries()) {
+    result[key] = entry;
+  }
+  return result;
+}
+function isUserOrAssistantMessage(line) {
+  if (isEventMsg(line)) {
+    const payload = toRecord5(line.payload);
+    const eventType = readString4(payload, "type");
+    return eventType === "UserMessage" || eventType === "AgentMessage";
+  }
+  if (isResponseItem(line)) {
+    const payload = toRecord5(line.payload);
+    if (readString4(payload, "type") !== "message") {
+      return false;
+    }
+    const role = readString4(payload, "role");
+    return role === "user" || role === "assistant";
+  }
+  return false;
+}
+function extractToolCallCount(line) {
+  if (isEventMsg(line)) {
+    const payload = toRecord5(line.payload);
+    if (readString4(payload, "type") === "ExecCommandBegin") {
+      return 1;
+    }
+  }
+  if (isResponseItem(line)) {
+    const payload = toRecord5(line.payload);
+    const itemType = readString4(payload, "type");
+    if (itemType === "function_call" || itemType === "local_shell_call") {
+      return 1;
+    }
+  }
+  return 0;
+}
+function extractUsageEvent(line) {
+  if (!isEventMsg(line)) {
+    return null;
+  }
+  const payload = toRecord5(line.payload);
+  if (payload === null) {
+    return null;
+  }
+  const eventType = readString4(payload, "type");
+  let usage = null;
+  let modelFromInfo;
+  let source = null;
+  let isCumulative = false;
+  let aggregationKey;
+  let model;
+  if (eventType === "TurnComplete") {
+    source = "turn_complete";
+    usage = toRecord5(payload["usage"]);
+  } else if (eventType === "token_count" || eventType === "TokenCount") {
+    const info = toRecord5(payload["info"]);
+    if (info === null) {
+      return null;
+    }
+    source = "token_count";
+    modelFromInfo = readString4(info, "model");
+    const lastTokenUsage = toRecord5(info["last_token_usage"]) ?? toRecord5(payload["last_token_usage"]);
+    const totalTokenUsage = toRecord5(info["total_token_usage"]) ?? toRecord5(payload["total_token_usage"]);
+    if (lastTokenUsage !== null) {
+      usage = lastTokenUsage;
+      isCumulative = false;
+    } else if (totalTokenUsage !== null) {
+      usage = totalTokenUsage;
+      isCumulative = true;
+    } else {
+      usage = toRecord5(info["usage"]) ?? toRecord5(payload["usage"]) ?? payload;
+      isCumulative = false;
+    }
+    model = resolveTokenCountModel(payload, usage, info, modelFromInfo);
+    aggregationKey = extractTokenCountAggregationKey(payload, info, model);
+  }
+  if (source === null || usage === null) {
+    return null;
+  }
+  const inputTokens = readNumber2(usage, "input_tokens") ?? readNumber2(usage, "inputTokens") ?? 0;
+  const outputTokens = readNumber2(usage, "output_tokens") ?? readNumber2(usage, "outputTokens") ?? 0;
+  const cacheReadInputTokens = readNumber2(usage, "cache_read_input_tokens") ?? readNumber2(usage, "cacheReadInputTokens") ?? readNumber2(usage, "cached_input_tokens") ?? 0;
+  const cacheCreationInputTokens = readNumber2(usage, "cache_creation_input_tokens") ?? readNumber2(usage, "cacheCreationInputTokens") ?? 0;
+  const computedTotal = inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+  const totalTokens = readNumber2(usage, "total_tokens") ?? readNumber2(usage, "totalTokens") ?? computedTotal;
+  model = model ?? modelFromInfo ?? readString4(usage, "model") ?? readString4(usage, "model_id") ?? readString4(payload, "model") ?? "unknown";
+  return {
+    source,
+    model,
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    totalTokens,
+    isCumulative,
+    ...aggregationKey !== undefined ? { aggregationKey } : {}
+  };
+}
+function normalizeUsageEventForAggregation(usageEvent, tokenCountStateByKey) {
+  if (usageEvent === null || usageEvent.source !== "token_count") {
+    return usageEvent;
+  }
+  const key = usageEvent.aggregationKey ?? usageEvent.model;
+  const state = getOrCreateTokenCountState(tokenCountStateByKey, key);
+  if (!usageEvent.isCumulative) {
+    return usageEvent;
+  }
+  if (state.lastTotalTokens !== undefined && usageEvent.totalTokens < state.lastTotalTokens) {
+    setTokenCountState(state, usageEvent);
+    return {
+      ...usageEvent,
+      isCumulative: false
+    };
+  }
+  const deltaInputTokens = positiveDelta(usageEvent.inputTokens, state.lastInputTokens);
+  const deltaOutputTokens = positiveDelta(usageEvent.outputTokens, state.lastOutputTokens);
+  const deltaCacheReadInputTokens = positiveDelta(usageEvent.cacheReadInputTokens, state.lastCacheReadInputTokens);
+  const deltaCacheCreationInputTokens = positiveDelta(usageEvent.cacheCreationInputTokens, state.lastCacheCreationInputTokens);
+  const deltaTotalTokens = positiveDelta(usageEvent.totalTokens, state.lastTotalTokens);
+  setTokenCountStateMax(state, usageEvent);
+  if (deltaTotalTokens <= 0) {
+    return null;
+  }
+  return {
+    ...usageEvent,
+    inputTokens: deltaInputTokens,
+    outputTokens: deltaOutputTokens,
+    cacheReadInputTokens: deltaCacheReadInputTokens,
+    cacheCreationInputTokens: deltaCacheCreationInputTokens,
+    totalTokens: deltaTotalTokens,
+    isCumulative: false
+  };
+}
+function getOrCreateTokenCountState(stateByKey, key) {
+  const existing = stateByKey.get(key);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = {};
+  stateByKey.set(key, created);
+  return created;
+}
+function setTokenCountState(state, usageEvent) {
+  state.lastInputTokens = usageEvent.inputTokens;
+  state.lastOutputTokens = usageEvent.outputTokens;
+  state.lastCacheReadInputTokens = usageEvent.cacheReadInputTokens;
+  state.lastCacheCreationInputTokens = usageEvent.cacheCreationInputTokens;
+  state.lastTotalTokens = usageEvent.totalTokens;
+}
+function setTokenCountStateMax(state, usageEvent) {
+  state.lastInputTokens = maxDefined(state.lastInputTokens, usageEvent.inputTokens);
+  state.lastOutputTokens = maxDefined(state.lastOutputTokens, usageEvent.outputTokens);
+  state.lastCacheReadInputTokens = maxDefined(state.lastCacheReadInputTokens, usageEvent.cacheReadInputTokens);
+  state.lastCacheCreationInputTokens = maxDefined(state.lastCacheCreationInputTokens, usageEvent.cacheCreationInputTokens);
+  state.lastTotalTokens = maxDefined(state.lastTotalTokens, usageEvent.totalTokens);
+}
+function positiveDelta(current, previous) {
+  if (previous === undefined) {
+    return current;
+  }
+  const delta = current - previous;
+  return delta > 0 ? delta : 0;
+}
+function maxDefined(previous, current) {
+  if (previous === undefined) {
+    return current;
+  }
+  return current > previous ? current : previous;
+}
+function extractTokenCountAggregationKey(payload, info, model) {
+  const parts = [];
+  const infoStreamId = readString4(info, "stream_id");
+  if (infoStreamId !== undefined) {
+    parts.push(`stream:${infoStreamId}`);
+  }
+  const infoTurnId = readString4(info, "turn_id");
+  if (infoTurnId !== undefined) {
+    parts.push(`info_turn:${infoTurnId}`);
+  }
+  const payloadTurnId = readString4(payload, "turn_id");
+  if (payloadTurnId !== undefined) {
+    parts.push(`payload_turn:${payloadTurnId}`);
+  }
+  const responseId = readString4(info, "response_id");
+  if (responseId !== undefined) {
+    parts.push(`response:${responseId}`);
+  }
+  const messageId = readString4(info, "message_id");
+  if (messageId !== undefined) {
+    parts.push(`message:${messageId}`);
+  }
+  parts.push(`model:${model}`);
+  return parts.join("|");
+}
+function resolveTokenCountModel(payload, usage, info, modelFromInfo) {
+  const explicitModel = modelFromInfo ?? readString4(usage, "model") ?? readString4(usage, "model_id") ?? readString4(payload, "model");
+  if (explicitModel !== undefined) {
+    return explicitModel;
+  }
+  const payloadRateLimitsModel = extractModelFromRateLimits(toRecord5(payload["rate_limits"]));
+  if (payloadRateLimitsModel !== undefined) {
+    return payloadRateLimitsModel;
+  }
+  const infoRateLimitsModel = extractModelFromRateLimits(toRecord5(info["rate_limits"]));
+  if (infoRateLimitsModel !== undefined) {
+    return infoRateLimitsModel;
+  }
+  return "unknown";
+}
+function extractModelFromRateLimits(rateLimits) {
+  const limitName = readString4(rateLimits, "limit_name");
+  const normalizedLimitName = normalizeRateLimitModel(limitName);
+  if (normalizedLimitName !== undefined) {
+    return normalizedLimitName;
+  }
+  const limitId = readString4(rateLimits, "limit_id");
+  return normalizeRateLimitModel(limitId);
+}
+function normalizeRateLimitModel(modelName) {
+  if (modelName === undefined) {
+    return;
+  }
+  const normalized = modelName.trim().toLowerCase().replace(/[\s_]+/g, "-").replace(/[^a-z0-9.-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return normalized.length > 0 ? normalized : undefined;
+}
+function extractSessionMetaTimestamp(payloadValue) {
+  const payload = toRecord5(payloadValue);
+  if (payload === null) {
+    return;
+  }
+  const payloadTimestamp = readString4(payload, "timestamp");
+  if (payloadTimestamp !== undefined) {
+    return payloadTimestamp;
+  }
+  const meta = toRecord5(payload["meta"]);
+  return readString4(meta, "timestamp");
+}
+function toRecord5(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+function readString4(value, key) {
+  if (value === null) {
+    return;
+  }
+  const candidate = value[key];
+  return typeof candidate === "string" ? candidate : undefined;
+}
+function readNumber2(value, key) {
+  if (value === null) {
+    return;
+  }
+  const candidate = value[key];
+  if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
+    return;
+  }
+  return candidate;
+}
+function dateKeyFromTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  const epochMs = date.getTime();
+  if (Number.isNaN(epochMs)) {
+    return null;
+  }
+  return dateKeyFromEpochMs(epochMs);
+}
+function dayStartEpochMs(epochMs) {
+  const date = new Date(epochMs);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+function dateKeyFromEpochMs(epochMs) {
+  return new Date(epochMs).toISOString().slice(0, 10);
 }
 // src/session/search.ts
 import { resolve as resolve2 } from "path";
@@ -1224,178 +3460,18 @@ function parseCandidateSessionMeta(meta) {
     branch
   };
 }
-// src/rollout/watcher.ts
-import { watch } from "fs";
-import { open, stat as stat2 } from "fs/promises";
-import { join as join3 } from "path";
-import { EventEmitter } from "events";
-var ROLLOUT_PREFIX2 = "rollout-";
-var ROLLOUT_EXT2 = ".jsonl";
-var DEBOUNCE_MS = 100;
-
-class RolloutWatcher extends EventEmitter {
-  fileWatchers = new Map;
-  dirWatchers = new Map;
-  closed = false;
-  async watchFile(path, options) {
-    if (this.closed) {
-      return;
-    }
-    if (this.fileWatchers.has(path)) {
-      return;
-    }
-    const fileSize = await getFileSize(path);
-    const requestedOffset = options?.startOffset;
-    const startOffset = requestedOffset !== undefined && Number.isFinite(requestedOffset) ? Math.max(0, Math.floor(requestedOffset)) : fileSize;
-    const state = {
-      path,
-      offset: startOffset,
-      watcher: null,
-      debounceTimer: null,
-      inFlightRead: null,
-      pendingRead: false
-    };
-    const watcher = watch(path, () => {
-      this.debouncedReadAppended(state);
-    });
-    watcher.on("error", (err) => {
-      this.emit("error", err);
-    });
-    state.watcher = watcher;
-    this.fileWatchers.set(path, state);
-    this.enqueueRead(state);
-  }
-  watchDirectory(dir) {
-    if (this.closed) {
-      return;
-    }
-    if (this.dirWatchers.has(dir)) {
-      return;
-    }
-    const watcher = watch(dir, { recursive: true }, (_event, filename) => {
-      if (filename === null) {
-        return;
-      }
-      const basename = filename.split("/").pop() ?? filename;
-      if (basename.startsWith(ROLLOUT_PREFIX2) && basename.endsWith(ROLLOUT_EXT2)) {
-        const fullPath = join3(dir, filename);
-        this.emit("newSession", fullPath);
-      }
-    });
-    watcher.on("error", (err) => {
-      this.emit("error", err);
-    });
-    this.dirWatchers.set(dir, watcher);
-  }
-  stop() {
-    this.closed = true;
-    for (const state of this.fileWatchers.values()) {
-      if (state.debounceTimer !== null) {
-        clearTimeout(state.debounceTimer);
-      }
-      state.watcher?.close();
-    }
-    this.fileWatchers.clear();
-    for (const watcher of this.dirWatchers.values()) {
-      watcher.close();
-    }
-    this.dirWatchers.clear();
-    this.removeAllListeners();
-  }
-  async flush() {
-    if (this.closed) {
-      return;
-    }
-    for (const state of this.fileWatchers.values()) {
-      await this.enqueueRead(state);
-    }
-  }
-  get isClosed() {
-    return this.closed;
-  }
-  debouncedReadAppended(state) {
-    if (state.debounceTimer !== null) {
-      clearTimeout(state.debounceTimer);
-    }
-    state.debounceTimer = setTimeout(() => {
-      state.debounceTimer = null;
-      this.enqueueRead(state);
-    }, DEBOUNCE_MS);
-  }
-  async enqueueRead(state) {
-    if (state.inFlightRead !== null) {
-      state.pendingRead = true;
-      await state.inFlightRead;
-      return;
-    }
-    const run = (async () => {
-      do {
-        state.pendingRead = false;
-        await this.readAppendedLines(state);
-      } while (state.pendingRead && !this.closed);
-    })();
-    state.inFlightRead = run;
-    try {
-      await run;
-    } finally {
-      state.inFlightRead = null;
-    }
-  }
-  async readAppendedLines(state) {
-    if (this.closed) {
-      return;
-    }
-    try {
-      const currentSize = await getFileSize(state.path);
-      if (currentSize <= state.offset) {
-        return;
-      }
-      const fd = await open(state.path, "r");
-      try {
-        const bytesToRead = currentSize - state.offset;
-        const buffer = new Uint8Array(bytesToRead);
-        await fd.read(buffer, 0, bytesToRead, state.offset);
-        state.offset = currentSize;
-        const text = new TextDecoder().decode(buffer);
-        const lines = text.split(`
-`);
-        for (const line of lines) {
-          const parsed = parseRolloutLine(line);
-          if (parsed !== null) {
-            this.emit("line", state.path, parsed);
-          }
-        }
-      } finally {
-        await fd.close();
-      }
-    } catch (err) {
-      this.emit("error", err instanceof Error ? err : new Error(String(err)));
-    }
-  }
-}
-async function getFileSize(path) {
-  try {
-    const s = await stat2(path);
-    return s.size;
-  } catch {
-    return 0;
-  }
-}
-function sessionsWatchDir(codexHome) {
-  return join3(codexHome, "sessions");
-}
 // src/group/repository.ts
-import { readFile as readFile2, writeFile, mkdir, rename } from "fs/promises";
-import { join as join4 } from "path";
+import { readFile as readFile2, writeFile as writeFile2, mkdir, rename } from "fs/promises";
+import { join as join6 } from "path";
 import { homedir as homedir2 } from "os";
-import { randomUUID } from "crypto";
-var DEFAULT_CONFIG_DIR = join4(homedir2(), ".config", "codex-agent");
+import { randomUUID as randomUUID3 } from "crypto";
+var DEFAULT_CONFIG_DIR = join6(homedir2(), ".config", "codex-agent");
 var GROUPS_FILE = "groups.json";
 function resolveConfigDir(configDir) {
   return configDir ?? DEFAULT_CONFIG_DIR;
 }
 function groupFilePath(configDir) {
-  return join4(resolveConfigDir(configDir), GROUPS_FILE);
+  return join6(resolveConfigDir(configDir), GROUPS_FILE);
 }
 function toGroup(data) {
   return {
@@ -1432,17 +3508,17 @@ async function saveGroups(config, configDir) {
   const dir = resolveConfigDir(configDir);
   await mkdir(dir, { recursive: true });
   const path = groupFilePath(configDir);
-  const tmpPath = path + ".tmp." + randomUUID().slice(0, 8);
+  const tmpPath = path + ".tmp." + randomUUID3().slice(0, 8);
   const json = JSON.stringify(config, null, 2) + `
 `;
-  await writeFile(tmpPath, json, "utf-8");
+  await writeFile2(tmpPath, json, "utf-8");
   await rename(tmpPath, path);
 }
 async function addGroup(name, description, configDir) {
   const config = await loadGroups(configDir);
   const now = new Date;
   const group = {
-    id: randomUUID(),
+    id: randomUUID3(),
     name,
     description,
     paused: false,
@@ -1542,289 +3618,6 @@ async function resumeGroup(groupId, configDir) {
   await saveGroups({ groups }, configDir);
   return true;
 }
-// src/process/manager.ts
-import { spawn } from "child_process";
-import { createInterface as createInterface2 } from "readline";
-import { randomUUID as randomUUID2 } from "crypto";
-var DEFAULT_BINARY = "codex";
-
-class ProcessManager {
-  processes = new Map;
-  binary;
-  constructor(binary) {
-    this.binary = binary ?? DEFAULT_BINARY;
-  }
-  async spawnExec(prompt, options) {
-    const stream = this.spawnExecStream(prompt, options);
-    const lines = [];
-    for await (const line of stream.lines) {
-      lines.push(line);
-    }
-    const exitCode = await stream.completion;
-    return { exitCode, lines };
-  }
-  spawnExecStream(prompt, options) {
-    const args = buildExecArgs(prompt, options);
-    const binary = options?.codexBinary ?? this.binary;
-    const cwd = options?.cwd;
-    const child = spawn(binary, args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: buildSpawnEnvironment(options)
-    });
-    drainPipe(child.stderr);
-    const id = randomUUID2();
-    const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
-    this.processes.set(id, managed);
-    const completion = waitForExit(child).then((exitCode) => {
-      managed.status = "exited";
-      managed.exitCode = exitCode;
-      return exitCode;
-    });
-    return {
-      process: toCodexProcess(managed),
-      lines: streamJsonlOutput(child),
-      completion
-    };
-  }
-  spawnResume(sessionId, options, prompt) {
-    const stream = this.spawnResumeStream(sessionId, options, prompt);
-    drainAsyncIterable(stream.lines);
-    return stream.process;
-  }
-  spawnResumeStream(sessionId, options, prompt) {
-    const args = buildResumeArgs(sessionId, options, prompt);
-    const binary = options?.codexBinary ?? this.binary;
-    const cwd = options?.cwd;
-    const child = spawn(binary, args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: buildSpawnEnvironment(options)
-    });
-    drainPipe(child.stderr);
-    const id = randomUUID2();
-    const managed = createManagedProcess(id, child, binary + " " + args.join(" "), `resume ${sessionId}`);
-    this.processes.set(id, managed);
-    const completion = waitForExit(child).then((exitCode) => {
-      managed.status = "exited";
-      managed.exitCode = exitCode;
-      return exitCode;
-    });
-    return {
-      process: toCodexProcess(managed),
-      lines: streamJsonlOutput(child),
-      completion
-    };
-  }
-  spawnFork(sessionId, nthMessage, options) {
-    const args = ["fork", sessionId];
-    if (nthMessage !== undefined) {
-      args.push("--nth-message", String(nthMessage));
-    }
-    args.push(...buildCommonArgs(options));
-    return this.spawnTracked(args, options, `fork ${sessionId}`);
-  }
-  list() {
-    return Array.from(this.processes.values()).map(toCodexProcess);
-  }
-  get(id) {
-    const managed = this.processes.get(id);
-    if (managed === undefined) {
-      return null;
-    }
-    return toCodexProcess(managed);
-  }
-  kill(id) {
-    const managed = this.processes.get(id);
-    if (managed === undefined) {
-      return false;
-    }
-    if (managed.status !== "running") {
-      return false;
-    }
-    managed.child.kill("SIGTERM");
-    managed.status = "killed";
-    return true;
-  }
-  writeInput(id, input) {
-    const managed = this.processes.get(id);
-    if (managed === undefined || managed.status !== "running") {
-      return false;
-    }
-    if (managed.child.stdin === null) {
-      return false;
-    }
-    managed.child.stdin.write(input);
-    return true;
-  }
-  killAll() {
-    for (const managed of this.processes.values()) {
-      if (managed.status === "running") {
-        managed.child.kill("SIGTERM");
-        managed.status = "killed";
-      }
-    }
-  }
-  prune() {
-    let count = 0;
-    for (const [id, managed] of this.processes) {
-      if (managed.status !== "running") {
-        this.processes.delete(id);
-        count++;
-      }
-    }
-    return count;
-  }
-  spawnTracked(args, options, prompt) {
-    const binary = options?.codexBinary ?? this.binary;
-    const cwd = options?.cwd;
-    const child = spawn(binary, args, {
-      cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-      env: buildSpawnEnvironment(options)
-    });
-    drainPipe(child.stdout);
-    drainPipe(child.stderr);
-    const id = randomUUID2();
-    const managed = createManagedProcess(id, child, binary + " " + args.join(" "), prompt);
-    this.processes.set(id, managed);
-    child.on("exit", (code) => {
-      managed.status = "exited";
-      managed.exitCode = code ?? 1;
-    });
-    return toCodexProcess(managed);
-  }
-}
-function buildExecArgs(prompt, options) {
-  const args = ["exec", "--json", ...buildCommonArgs(options)];
-  if (options?.images !== undefined) {
-    for (const imagePath of options.images) {
-      args.push("--image", imagePath);
-    }
-  }
-  if (options?.images !== undefined && options.images.length > 0) {
-    args.push("--");
-  }
-  args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
-  return args;
-}
-function buildResumeArgs(sessionId, options, prompt) {
-  const args = ["exec", "resume", "--json", ...buildCommonArgs(options)];
-  if (options?.images !== undefined) {
-    for (const imagePath of options.images) {
-      args.push("--image", imagePath);
-    }
-  }
-  if (options?.images !== undefined && options.images.length > 0) {
-    args.push("--");
-  }
-  args.push(sessionId);
-  if (prompt !== undefined && prompt.trim().length > 0) {
-    args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
-  }
-  return args;
-}
-function buildPromptWithSystemPrompt(prompt, systemPrompt) {
-  if (systemPrompt === undefined || systemPrompt.trim().length === 0) {
-    return prompt;
-  }
-  return `${systemPrompt}
-
-${prompt}`;
-}
-function buildCommonArgs(options) {
-  const args = [];
-  if (options?.model !== undefined) {
-    args.push("--model", options.model);
-  }
-  if (options?.fullAuto === true) {
-    args.push("--full-auto");
-  }
-  if (options?.sandbox !== undefined) {
-    args.push("--sandbox", options.sandbox);
-  }
-  if (options?.approvalMode !== undefined) {
-    args.push("--ask-for-approval", options.approvalMode);
-  }
-  if (options?.configOverrides !== undefined) {
-    for (const override of options.configOverrides) {
-      args.push("-c", override);
-    }
-  }
-  if (options?.additionalArgs !== undefined) {
-    args.push(...options.additionalArgs);
-  }
-  return args;
-}
-function buildSpawnEnvironment(options) {
-  return {
-    ...process.env,
-    ...options?.environmentVariables
-  };
-}
-function createManagedProcess(id, child, command, prompt) {
-  return {
-    id,
-    child,
-    command,
-    prompt,
-    startedAt: new Date,
-    status: "running",
-    exitCode: undefined
-  };
-}
-function toCodexProcess(managed) {
-  return {
-    id: managed.id,
-    pid: managed.child.pid ?? -1,
-    command: managed.command,
-    prompt: managed.prompt,
-    startedAt: managed.startedAt,
-    status: managed.status,
-    exitCode: managed.exitCode
-  };
-}
-async function* streamJsonlOutput(child) {
-  if (child.stdout === null) {
-    return;
-  }
-  const rl = createInterface2({ input: child.stdout, crlfDelay: Infinity });
-  try {
-    for await (const line of rl) {
-      const parsed = parseRolloutLine(line);
-      if (parsed !== null) {
-        yield parsed;
-      }
-    }
-  } finally {
-    rl.close();
-  }
-}
-function waitForExit(child) {
-  if (child.exitCode !== null) {
-    return Promise.resolve(child.exitCode);
-  }
-  return new Promise((resolve3) => {
-    child.once("exit", (code) => {
-      resolve3(code ?? 1);
-    });
-    child.once("error", () => {
-      resolve3(1);
-    });
-  });
-}
-function drainPipe(stream) {
-  if (stream === null) {
-    return;
-  }
-  stream.resume();
-}
-function drainAsyncIterable(lines) {
-  (async () => {
-    for await (const _ of lines) {}
-  })();
-}
-
 // src/group/manager.ts
 var DEFAULT_MAX_CONCURRENT = 3;
 async function* runGroup(group, prompt, options) {
@@ -1901,17 +3694,17 @@ var QUEUE_PROMPT_STATUSES = [
 ];
 var QUEUE_COMMAND_MODES = ["auto", "manual"];
 // src/queue/repository.ts
-import { readFile as readFile3, writeFile as writeFile2, mkdir as mkdir2, rename as rename2 } from "fs/promises";
-import { join as join5 } from "path";
+import { readFile as readFile3, writeFile as writeFile3, mkdir as mkdir2, rename as rename2 } from "fs/promises";
+import { join as join7 } from "path";
 import { homedir as homedir3 } from "os";
-import { randomUUID as randomUUID3 } from "crypto";
-var DEFAULT_CONFIG_DIR2 = join5(homedir3(), ".config", "codex-agent");
+import { randomUUID as randomUUID4 } from "crypto";
+var DEFAULT_CONFIG_DIR2 = join7(homedir3(), ".config", "codex-agent");
 var QUEUES_FILE = "queues.json";
 function resolveConfigDir2(configDir) {
   return configDir ?? DEFAULT_CONFIG_DIR2;
 }
 function queueFilePath(configDir) {
-  return join5(resolveConfigDir2(configDir), QUEUES_FILE);
+  return join7(resolveConfigDir2(configDir), QUEUES_FILE);
 }
 function toPrompt(data) {
   return {
@@ -1972,16 +3765,16 @@ async function saveQueues(config, configDir) {
   const dir = resolveConfigDir2(configDir);
   await mkdir2(dir, { recursive: true });
   const path = queueFilePath(configDir);
-  const tmpPath = path + ".tmp." + randomUUID3().slice(0, 8);
+  const tmpPath = path + ".tmp." + randomUUID4().slice(0, 8);
   const json = JSON.stringify(config, null, 2) + `
 `;
-  await writeFile2(tmpPath, json, "utf-8");
+  await writeFile3(tmpPath, json, "utf-8");
   await rename2(tmpPath, path);
 }
 async function createQueue(name, projectPath, configDir) {
   const config = await loadQueues(configDir);
   const queue = {
-    id: randomUUID3(),
+    id: randomUUID4(),
     name,
     projectPath,
     paused: false,
@@ -1997,7 +3790,7 @@ async function createQueue(name, projectPath, configDir) {
 async function addPrompt(queueId, prompt, images, configDir) {
   const config = await loadQueues(configDir);
   const newPrompt = {
-    id: randomUUID3(),
+    id: randomUUID4(),
     prompt,
     images,
     status: "pending",
@@ -2331,17 +4124,17 @@ function validateCreateBookmarkInput(input) {
   return errors;
 }
 // src/bookmark/repository.ts
-import { readFile as readFile4, writeFile as writeFile3, mkdir as mkdir3, rename as rename3 } from "fs/promises";
-import { join as join6 } from "path";
+import { readFile as readFile4, writeFile as writeFile4, mkdir as mkdir3, rename as rename3 } from "fs/promises";
+import { join as join8 } from "path";
 import { homedir as homedir4 } from "os";
-import { randomUUID as randomUUID4 } from "crypto";
-var DEFAULT_CONFIG_DIR3 = join6(homedir4(), ".config", "codex-agent");
+import { randomUUID as randomUUID5 } from "crypto";
+var DEFAULT_CONFIG_DIR3 = join8(homedir4(), ".config", "codex-agent");
 var BOOKMARKS_FILE = "bookmarks.json";
 function resolveConfigDir3(configDir) {
   return configDir ?? DEFAULT_CONFIG_DIR3;
 }
 function bookmarkFilePath(configDir) {
-  return join6(resolveConfigDir3(configDir), BOOKMARKS_FILE);
+  return join8(resolveConfigDir3(configDir), BOOKMARKS_FILE);
 }
 function toBookmark(data) {
   return {
@@ -2387,17 +4180,17 @@ async function saveBookmarks(bookmarks, configDir) {
   const dir = resolveConfigDir3(configDir);
   await mkdir3(dir, { recursive: true });
   const path = bookmarkFilePath(configDir);
-  const tmpPath = path + ".tmp." + randomUUID4().slice(0, 8);
+  const tmpPath = path + ".tmp." + randomUUID5().slice(0, 8);
   const config = {
     bookmarks: bookmarks.map(toData2)
   };
   const json = JSON.stringify(config, null, 2) + `
 `;
-  await writeFile3(tmpPath, json, "utf-8");
+  await writeFile4(tmpPath, json, "utf-8");
   await rename3(tmpPath, path);
 }
 // src/bookmark/manager.ts
-import { randomUUID as randomUUID5 } from "crypto";
+import { randomUUID as randomUUID6 } from "crypto";
 function applyFilter(bookmarks, filter) {
   if (filter === undefined) {
     return bookmarks;
@@ -2447,7 +4240,7 @@ async function addBookmark(input, configDir) {
   }
   const now = new Date;
   const bookmark = {
-    id: randomUUID5(),
+    id: randomUUID6(),
     type: input.type,
     sessionId: input.sessionId.trim(),
     messageId: input.messageId?.trim(),
@@ -2551,19 +4344,19 @@ function hasPermission(granted, required) {
 import {
   createHash,
   randomBytes,
-  randomUUID as randomUUID6,
+  randomUUID as randomUUID7,
   timingSafeEqual
 } from "crypto";
 import { homedir as homedir5 } from "os";
-import { join as join7 } from "path";
-import { mkdir as mkdir4, readFile as readFile5, rename as rename4, writeFile as writeFile4 } from "fs/promises";
-var DEFAULT_CONFIG_DIR4 = join7(homedir5(), ".config", "codex-agent");
+import { join as join9 } from "path";
+import { mkdir as mkdir4, readFile as readFile5, rename as rename4, writeFile as writeFile5 } from "fs/promises";
+var DEFAULT_CONFIG_DIR4 = join9(homedir5(), ".config", "codex-agent");
 var TOKENS_FILE = "tokens.json";
 function resolveConfigDir4(configDir) {
   return configDir ?? DEFAULT_CONFIG_DIR4;
 }
 function tokenFilePath(configDir) {
-  return join7(resolveConfigDir4(configDir), TOKENS_FILE);
+  return join9(resolveConfigDir4(configDir), TOKENS_FILE);
 }
 function hashSecret(secret) {
   return createHash("sha256").update(secret).digest("hex");
@@ -2612,10 +4405,10 @@ async function saveTokenConfig(config, configDir) {
   const dir = resolveConfigDir4(configDir);
   await mkdir4(dir, { recursive: true });
   const path = tokenFilePath(configDir);
-  const tmpPath = path + ".tmp." + randomUUID6().slice(0, 8);
+  const tmpPath = path + ".tmp." + randomUUID7().slice(0, 8);
   const json = JSON.stringify(config, null, 2) + `
 `;
-  await writeFile4(tmpPath, json, "utf-8");
+  await writeFile5(tmpPath, json, "utf-8");
   await rename4(tmpPath, path);
 }
 async function createToken(input, configDir) {
@@ -2625,7 +4418,7 @@ async function createToken(input, configDir) {
   if (input.permissions.length === 0) {
     throw new Error("at least one permission is required");
   }
-  const id = randomUUID6();
+  const id = randomUUID7();
   const secret = randomBytes(24).toString("hex");
   const token = `${id}.${secret}`;
   const now = new Date().toISOString();
@@ -2734,19 +4527,19 @@ var NON_PATH_TOKENS = new Set([
   "zsh"
 ]);
 var REDIRECTION_TOKENS = new Set([">", ">>", "1>", "1>>"]);
-function toRecord3(value) {
+function toRecord6(value) {
   return typeof value === "object" && value !== null ? value : null;
 }
-function readString3(value) {
+function readString5(value) {
   return typeof value === "string" ? value : undefined;
 }
-function readNumber(value) {
+function readNumber3(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
-function readStringArray(value) {
+function readStringArray2(value) {
   return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
 }
-function parseMaybeJson(value) {
+function parseMaybeJson2(value) {
   if (typeof value !== "string") {
     return value;
   }
@@ -3001,18 +4794,18 @@ function extractToolCallChanges(line) {
   if (!isResponseItem(line)) {
     return null;
   }
-  const payload = toRecord3(line.payload);
+  const payload = toRecord6(line.payload);
   if (payload === null) {
     return null;
   }
-  const itemType = readString3(payload["type"]);
+  const itemType = readString5(payload["type"]);
   if (itemType === "function_call") {
-    const callId = readString3(payload["call_id"]);
-    const name = readString3(payload["name"]);
-    const rawArgs = parseMaybeJson(readString3(payload["arguments"]));
-    const args = toRecord3(rawArgs);
+    const callId = readString5(payload["call_id"]);
+    const name = readString5(payload["name"]);
+    const rawArgs = parseMaybeJson2(readString5(payload["arguments"]));
+    const args = toRecord6(rawArgs);
     if (name === "shell") {
-      const command = args === null ? undefined : readStringArray(args["command"]);
+      const command = args === null ? undefined : readStringArray2(args["command"]);
       if (command === undefined) {
         return null;
       }
@@ -3022,7 +4815,7 @@ function extractToolCallChanges(line) {
       };
     }
     if (name === "exec_command") {
-      const command = args === null ? undefined : readString3(args["cmd"]);
+      const command = args === null ? undefined : readString5(args["cmd"]);
       if (command === undefined) {
         return null;
       }
@@ -3032,7 +4825,7 @@ function extractToolCallChanges(line) {
       };
     }
     if (name === "apply_patch") {
-      const patchText = args !== null ? readString3(args["patch"]) ?? readString3(args["input"]) : readString3(payload["arguments"]);
+      const patchText = args !== null ? readString5(args["patch"]) ?? readString5(args["input"]) : readString5(payload["arguments"]);
       if (patchText === undefined) {
         return null;
       }
@@ -3044,24 +4837,24 @@ function extractToolCallChanges(line) {
     return null;
   }
   if (itemType === "local_shell_call") {
-    const action = toRecord3(payload["action"]);
-    const command = action === null ? undefined : readStringArray(action["command"]);
+    const action = toRecord6(payload["action"]);
+    const command = action === null ? undefined : readStringArray2(action["command"]);
     if (command === undefined) {
       return null;
     }
-    const callId = readString3(payload["call_id"]);
+    const callId = readString5(payload["call_id"]);
     return {
       ...callId !== undefined ? { callId } : {},
       changes: extractChangesFromCommand(normalizeCommand(command), line.timestamp, "local_shell")
     };
   }
   if (itemType === "custom_tool_call") {
-    const name = readString3(payload["name"]);
-    const status = readString3(payload["status"]);
+    const name = readString5(payload["name"]);
+    const status = readString5(payload["status"]);
     if (name !== "apply_patch" || status !== undefined && status !== "completed") {
       return null;
     }
-    const input = readString3(payload["input"]);
+    const input = readString5(payload["input"]);
     if (input === undefined) {
       return null;
     }
@@ -3078,9 +4871,9 @@ function extractExecBeginChanges(line) {
   if (line.payload.type !== "ExecCommandBegin") {
     return null;
   }
-  const payload = toRecord3(line.payload);
-  const command = payload === null ? undefined : readStringArray(payload["command"]);
-  const callId = payload === null ? undefined : readString3(payload["call_id"]);
+  const payload = toRecord6(line.payload);
+  const command = payload === null ? undefined : readStringArray2(payload["command"]);
+  const callId = payload === null ? undefined : readString5(payload["call_id"]);
   if (command === undefined) {
     return null;
   }
@@ -3091,9 +4884,9 @@ function extractExecBeginChanges(line) {
 }
 function isSuccessfulToolResult(line) {
   if (isEventMsg(line) && line.payload.type === "ExecCommandEnd") {
-    const payload2 = toRecord3(line.payload);
-    const callId = payload2 === null ? undefined : readString3(payload2["call_id"]);
-    const exitCode = payload2 === null ? undefined : readNumber(payload2["exit_code"]);
+    const payload2 = toRecord6(line.payload);
+    const callId = payload2 === null ? undefined : readString5(payload2["call_id"]);
+    const exitCode = payload2 === null ? undefined : readNumber3(payload2["exit_code"]);
     if (callId === undefined) {
       return null;
     }
@@ -3105,21 +4898,21 @@ function isSuccessfulToolResult(line) {
   if (!isResponseItem(line)) {
     return null;
   }
-  const payload = toRecord3(line.payload);
+  const payload = toRecord6(line.payload);
   if (payload === null) {
     return null;
   }
-  const itemType = readString3(payload["type"]);
+  const itemType = readString5(payload["type"]);
   if (itemType === "function_call_output") {
-    const callId = readString3(payload["call_id"]);
+    const callId = readString5(payload["call_id"]);
     if (callId === undefined) {
       return null;
     }
-    const output = parseMaybeJson(payload["output"]);
-    const outputRecord = toRecord3(output);
-    const metadata = outputRecord === null ? null : toRecord3(outputRecord["metadata"]);
-    const exitCode = (metadata === null ? undefined : readNumber(metadata["exit_code"])) ?? (outputRecord === null ? undefined : readNumber(outputRecord["exit_code"]));
-    const status = outputRecord === null ? undefined : readString3(outputRecord["status"]);
+    const output = parseMaybeJson2(payload["output"]);
+    const outputRecord = toRecord6(output);
+    const metadata = outputRecord === null ? null : toRecord6(outputRecord["metadata"]);
+    const exitCode = (metadata === null ? undefined : readNumber3(metadata["exit_code"])) ?? (outputRecord === null ? undefined : readNumber3(outputRecord["exit_code"]));
+    const status = outputRecord === null ? undefined : readString5(outputRecord["status"]);
     const isError = outputRecord === null ? false : outputRecord["is_error"] === true;
     return {
       callId,
@@ -3127,8 +4920,8 @@ function isSuccessfulToolResult(line) {
     };
   }
   if (itemType === "local_shell_call") {
-    const callId = readString3(payload["call_id"]);
-    const status = readString3(payload["status"]);
+    const callId = readString5(payload["call_id"]);
+    const status = readString5(payload["status"]);
     if (callId === undefined || status === undefined) {
       return null;
     }
@@ -3212,16 +5005,16 @@ function extractChangedFiles(lines) {
 }
 // src/file-changes/service.ts
 import { homedir as homedir6 } from "os";
-import { join as join8 } from "path";
-import { mkdir as mkdir5, readFile as readFile6, rename as rename5, writeFile as writeFile5 } from "fs/promises";
-import { randomUUID as randomUUID7 } from "crypto";
-var DEFAULT_CONFIG_DIR5 = join8(homedir6(), ".config", "codex-agent");
+import { join as join10 } from "path";
+import { mkdir as mkdir5, readFile as readFile6, rename as rename5, writeFile as writeFile6 } from "fs/promises";
+import { randomUUID as randomUUID8 } from "crypto";
+var DEFAULT_CONFIG_DIR5 = join10(homedir6(), ".config", "codex-agent");
 var FILE_INDEX_FILE = "file-changes-index.json";
 function resolveConfigDir5(configDir) {
   return configDir ?? DEFAULT_CONFIG_DIR5;
 }
 function fileIndexPath(configDir) {
-  return join8(resolveConfigDir5(configDir), FILE_INDEX_FILE);
+  return join10(resolveConfigDir5(configDir), FILE_INDEX_FILE);
 }
 async function loadIndex(configDir) {
   const path = fileIndexPath(configDir);
@@ -3239,10 +5032,10 @@ async function saveIndex(index, configDir) {
   const dir = resolveConfigDir5(configDir);
   await mkdir5(dir, { recursive: true });
   const path = fileIndexPath(configDir);
-  const tmpPath = path + ".tmp." + randomUUID7().slice(0, 8);
+  const tmpPath = path + ".tmp." + randomUUID8().slice(0, 8);
   const json = JSON.stringify(index, null, 2) + `
 `;
-  await writeFile5(tmpPath, json, "utf-8");
+  await writeFile6(tmpPath, json, "utf-8");
   await rename5(tmpPath, path);
 }
 function toSummary(sessionId, files) {
@@ -3808,7 +5601,7 @@ function isNameContinue(code) {
 function dedentBlockStringLines(lines) {
   var _firstNonEmptyLine2;
   let commonIndent = Number.MAX_SAFE_INTEGER;
-  let firstNonEmptyLine = null;
+  let firstNonEmptyLine2 = null;
   let lastNonEmptyLine = -1;
   for (let i = 0;i < lines.length; ++i) {
     var _firstNonEmptyLine;
@@ -3817,13 +5610,13 @@ function dedentBlockStringLines(lines) {
     if (indent === line.length) {
       continue;
     }
-    firstNonEmptyLine = (_firstNonEmptyLine = firstNonEmptyLine) !== null && _firstNonEmptyLine !== undefined ? _firstNonEmptyLine : i;
+    firstNonEmptyLine2 = (_firstNonEmptyLine = firstNonEmptyLine2) !== null && _firstNonEmptyLine !== undefined ? _firstNonEmptyLine : i;
     lastNonEmptyLine = i;
     if (i !== 0 && indent < commonIndent) {
       commonIndent = indent;
     }
   }
-  return lines.map((line, i) => i === 0 ? line : line.slice(commonIndent)).slice((_firstNonEmptyLine2 = firstNonEmptyLine) !== null && _firstNonEmptyLine2 !== undefined ? _firstNonEmptyLine2 : 0, lastNonEmptyLine + 1);
+  return lines.map((line, i) => i === 0 ? line : line.slice(commonIndent)).slice((_firstNonEmptyLine2 = firstNonEmptyLine2) !== null && _firstNonEmptyLine2 !== undefined ? _firstNonEmptyLine2 : 0, lastNonEmptyLine + 1);
 }
 function leadingWhitespace(str) {
   let i = 0;
@@ -4013,10 +5806,10 @@ function readNextToken(lexer, start) {
         if (body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34) {
           return readBlockString(lexer, position);
         }
-        return readString4(lexer, position);
+        return readString6(lexer, position);
     }
     if (isDigit(code) || code === 45) {
-      return readNumber2(lexer, position, code);
+      return readNumber4(lexer, position, code);
     }
     if (isNameStart(code)) {
       return readName(lexer, position);
@@ -4044,7 +5837,7 @@ function readComment(lexer, start) {
   }
   return createToken2(lexer, TokenKind.COMMENT, start, position, body.slice(start + 1, position));
 }
-function readNumber2(lexer, start, firstCode) {
+function readNumber4(lexer, start, firstCode) {
   const body = lexer.source.body;
   let position = start;
   let code = firstCode;
@@ -4092,7 +5885,7 @@ function readDigits(lexer, start, firstCode) {
   }
   return position;
 }
-function readString4(lexer, start) {
+function readString6(lexer, start) {
   const body = lexer.source.body;
   const bodyLength = body.length;
   let position = start + 1;
@@ -5879,28 +7672,28 @@ var printDocASTReducer = {
     leave: (node) => "$" + node.name
   },
   Document: {
-    leave: (node) => join9(node.definitions, `
+    leave: (node) => join11(node.definitions, `
 
 `)
   },
   OperationDefinition: {
     leave(node) {
       const varDefs = hasMultilineItems(node.variableDefinitions) ? wrap(`(
-`, join9(node.variableDefinitions, `
+`, join11(node.variableDefinitions, `
 `), `
-)`) : wrap("(", join9(node.variableDefinitions, ", "), ")");
+)`) : wrap("(", join11(node.variableDefinitions, ", "), ")");
       const prefix = wrap("", node.description, `
-`) + join9([
+`) + join11([
         node.operation,
-        join9([node.name, varDefs]),
-        join9(node.directives, " ")
+        join11([node.name, varDefs]),
+        join11(node.directives, " ")
       ], " ");
       return (prefix === "query" ? "" : prefix + " ") + node.selectionSet;
     }
   },
   VariableDefinition: {
     leave: ({ variable, type, defaultValue, directives, description }) => wrap("", description, `
-`) + variable + ": " + type + wrap(" = ", defaultValue) + wrap(" ", join9(directives, " "))
+`) + variable + ": " + type + wrap(" = ", defaultValue) + wrap(" ", join11(directives, " "))
   },
   SelectionSet: {
     leave: ({ selections }) => block(selections)
@@ -5908,27 +7701,27 @@ var printDocASTReducer = {
   Field: {
     leave({ alias, name, arguments: args, directives, selectionSet }) {
       const prefix = wrap("", alias, ": ") + name;
-      let argsLine = prefix + wrap("(", join9(args, ", "), ")");
+      let argsLine = prefix + wrap("(", join11(args, ", "), ")");
       if (argsLine.length > MAX_LINE_LENGTH) {
         argsLine = prefix + wrap(`(
-`, indent(join9(args, `
+`, indent(join11(args, `
 `)), `
 )`);
       }
-      return join9([argsLine, join9(directives, " "), selectionSet], " ");
+      return join11([argsLine, join11(directives, " "), selectionSet], " ");
     }
   },
   Argument: {
     leave: ({ name, value }) => name + ": " + value
   },
   FragmentSpread: {
-    leave: ({ name, directives }) => "..." + name + wrap(" ", join9(directives, " "))
+    leave: ({ name, directives }) => "..." + name + wrap(" ", join11(directives, " "))
   },
   InlineFragment: {
-    leave: ({ typeCondition, directives, selectionSet }) => join9([
+    leave: ({ typeCondition, directives, selectionSet }) => join11([
       "...",
       wrap("on ", typeCondition),
-      join9(directives, " "),
+      join11(directives, " "),
       selectionSet
     ], " ")
   },
@@ -5941,7 +7734,7 @@ var printDocASTReducer = {
       selectionSet,
       description
     }) => wrap("", description, `
-`) + `fragment ${name}${wrap("(", join9(variableDefinitions, ", "), ")")} ` + `on ${typeCondition} ${wrap("", join9(directives, " "), " ")}` + selectionSet
+`) + `fragment ${name}${wrap("(", join11(variableDefinitions, ", "), ")")} ` + `on ${typeCondition} ${wrap("", join11(directives, " "), " ")}` + selectionSet
   },
   IntValue: {
     leave: ({ value }) => value
@@ -5962,16 +7755,16 @@ var printDocASTReducer = {
     leave: ({ value }) => value
   },
   ListValue: {
-    leave: ({ values }) => "[" + join9(values, ", ") + "]"
+    leave: ({ values }) => "[" + join11(values, ", ") + "]"
   },
   ObjectValue: {
-    leave: ({ fields }) => "{" + join9(fields, ", ") + "}"
+    leave: ({ fields }) => "{" + join11(fields, ", ") + "}"
   },
   ObjectField: {
     leave: ({ name, value }) => name + ": " + value
   },
   Directive: {
-    leave: ({ name, arguments: args }) => "@" + name + wrap("(", join9(args, ", "), ")")
+    leave: ({ name, arguments: args }) => "@" + name + wrap("(", join11(args, ", "), ")")
   },
   NamedType: {
     leave: ({ name }) => name
@@ -5984,130 +7777,130 @@ var printDocASTReducer = {
   },
   SchemaDefinition: {
     leave: ({ description, directives, operationTypes }) => wrap("", description, `
-`) + join9(["schema", join9(directives, " "), block(operationTypes)], " ")
+`) + join11(["schema", join11(directives, " "), block(operationTypes)], " ")
   },
   OperationTypeDefinition: {
     leave: ({ operation, type }) => operation + ": " + type
   },
   ScalarTypeDefinition: {
     leave: ({ description, name, directives }) => wrap("", description, `
-`) + join9(["scalar", name, join9(directives, " ")], " ")
+`) + join11(["scalar", name, join11(directives, " ")], " ")
   },
   ObjectTypeDefinition: {
     leave: ({ description, name, interfaces, directives, fields }) => wrap("", description, `
-`) + join9([
+`) + join11([
       "type",
       name,
-      wrap("implements ", join9(interfaces, " & ")),
-      join9(directives, " "),
+      wrap("implements ", join11(interfaces, " & ")),
+      join11(directives, " "),
       block(fields)
     ], " ")
   },
   FieldDefinition: {
     leave: ({ description, name, arguments: args, type, directives }) => wrap("", description, `
 `) + name + (hasMultilineItems(args) ? wrap(`(
-`, indent(join9(args, `
+`, indent(join11(args, `
 `)), `
-)`) : wrap("(", join9(args, ", "), ")")) + ": " + type + wrap(" ", join9(directives, " "))
+)`) : wrap("(", join11(args, ", "), ")")) + ": " + type + wrap(" ", join11(directives, " "))
   },
   InputValueDefinition: {
     leave: ({ description, name, type, defaultValue, directives }) => wrap("", description, `
-`) + join9([name + ": " + type, wrap("= ", defaultValue), join9(directives, " ")], " ")
+`) + join11([name + ": " + type, wrap("= ", defaultValue), join11(directives, " ")], " ")
   },
   InterfaceTypeDefinition: {
     leave: ({ description, name, interfaces, directives, fields }) => wrap("", description, `
-`) + join9([
+`) + join11([
       "interface",
       name,
-      wrap("implements ", join9(interfaces, " & ")),
-      join9(directives, " "),
+      wrap("implements ", join11(interfaces, " & ")),
+      join11(directives, " "),
       block(fields)
     ], " ")
   },
   UnionTypeDefinition: {
     leave: ({ description, name, directives, types }) => wrap("", description, `
-`) + join9(["union", name, join9(directives, " "), wrap("= ", join9(types, " | "))], " ")
+`) + join11(["union", name, join11(directives, " "), wrap("= ", join11(types, " | "))], " ")
   },
   EnumTypeDefinition: {
     leave: ({ description, name, directives, values }) => wrap("", description, `
-`) + join9(["enum", name, join9(directives, " "), block(values)], " ")
+`) + join11(["enum", name, join11(directives, " "), block(values)], " ")
   },
   EnumValueDefinition: {
     leave: ({ description, name, directives }) => wrap("", description, `
-`) + join9([name, join9(directives, " ")], " ")
+`) + join11([name, join11(directives, " ")], " ")
   },
   InputObjectTypeDefinition: {
     leave: ({ description, name, directives, fields }) => wrap("", description, `
-`) + join9(["input", name, join9(directives, " "), block(fields)], " ")
+`) + join11(["input", name, join11(directives, " "), block(fields)], " ")
   },
   DirectiveDefinition: {
     leave: ({ description, name, arguments: args, repeatable, locations }) => wrap("", description, `
 `) + "directive @" + name + (hasMultilineItems(args) ? wrap(`(
-`, indent(join9(args, `
+`, indent(join11(args, `
 `)), `
-)`) : wrap("(", join9(args, ", "), ")")) + (repeatable ? " repeatable" : "") + " on " + join9(locations, " | ")
+)`) : wrap("(", join11(args, ", "), ")")) + (repeatable ? " repeatable" : "") + " on " + join11(locations, " | ")
   },
   SchemaExtension: {
-    leave: ({ directives, operationTypes }) => join9(["extend schema", join9(directives, " "), block(operationTypes)], " ")
+    leave: ({ directives, operationTypes }) => join11(["extend schema", join11(directives, " "), block(operationTypes)], " ")
   },
   ScalarTypeExtension: {
-    leave: ({ name, directives }) => join9(["extend scalar", name, join9(directives, " ")], " ")
+    leave: ({ name, directives }) => join11(["extend scalar", name, join11(directives, " ")], " ")
   },
   ObjectTypeExtension: {
-    leave: ({ name, interfaces, directives, fields }) => join9([
+    leave: ({ name, interfaces, directives, fields }) => join11([
       "extend type",
       name,
-      wrap("implements ", join9(interfaces, " & ")),
-      join9(directives, " "),
+      wrap("implements ", join11(interfaces, " & ")),
+      join11(directives, " "),
       block(fields)
     ], " ")
   },
   InterfaceTypeExtension: {
-    leave: ({ name, interfaces, directives, fields }) => join9([
+    leave: ({ name, interfaces, directives, fields }) => join11([
       "extend interface",
       name,
-      wrap("implements ", join9(interfaces, " & ")),
-      join9(directives, " "),
+      wrap("implements ", join11(interfaces, " & ")),
+      join11(directives, " "),
       block(fields)
     ], " ")
   },
   UnionTypeExtension: {
-    leave: ({ name, directives, types }) => join9([
+    leave: ({ name, directives, types }) => join11([
       "extend union",
       name,
-      join9(directives, " "),
-      wrap("= ", join9(types, " | "))
+      join11(directives, " "),
+      wrap("= ", join11(types, " | "))
     ], " ")
   },
   EnumTypeExtension: {
-    leave: ({ name, directives, values }) => join9(["extend enum", name, join9(directives, " "), block(values)], " ")
+    leave: ({ name, directives, values }) => join11(["extend enum", name, join11(directives, " "), block(values)], " ")
   },
   InputObjectTypeExtension: {
-    leave: ({ name, directives, fields }) => join9(["extend input", name, join9(directives, " "), block(fields)], " ")
+    leave: ({ name, directives, fields }) => join11(["extend input", name, join11(directives, " "), block(fields)], " ")
   },
   TypeCoordinate: {
     leave: ({ name }) => name
   },
   MemberCoordinate: {
-    leave: ({ name, memberName }) => join9([name, wrap(".", memberName)])
+    leave: ({ name, memberName }) => join11([name, wrap(".", memberName)])
   },
   ArgumentCoordinate: {
-    leave: ({ name, fieldName, argumentName }) => join9([name, wrap(".", fieldName), wrap("(", argumentName, ":)")])
+    leave: ({ name, fieldName, argumentName }) => join11([name, wrap(".", fieldName), wrap("(", argumentName, ":)")])
   },
   DirectiveCoordinate: {
-    leave: ({ name }) => join9(["@", name])
+    leave: ({ name }) => join11(["@", name])
   },
   DirectiveArgumentCoordinate: {
-    leave: ({ name, argumentName }) => join9(["@", name, wrap("(", argumentName, ":)")])
+    leave: ({ name, argumentName }) => join11(["@", name, wrap("(", argumentName, ":)")])
   }
 };
-function join9(maybeArray, separator = "") {
+function join11(maybeArray, separator = "") {
   var _maybeArray$filter$jo;
   return (_maybeArray$filter$jo = maybeArray === null || maybeArray === undefined ? undefined : maybeArray.filter((x) => x).join(separator)) !== null && _maybeArray$filter$jo !== undefined ? _maybeArray$filter$jo : "";
 }
 function block(array) {
   return wrap(`{
-`, indent(join9(array, `
+`, indent(join11(array, `
 `)), `
 }`);
 }
@@ -10844,7 +12637,7 @@ function promiseReduce(values, callbackFn, initialValue) {
 }
 
 // node_modules/graphql/jsutils/toError.mjs
-function toError(thrownValue) {
+function toError2(thrownValue) {
   return thrownValue instanceof Error ? thrownValue : new NonErrorThrown(thrownValue);
 }
 
@@ -10859,7 +12652,7 @@ class NonErrorThrown extends Error {
 // node_modules/graphql/error/locatedError.mjs
 function locatedError(rawOriginalError, nodes, path) {
   var _nodes;
-  const originalError = toError(rawOriginalError);
+  const originalError = toError2(rawOriginalError);
   if (isLocatedGraphQLError(originalError)) {
     return originalError;
   }
@@ -11477,17 +13270,17 @@ function parseJsonLiteral(ast) {
       return null;
   }
 }
-function toRecord4(value, label = "params") {
+function toRecord7(value, label = "params") {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new GraphQLError(`${label} must be a JSON object`);
   }
   return value;
 }
-function readString5(record, key) {
+function readString7(record, key) {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
 }
-function readNumber3(record, key) {
+function readNumber5(record, key) {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -11495,7 +13288,7 @@ function readBoolean(record, key) {
   const value = record[key];
   return typeof value === "boolean" ? value : undefined;
 }
-function readStringArray2(record, key) {
+function readStringArray3(record, key) {
   const value = record[key];
   if (!Array.isArray(value)) {
     return;
@@ -11545,14 +13338,14 @@ function readStringRecord(record, key) {
   return Object.fromEntries(entries);
 }
 function requireString(record, key) {
-  const value = readString5(record, key);
+  const value = readString7(record, key);
   if (value === undefined || value.trim().length === 0) {
     throw new GraphQLError(`${key} is required`);
   }
   return value;
 }
 function requireNumber(record, key) {
-  const value = readNumber3(record, key);
+  const value = readNumber5(record, key);
   if (value === undefined) {
     throw new GraphQLError(`${key} is required`);
   }
@@ -11560,10 +13353,10 @@ function requireNumber(record, key) {
 }
 function readProcessOptions(record) {
   const options = {};
-  const model = readString5(record, "model");
+  const model = readString7(record, "model");
   if (model !== undefined)
     options.model = model;
-  const cwd = readString5(record, "cwd");
+  const cwd = readString7(record, "cwd");
   if (cwd !== undefined)
     options.cwd = cwd;
   const sandbox = readStringUnion(record, "sandbox", SANDBOX_MODES);
@@ -11575,13 +13368,13 @@ function readProcessOptions(record) {
   const fullAuto = readBoolean(record, "fullAuto");
   if (fullAuto !== undefined)
     options.fullAuto = fullAuto;
-  const additionalArgs = readStringArray2(record, "additionalArgs");
+  const additionalArgs = readStringArray3(record, "additionalArgs");
   if (additionalArgs !== undefined)
     options.additionalArgs = additionalArgs;
-  const images = readStringArray2(record, "images");
+  const images = readStringArray3(record, "images");
   if (images !== undefined)
     options.images = images;
-  const configOverrides = readStringArray2(record, "configOverrides");
+  const configOverrides = readStringArray3(record, "configOverrides");
   if (configOverrides !== undefined)
     options.configOverrides = configOverrides;
   const streamGranularity = readStringUnion(record, "streamGranularity", STREAM_GRANULARITIES);
@@ -11592,7 +13385,7 @@ function readProcessOptions(record) {
   if (environmentVariables !== undefined) {
     options.environmentVariables = environmentVariables;
   }
-  const codexBinary = readString5(record, "codexBinary");
+  const codexBinary = readString7(record, "codexBinary");
   if (codexBinary !== undefined)
     options.codexBinary = codexBinary;
   return options;
@@ -11608,1795 +13401,12 @@ function extractSessionId(lines) {
     }
     const payload = typeof record["payload"] === "object" && record["payload"] !== null ? record["payload"] : null;
     const meta = payload !== null && typeof payload["meta"] === "object" && payload["meta"] !== null ? payload["meta"] : null;
-    const id = meta === null ? undefined : readString5(meta, "id");
+    const id = meta === null ? undefined : readString7(meta, "id");
     if (id !== undefined) {
       return id;
     }
   }
   return;
-}
-// src/sdk/events.ts
-class BasicSdkEventEmitter {
-  handlers = new Map;
-  on(event, handler) {
-    const set = this.handlers.get(event) ?? new Set;
-    set.add(handler);
-    this.handlers.set(event, set);
-  }
-  off(event, handler) {
-    this.handlers.get(event)?.delete(handler);
-  }
-  emit(event, payload) {
-    const set = this.handlers.get(event);
-    if (set === undefined) {
-      return;
-    }
-    for (const handler of set) {
-      handler(payload);
-    }
-  }
-}
-// src/sdk/tool-registry.ts
-function tool(config) {
-  if (config.name.trim().length === 0) {
-    throw new Error("tool name is required");
-  }
-  return {
-    name: config.name,
-    description: config.description,
-    async run(input, context) {
-      return await config.run(input, context);
-    }
-  };
-}
-
-class ToolRegistry {
-  tools = new Map;
-  register(registeredTool) {
-    this.tools.set(registeredTool.name, registeredTool);
-  }
-  get(name) {
-    const value = this.tools.get(name);
-    if (value === undefined) {
-      return null;
-    }
-    return value;
-  }
-  list() {
-    return Array.from(this.tools.keys()).sort();
-  }
-  async run(name, input, context) {
-    const registered = this.get(name);
-    if (registered === null) {
-      throw new Error(`tool not found: ${name}`);
-    }
-    return registered.run(input, context);
-  }
-}
-// src/sdk/session-runner.ts
-import { EventEmitter as EventEmitter2 } from "events";
-import { stat as stat3 } from "fs/promises";
-class RunningSession extends EventEmitter2 {
-  _sessionId;
-  allowSessionIdUpdate;
-  pm;
-  processId;
-  startedAt;
-  streamGranularity;
-  state;
-  stopHook = null;
-  constructor(sessionId, pm, processId, startedAt, streamGranularity, allowSessionIdUpdate = true) {
-    super();
-    this._sessionId = sessionId;
-    this.allowSessionIdUpdate = allowSessionIdUpdate;
-    this.pm = pm;
-    this.processId = processId;
-    this.startedAt = startedAt;
-    this.streamGranularity = streamGranularity;
-    let resolveCompletion = null;
-    const completionPromise = new Promise((resolve3) => {
-      resolveCompletion = resolve3;
-    });
-    this.state = {
-      completed: false,
-      completionResolver: resolveCompletion,
-      completionPromise,
-      queued: [],
-      waiter: null,
-      messageCount: 0
-    };
-  }
-  get sessionId() {
-    return this._sessionId;
-  }
-  setStopHook(stop) {
-    this.stopHook = stop;
-  }
-  pushLine(line) {
-    if (this.allowSessionIdUpdate && isSessionMeta(line) && this._sessionId !== line.payload.meta.id) {
-      this._sessionId = line.payload.meta.id;
-      this.emit("sessionId", this._sessionId);
-    }
-    this.state.messageCount += 1;
-    this.emit("message", line);
-    const chunks = this.streamGranularity === "char" ? toCharStreamChunks(line, this._sessionId) : [line];
-    for (const chunk of chunks) {
-      this.state.queued.push(chunk);
-    }
-    if (this.state.waiter !== null) {
-      const waiter = this.state.waiter;
-      this.state.waiter = null;
-      waiter();
-    }
-  }
-  finish(exitCode) {
-    if (this.state.completed) {
-      return;
-    }
-    this.state.completed = true;
-    const completedAt = new Date;
-    const result = {
-      success: exitCode === 0,
-      exitCode,
-      stats: {
-        startedAt: this.startedAt.toISOString(),
-        completedAt: completedAt.toISOString(),
-        messageCount: this.state.messageCount
-      }
-    };
-    this.emit("complete", result);
-    if (this.state.completionResolver !== null) {
-      this.state.completionResolver(result);
-      this.state.completionResolver = null;
-    }
-    if (this.state.waiter !== null) {
-      const waiter = this.state.waiter;
-      this.state.waiter = null;
-      waiter();
-    }
-  }
-  async* messages() {
-    while (!this.state.completed || this.state.queued.length > 0) {
-      while (this.state.queued.length > 0) {
-        const line = this.state.queued.shift();
-        if (line !== undefined) {
-          yield line;
-        }
-      }
-      if (this.state.completed) {
-        break;
-      }
-      await new Promise((resolve3) => {
-        this.state.waiter = resolve3;
-      });
-    }
-  }
-  async waitForCompletion() {
-    return await this.state.completionPromise;
-  }
-  async cancel() {
-    this.stopHook?.();
-    this.pm.kill(this.processId);
-  }
-  async interrupt() {
-    this.pm.writeInput(this.processId, "\x03");
-  }
-  async pause() {}
-  async resume() {}
-}
-
-class SessionRunner {
-  options;
-  pm;
-  active = new Set;
-  constructor(options) {
-    this.options = options ?? {};
-    this.pm = new ProcessManager(options?.codexBinary);
-  }
-  async startSession(config) {
-    if (config.resumeSessionId !== undefined) {
-      return await this.resumeSession(config.resumeSessionId, config.prompt, {
-        cwd: config.cwd,
-        model: config.model,
-        systemPrompt: config.systemPrompt,
-        sandbox: config.sandbox,
-        approvalMode: config.approvalMode,
-        fullAuto: config.fullAuto,
-        additionalArgs: config.additionalArgs,
-        configOverrides: config.configOverrides,
-        images: config.images,
-        streamGranularity: config.streamGranularity,
-        environmentVariables: config.environmentVariables
-      });
-    }
-    const startedAt = new Date;
-    const options = this.toProcessOptions(config);
-    const execStream = this.pm.spawnExecStream(config.prompt, options);
-    const session = new RunningSession(`pending-${startedAt.getTime()}`, this.pm, execStream.process.id, startedAt, options.streamGranularity ?? "event");
-    this.trackSession(session);
-    this.forwardExecStream(execStream, session);
-    return session;
-  }
-  async resumeSession(sessionId, prompt, options) {
-    const codexHome = this.resolveCodexHome(options);
-    const sessionInfo = await findSession(sessionId, codexHome);
-    const includeExisting = this.options.includeExistingOnResume === true;
-    const preResumeRolloutOffset = sessionInfo !== null ? await getRolloutSize(sessionInfo.rolloutPath) : undefined;
-    const existingRolloutLines = includeExisting && sessionInfo !== null ? await readRollout(sessionInfo.rolloutPath) : undefined;
-    const startedAt = new Date;
-    const resumeStream = this.pm.spawnResumeStream(sessionId, {
-      ...options,
-      codexBinary: this.options.codexBinary
-    }, prompt);
-    const running = new RunningSession(sessionId, this.pm, resumeStream.process.id, startedAt, options?.streamGranularity ?? "event", false);
-    this.trackSession(running);
-    const seenLineKeys = new Set;
-    const pushLineIfNew = (line) => {
-      const key = stableLineKey(line);
-      if (seenLineKeys.has(key)) {
-        return;
-      }
-      seenLineKeys.add(key);
-      running.pushLine(line);
-    };
-    const watcher = new RolloutWatcher;
-    watcher.on("line", (_path, line) => {
-      pushLineIfNew(line);
-    });
-    let attachPromise = null;
-    if (sessionInfo !== null) {
-      if (includeExisting) {
-        for (const line of existingRolloutLines ?? []) {
-          pushLineIfNew(line);
-        }
-      }
-      await watcher.watchFile(sessionInfo.rolloutPath, {
-        startOffset: preResumeRolloutOffset
-      });
-    } else {
-      attachPromise = this.attachWatchWhenSessionAppears(sessionId, codexHome, watcher, includeExisting);
-    }
-    running.setStopHook(() => watcher.stop());
-    const streamForwardPromise = (async () => {
-      for await (const line of resumeStream.lines) {
-        pushLineIfNew(line);
-      }
-    })();
-    resumeStream.completion.then(async (exitCode) => {
-      await streamForwardPromise;
-      if (attachPromise !== null) {
-        await attachPromise;
-      }
-      await watcher.flush();
-      watcher.stop();
-      running.finish(exitCode);
-    });
-    return running;
-  }
-  async attachWatchWhenSessionAppears(sessionId, codexHome, watcher, includeExisting) {
-    for (let attempt = 0;attempt < 20; attempt += 1) {
-      if (watcher.isClosed) {
-        return;
-      }
-      const discovered = await findSession(sessionId, codexHome);
-      if (discovered !== null) {
-        if (includeExisting) {
-          const existing = await readRollout(discovered.rolloutPath);
-          for (const line of existing) {
-            watcher.emit("line", discovered.rolloutPath, line);
-          }
-          await watcher.watchFile(discovered.rolloutPath);
-        } else {
-          await watcher.watchFile(discovered.rolloutPath, { startOffset: 0 });
-        }
-        return;
-      }
-      await sleep(100);
-    }
-  }
-  listActiveSessions() {
-    return Array.from(this.active);
-  }
-  trackSession(session) {
-    this.active.add(session);
-    session.on("complete", () => {
-      this.active.delete(session);
-    });
-  }
-  toProcessOptions(config) {
-    return {
-      codexBinary: this.options.codexBinary,
-      cwd: config.cwd,
-      systemPrompt: config.systemPrompt,
-      model: config.model,
-      sandbox: config.sandbox,
-      approvalMode: config.approvalMode,
-      fullAuto: config.fullAuto,
-      additionalArgs: config.additionalArgs,
-      configOverrides: config.configOverrides,
-      images: config.images,
-      streamGranularity: config.streamGranularity,
-      environmentVariables: config.environmentVariables
-    };
-  }
-  resolveCodexHome(options) {
-    return options?.environmentVariables?.["CODEX_HOME"] ?? this.options.codexHome;
-  }
-  forwardExecStream(stream, session) {
-    (async () => {
-      for await (const line of stream.lines) {
-        session.pushLine(line);
-      }
-    })();
-    stream.completion.then((exitCode) => {
-      session.finish(exitCode);
-    });
-  }
-}
-function toCharStreamChunks(line, sessionId) {
-  const textSegments = extractAssistantTextSegments(line);
-  if (textSegments.length === 0) {
-    return [line];
-  }
-  const chunks = [];
-  for (const segment of textSegments) {
-    for (const char of Array.from(segment)) {
-      chunks.push({
-        kind: "char",
-        char,
-        sessionId,
-        timestamp: line.timestamp,
-        sourceType: line.type,
-        source: line
-      });
-    }
-  }
-  return chunks;
-}
-function extractAssistantTextSegments(line) {
-  if (line.type === "event_msg") {
-    const payload2 = toRecord5(line.payload);
-    if (payload2?.["type"] === "AgentMessage" && typeof payload2["message"] === "string") {
-      return [payload2["message"]];
-    }
-    return [];
-  }
-  if (line.type !== "response_item") {
-    return [];
-  }
-  const payload = toRecord5(line.payload);
-  if (payload?.["type"] !== "message" || payload["role"] !== "assistant" || !Array.isArray(payload["content"])) {
-    return [];
-  }
-  const segments = [];
-  for (const item of payload["content"]) {
-    const content = toRecord5(item);
-    if (content === null) {
-      continue;
-    }
-    if ((content["type"] === "output_text" || content["type"] === "input_text") && typeof content["text"] === "string" && content["text"].length > 0) {
-      segments.push(content["text"]);
-    }
-  }
-  return segments;
-}
-function toRecord5(value) {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  return value;
-}
-function sleep(ms) {
-  return new Promise((resolve3) => {
-    setTimeout(resolve3, ms);
-  });
-}
-function stableLineKey(line) {
-  return JSON.stringify(toCanonicalJsonValue(line));
-}
-function toCanonicalJsonValue(value) {
-  if (Array.isArray(value)) {
-    return value.map((item) => toCanonicalJsonValue(item));
-  }
-  if (typeof value !== "object" || value === null) {
-    return value;
-  }
-  const record = value;
-  const canonical = {};
-  for (const key of Object.keys(record).sort()) {
-    canonical[key] = toCanonicalJsonValue(record[key]);
-  }
-  return canonical;
-}
-async function getRolloutSize(path) {
-  try {
-    const info = await stat3(path);
-    return info.size;
-  } catch {
-    return 0;
-  }
-}
-// src/sdk/mock-session-runner.ts
-import { EventEmitter as EventEmitter3 } from "events";
-
-class MockCodexRunningSession extends EventEmitter3 {
-  #sessionId;
-  #initialMessages;
-  #autoComplete;
-  #autoCompleteResult;
-  #queue = [];
-  #closed = false;
-  #messageCount = 0;
-  #activationScheduled = false;
-  #activated = false;
-  #initialMessagesFlushed = false;
-  #waiter;
-  #completionResolver;
-  #completion;
-  constructor(options) {
-    super();
-    this.#sessionId = options.sessionId;
-    this.#initialMessages = [...options.messages ?? []];
-    this.#autoComplete = options.autoComplete !== false;
-    this.#autoCompleteResult = options.result;
-    this.#completion = new Promise((resolve3) => {
-      this.#completionResolver = resolve3;
-    });
-    this.on("newListener", (eventName) => {
-      if (eventName === "message" || eventName === "complete") {
-        this.#scheduleActivation();
-      }
-    });
-  }
-  get sessionId() {
-    return this.#sessionId;
-  }
-  getState() {
-    return { status: this.#closed ? "completed" : "running" };
-  }
-  pushMessage(message) {
-    this.#flushInitialMessages();
-    this.#pushMessage(message);
-  }
-  complete(result = {}) {
-    this.#flushInitialMessages();
-    this.#complete(result);
-  }
-  async* messages() {
-    this.#activate();
-    while (!this.#closed || this.#queue.length > 0) {
-      while (this.#queue.length > 0) {
-        const message = this.#queue.shift();
-        if (message !== undefined) {
-          yield message;
-        }
-      }
-      if (this.#closed) {
-        break;
-      }
-      await new Promise((resolve3) => {
-        this.#waiter = resolve3;
-      });
-    }
-  }
-  async waitForCompletion() {
-    this.#activate();
-    return await this.#completion;
-  }
-  async cancel() {
-    this.complete({ success: false, exitCode: 130 });
-  }
-  #scheduleActivation() {
-    if (this.#activated || this.#activationScheduled) {
-      return;
-    }
-    this.#activationScheduled = true;
-    queueMicrotask(() => {
-      this.#activationScheduled = false;
-      this.#activate();
-    });
-  }
-  #activate() {
-    if (this.#activated) {
-      return;
-    }
-    this.#activated = true;
-    this.#flushInitialMessages();
-    if (this.#autoComplete) {
-      this.#complete(this.#autoCompleteResult);
-    }
-  }
-  #flushInitialMessages() {
-    if (this.#initialMessagesFlushed) {
-      return;
-    }
-    this.#initialMessagesFlushed = true;
-    for (const message of this.#initialMessages) {
-      if (this.#closed) {
-        return;
-      }
-      this.#pushMessage(message);
-    }
-  }
-  #pushMessage(message) {
-    if (this.#closed) {
-      throw new Error(`mock codex session '${this.#sessionId}' is closed`);
-    }
-    this.#messageCount += 1;
-    this.#queue.push(message);
-    this.emit("message", message);
-    this.#wake();
-  }
-  #complete(result = {}) {
-    if (this.#closed) {
-      return;
-    }
-    this.#closed = true;
-    const completed = buildSessionResult(result, this.#messageCount);
-    this.emit("complete", completed);
-    this.#completionResolver?.(completed);
-    this.#completionResolver = undefined;
-    this.#wake();
-  }
-  #wake() {
-    const waiter = this.#waiter;
-    this.#waiter = undefined;
-    waiter?.();
-  }
-}
-
-class MockCodexSessionRunner {
-  startSessionCalls = [];
-  resumeSessionCalls = [];
-  #startSessions = [];
-  #resumeSessions = [];
-  enqueueStartSession(session) {
-    this.#startSessions.push(session);
-  }
-  enqueueResumeSession(session) {
-    this.#resumeSessions.push(session);
-  }
-  async startSession(config) {
-    this.startSessionCalls.push({ config });
-    return this.#shiftSession(this.#startSessions, "start");
-  }
-  async resumeSession(sessionId, prompt, options) {
-    this.resumeSessionCalls.push({
-      sessionId,
-      ...prompt === undefined ? {} : { prompt },
-      ...options === undefined ? {} : { options }
-    });
-    return this.#shiftSession(this.#resumeSessions, "resume");
-  }
-  #shiftSession(sessions, kind) {
-    const session = sessions.shift();
-    if (session === undefined) {
-      throw new Error(`mock codex ${kind} session was not enqueued`);
-    }
-    return session;
-  }
-}
-function createMockCodexSessionRunner(input = {}) {
-  const runner = new MockCodexSessionRunner;
-  for (const session of input.startSessions ?? []) {
-    runner.enqueueStartSession(session);
-  }
-  for (const session of input.resumeSessions ?? []) {
-    runner.enqueueResumeSession(session);
-  }
-  return runner;
-}
-function buildSessionResult(input, fallbackMessageCount) {
-  return {
-    success: input.success ?? (input.exitCode === undefined || input.exitCode === 0),
-    exitCode: input.exitCode ?? (input.success === false ? 1 : 0),
-    stats: {
-      startedAt: input.startedAt ?? "2026-01-01T00:00:00.000Z",
-      completedAt: input.completedAt ?? "2026-01-01T00:00:01.000Z",
-      messageCount: input.messageCount ?? fallbackMessageCount
-    }
-  };
-}
-// src/sdk/agent-runner.ts
-import { mkdtemp, rm, writeFile as writeFile6 } from "fs/promises";
-import { tmpdir } from "os";
-import { extname, join as join10 } from "path";
-import { randomUUID as randomUUID8 } from "crypto";
-async function* runAgent(request, options) {
-  const runner = new SessionRunner(options);
-  const normalized = await normalizeAttachments(request.attachments);
-  const resumed = isResumeRequest(request);
-  const normalizedMode = request.streamMode === "normalized";
-  let currentSessionId = resumed ? request.sessionId : undefined;
-  try {
-    const session = await startFromRequest(runner, request, normalized.imagePaths);
-    currentSessionId = session.sessionId;
-    const iterator = session.messages();
-    const normalizerState = createNormalizerState();
-    if (resumed) {
-      const startedEvent = {
-        type: "session.started",
-        sessionId: session.sessionId,
-        resumed: true
-      };
-      yield startedEvent;
-    } else {
-      const firstChunk = await iterator.next();
-      if (firstChunk.done) {
-        const startedEvent = {
-          type: "session.started",
-          sessionId: session.sessionId,
-          resumed: false
-        };
-        yield startedEvent;
-      } else {
-        const startedSessionId = resolveSessionId(session.sessionId, firstChunk.value);
-        currentSessionId = startedSessionId;
-        const startedEvent = {
-          type: "session.started",
-          sessionId: startedSessionId,
-          resumed: false
-        };
-        yield startedEvent;
-        if (normalizedMode) {
-          for (const event of normalizeChunkToEvents(firstChunk.value, startedSessionId, normalizerState, false)) {
-            yield event;
-          }
-        } else {
-          yield {
-            type: "session.message",
-            sessionId: startedSessionId,
-            chunk: firstChunk.value
-          };
-        }
-      }
-    }
-    while (true) {
-      const nextChunk = await iterator.next();
-      if (nextChunk.done) {
-        break;
-      }
-      const resolvedSessionId2 = resolveSessionId(session.sessionId, nextChunk.value);
-      currentSessionId = resolvedSessionId2;
-      if (normalizedMode) {
-        for (const event of normalizeChunkToEvents(nextChunk.value, resolvedSessionId2, normalizerState, false)) {
-          yield event;
-        }
-      } else {
-        yield {
-          type: "session.message",
-          sessionId: resolvedSessionId2,
-          chunk: nextChunk.value
-        };
-      }
-    }
-    const result = await session.waitForCompletion();
-    const resolvedSessionId = currentSessionId ?? session.sessionId;
-    if (normalizedMode) {
-      yield {
-        type: "session.completed",
-        sessionId: resolvedSessionId,
-        success: result.success,
-        exitCode: result.exitCode
-      };
-    } else {
-      yield {
-        type: "session.completed",
-        sessionId: resolvedSessionId,
-        result
-      };
-    }
-  } catch (error) {
-    yield {
-      type: "session.error",
-      sessionId: currentSessionId,
-      error: toError2(error)
-    };
-  } finally {
-    await normalized.cleanup();
-  }
-}
-async function* toNormalizedEvents(chunks) {
-  const state = createNormalizerState();
-  let fallbackSessionId = "unknown-session";
-  for await (const chunk of chunks) {
-    fallbackSessionId = resolveSessionId(fallbackSessionId, chunk);
-    for (const event of normalizeChunkToEvents(chunk, fallbackSessionId, state, true)) {
-      yield event;
-    }
-  }
-}
-async function startFromRequest(runner, request, imagePaths) {
-  if (isResumeRequest(request)) {
-    const session = await runner.resumeSession(request.sessionId, request.prompt, {
-      cwd: request.cwd,
-      model: request.model,
-      sandbox: request.sandbox,
-      approvalMode: request.approvalMode,
-      fullAuto: request.fullAuto,
-      additionalArgs: request.additionalArgs,
-      configOverrides: request.configOverrides,
-      images: imagePaths,
-      streamGranularity: request.streamGranularity,
-      environmentVariables: request.environmentVariables
-    });
-    return session;
-  }
-  const config = {
-    prompt: request.prompt,
-    cwd: request.cwd,
-    model: request.model,
-    sandbox: request.sandbox,
-    approvalMode: request.approvalMode,
-    fullAuto: request.fullAuto,
-    additionalArgs: request.additionalArgs,
-    configOverrides: request.configOverrides,
-    images: imagePaths,
-    streamGranularity: request.streamGranularity,
-    environmentVariables: request.environmentVariables
-  };
-  return await runner.startSession(config);
-}
-async function normalizeAttachments(attachments) {
-  if (attachments === undefined || attachments.length === 0) {
-    return {
-      imagePaths: [],
-      cleanup: async () => {
-        return;
-      }
-    };
-  }
-  const paths = [];
-  const tempDirs = [];
-  for (const attachment of attachments) {
-    if (attachment.type === "path") {
-      paths.push(attachment.path);
-      continue;
-    }
-    const tempDir = await mkdtemp(join10(tmpdir(), "codex-agent-attachment-"));
-    tempDirs.push(tempDir);
-    const parsed = parseBase64Input(attachment.data);
-    const mediaType = attachment.mediaType ?? parsed.mediaType;
-    const ext = extensionForMediaType(mediaType);
-    const fileName = sanitizeFileName(attachment.filename, ext);
-    const filePath = join10(tempDir, fileName);
-    const body = parsed.body;
-    const content = Uint8Array.from(Buffer.from(body, "base64"));
-    await writeFile6(filePath, content);
-    paths.push(filePath);
-  }
-  return {
-    imagePaths: paths,
-    cleanup: async () => {
-      await Promise.all(tempDirs.map(async (dir) => {
-        await rm(dir, { recursive: true, force: true });
-      }));
-    }
-  };
-}
-function parseBase64Input(data) {
-  if (!data.startsWith("data:")) {
-    return { body: data };
-  }
-  const marker = ";base64,";
-  const markerIndex = data.indexOf(marker);
-  if (markerIndex < 0) {
-    return { body: data };
-  }
-  const mediaType = data.slice(5, markerIndex);
-  const body = data.slice(markerIndex + marker.length);
-  if (mediaType.length === 0) {
-    return { body };
-  }
-  return { body, mediaType };
-}
-function extensionForMediaType(mediaType) {
-  if (mediaType === undefined) {
-    return ".img";
-  }
-  switch (mediaType.toLowerCase()) {
-    case "image/png":
-      return ".png";
-    case "image/jpeg":
-      return ".jpg";
-    case "image/webp":
-      return ".webp";
-    case "image/gif":
-      return ".gif";
-    default:
-      return ".img";
-  }
-}
-function sanitizeFileName(filename, defaultExt) {
-  if (filename === undefined || filename.trim().length === 0) {
-    return `${randomUUID8()}${defaultExt}`;
-  }
-  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-  if (safe.length === 0) {
-    return `${randomUUID8()}${defaultExt}`;
-  }
-  if (extname(safe).length > 0) {
-    return safe;
-  }
-  return `${safe}${defaultExt}`;
-}
-function resolveSessionId(fallbackSessionId, chunk) {
-  if (isCharChunk(chunk)) {
-    return chunk.sessionId;
-  }
-  if (chunk.type === "session_meta" && typeof chunk.payload === "object" && chunk.payload !== null && "meta" in chunk.payload) {
-    const payload = chunk.payload;
-    const candidate = payload.meta?.id;
-    if (typeof candidate === "string" && candidate.length > 0) {
-      return candidate;
-    }
-  }
-  return fallbackSessionId;
-}
-function isCharChunk(chunk) {
-  return chunk.kind === "char";
-}
-function toError2(value) {
-  if (value instanceof Error) {
-    return value;
-  }
-  return new Error(typeof value === "string" ? value : "Unknown runAgent error");
-}
-function isResumeRequest(request) {
-  return typeof request.sessionId === "string";
-}
-function createNormalizerState() {
-  return {
-    startedSessionIds: new Set,
-    assistantSnapshots: new Map,
-    toolNamesByCallId: new Map
-  };
-}
-function normalizeChunkToEvents(chunk, fallbackSessionId, state, includeSessionStarted) {
-  const sessionId = resolveSessionId(fallbackSessionId, chunk);
-  const events = [];
-  if (isCharChunk(chunk)) {
-    events.push(...toAssistantTextEvents(sessionId, chunk.char, state));
-    return events;
-  }
-  if (chunk.type === "session_meta") {
-    if (includeSessionStarted && !state.startedSessionIds.has(sessionId)) {
-      state.startedSessionIds.add(sessionId);
-      events.push({
-        type: "session.started",
-        sessionId,
-        resumed: false
-      });
-    }
-    return events;
-  }
-  if (chunk.type === "event_msg") {
-    const payload2 = toRecord6(chunk.payload);
-    if (payload2 === null) {
-      return events;
-    }
-    const payloadType = readString6(payload2["type"]);
-    if (payloadType === "AgentMessage") {
-      const message = readString6(payload2["message"]);
-      if (message !== undefined) {
-        events.push(...toAssistantTextEvents(sessionId, message, state));
-      }
-      return events;
-    }
-    if (payloadType === "AgentReasoning") {
-      const message = readString6(payload2["text"]);
-      events.push({
-        type: "activity",
-        sessionId,
-        ...message !== undefined ? { message } : {}
-      });
-      return events;
-    }
-    if (payloadType === "ExecCommandBegin") {
-      const callId = readString6(payload2["call_id"]);
-      const command = readStringArray3(payload2["command"]);
-      const input = {
-        callId,
-        turnId: readString6(payload2["turn_id"]),
-        cwd: readString6(payload2["cwd"]),
-        command
-      };
-      events.push({
-        type: "tool.call",
-        sessionId,
-        name: "local_shell",
-        input
-      });
-      return events;
-    }
-    if (payloadType === "ExecCommandEnd") {
-      const callId = readString6(payload2["call_id"]);
-      const exitCode = readNumber4(payload2["exit_code"]);
-      const output = {
-        callId,
-        turnId: readString6(payload2["turn_id"]),
-        cwd: readString6(payload2["cwd"]),
-        command: readStringArray3(payload2["command"]),
-        exitCode,
-        aggregatedOutput: payload2["aggregated_output"]
-      };
-      events.push({
-        type: "tool.result",
-        sessionId,
-        name: "local_shell",
-        isError: exitCode !== undefined ? exitCode !== 0 : false,
-        output
-      });
-      return events;
-    }
-    if (payloadType === "Error") {
-      events.push({
-        type: "session.error",
-        sessionId,
-        error: new Error(readString6(payload2["message"]) ?? "Unknown rollout error")
-      });
-      return events;
-    }
-    events.push({
-      type: "activity",
-      sessionId,
-      message: payloadType ?? "event_msg"
-    });
-    return events;
-  }
-  if (chunk.type !== "response_item") {
-    return events;
-  }
-  const payload = toRecord6(chunk.payload);
-  if (payload === null) {
-    return events;
-  }
-  const itemType = readString6(payload["type"]);
-  if (itemType === "function_call") {
-    const name = readString6(payload["name"]) ?? "unknown-tool";
-    const callId = readString6(payload["call_id"]);
-    if (callId !== undefined) {
-      state.toolNamesByCallId.set(callId, name);
-    }
-    events.push({
-      type: "tool.call",
-      sessionId,
-      name,
-      input: parseMaybeJson2(readString6(payload["arguments"]))
-    });
-    return events;
-  }
-  if (itemType === "function_call_output") {
-    const callId = readString6(payload["call_id"]);
-    const output = payload["output"];
-    const outputRecord = toRecord6(output);
-    const isError = outputRecord?.["is_error"] === true || readString6(outputRecord?.["status"]) === "error";
-    events.push({
-      type: "tool.result",
-      sessionId,
-      name: (callId !== undefined ? state.toolNamesByCallId.get(callId) : undefined) ?? "unknown-tool",
-      isError,
-      output
-    });
-    return events;
-  }
-  if (itemType === "local_shell_call") {
-    const status = readString6(payload["status"]);
-    const action = payload["action"];
-    const output = payload["output"];
-    const callId = readString6(payload["call_id"]);
-    const isTerminalStatus = status === "completed" || status === "failed" || status === "error";
-    if (isTerminalStatus) {
-      events.push({
-        type: "tool.result",
-        sessionId,
-        name: "local_shell",
-        isError: status !== "completed",
-        output: {
-          callId,
-          status,
-          action,
-          output
-        }
-      });
-      return events;
-    }
-    events.push({
-      type: "tool.call",
-      sessionId,
-      name: "local_shell",
-      input: {
-        callId,
-        status,
-        action
-      }
-    });
-    return events;
-  }
-  if (itemType === "message" && readString6(payload["role"]) === "assistant" && Array.isArray(payload["content"])) {
-    for (const item of payload["content"]) {
-      const content = toRecord6(item);
-      if (content === null) {
-        continue;
-      }
-      const contentType = readString6(content["type"]);
-      if (contentType !== "output_text" && contentType !== "input_text") {
-        continue;
-      }
-      const text = readString6(content["text"]);
-      if (text !== undefined && text.length > 0) {
-        events.push(...toAssistantTextEvents(sessionId, text, state));
-      }
-    }
-    return events;
-  }
-  return events;
-}
-function toAssistantTextEvents(sessionId, text, state) {
-  const previous = state.assistantSnapshots.get(sessionId) ?? "";
-  const content = `${previous}${text}`;
-  state.assistantSnapshots.set(sessionId, content);
-  return [
-    {
-      type: "assistant.delta",
-      sessionId,
-      text
-    },
-    {
-      type: "assistant.snapshot",
-      sessionId,
-      content
-    }
-  ];
-}
-function toRecord6(value) {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  return value;
-}
-function readString6(value) {
-  return typeof value === "string" ? value : undefined;
-}
-function readNumber4(value) {
-  return typeof value === "number" ? value : undefined;
-}
-function readStringArray3(value) {
-  if (!Array.isArray(value)) {
-    return;
-  }
-  const strings = value.filter((item) => typeof item === "string");
-  return strings.length > 0 ? strings : undefined;
-}
-function parseMaybeJson2(value) {
-  if (value === undefined) {
-    return;
-  }
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-// src/sdk/tool-versions.ts
-import { spawn as spawn2 } from "child_process";
-var DEFAULT_TIMEOUT_MS = 5000;
-async function getCodexCliVersion(options) {
-  return await readToolVersion(options?.codexBinary ?? "codex", options?.timeoutMs);
-}
-async function getToolVersions(options) {
-  const codex = await getCodexCliVersion(options);
-  if (options?.includeGit !== true) {
-    return { codex };
-  }
-  const git = await readToolVersion(options.gitBinary ?? "git", options.timeoutMs);
-  return { codex, git };
-}
-async function readToolVersion(binary, timeoutMs) {
-  const effectiveTimeout = timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
-  return await new Promise((resolve3) => {
-    const child = spawn2(binary, ["--version"], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env }
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const settle = (result) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      resolve3(result);
-    };
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      settle({ version: null, error: message });
-    });
-    child.on("close", (code, signal) => {
-      if (code === 0) {
-        const line = firstLine(stdout);
-        if (line !== null) {
-          settle({ version: line, error: null });
-          return;
-        }
-        settle({
-          version: null,
-          error: "version command succeeded but produced no output"
-        });
-        return;
-      }
-      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-      const details = firstLine(stderr);
-      const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
-      settle({ version: null, error: message });
-    });
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      settle({
-        version: null,
-        error: `version command timed out after ${effectiveTimeout}ms`
-      });
-    }, effectiveTimeout);
-  });
-}
-function firstLine(value) {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  return trimmed.split(/\r?\n/u)[0] ?? null;
-}
-// src/sdk/model-availability.ts
-import { spawn as spawn3 } from "child_process";
-var DEFAULT_TIMEOUT_MS2 = 15000;
-var DEFAULT_PROBE_PROMPT = "Reply with exactly OK.";
-async function getCodexLoginStatus(options) {
-  const result = await runCodexCommand(options?.codexBinary ?? "codex", ["login", "status"], options);
-  const status = firstNonEmptyLine(result.stdout) ?? firstNonEmptyLine(result.stderr);
-  if (result.error !== null) {
-    return {
-      ok: false,
-      status,
-      error: status !== null && looksUnauthenticated(status) ? status : result.error,
-      exitCode: result.exitCode
-    };
-  }
-  if (status === null) {
-    return {
-      ok: false,
-      status: null,
-      error: "login status command succeeded but produced no output",
-      exitCode: result.exitCode
-    };
-  }
-  if (looksUnauthenticated(status)) {
-    return {
-      ok: false,
-      status,
-      error: status,
-      exitCode: result.exitCode
-    };
-  }
-  return {
-    ok: true,
-    status,
-    error: null,
-    exitCode: result.exitCode
-  };
-}
-async function checkCodexModelAvailability(options) {
-  const model = options.model.trim();
-  if (model.length === 0) {
-    throw new Error("model is required");
-  }
-  const [auth, probe] = await Promise.all([
-    getCodexLoginStatus(options),
-    runModelProbe({
-      ...options,
-      model
-    })
-  ]);
-  return {
-    ok: auth.ok && probe.ok,
-    model,
-    auth,
-    probe
-  };
-}
-async function runModelProbe(options) {
-  const args = [
-    "exec",
-    "--skip-git-repo-check",
-    "--ephemeral",
-    "--color",
-    "never",
-    "--sandbox",
-    "read-only"
-  ];
-  if (options.cwd !== undefined) {
-    args.push("--cd", options.cwd);
-  }
-  args.push("--model", options.model, options.prompt ?? DEFAULT_PROBE_PROMPT);
-  const result = await runCodexCommand(options.codexBinary ?? "codex", args, options);
-  const output = firstNonEmptyLine(result.stdout);
-  return {
-    ok: result.error === null,
-    model: options.model,
-    output,
-    error: result.error,
-    exitCode: result.exitCode
-  };
-}
-async function runCodexCommand(binary, args, options) {
-  const timeoutMs = normalizeTimeout(options?.timeoutMs);
-  return await new Promise((resolve3) => {
-    const child = spawn3(binary, args, {
-      cwd: options?.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env }
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timer;
-    const settle = (result) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer !== undefined) {
-        clearTimeout(timer);
-      }
-      resolve3(result);
-    };
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => {
-      settle({
-        exitCode: null,
-        stdout,
-        stderr,
-        error: toErrorMessage(error)
-      });
-    });
-    child.on("close", (code, signal) => {
-      if (code === 0) {
-        settle({
-          exitCode: 0,
-          stdout,
-          stderr,
-          error: null
-        });
-        return;
-      }
-      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-      const details = firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
-      settle({
-        exitCode: code ?? null,
-        stdout,
-        stderr,
-        error: details === null ? `command failed (${reason})` : `command failed (${reason}): ${details}`
-      });
-    });
-    timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      settle({
-        exitCode: null,
-        stdout,
-        stderr,
-        error: `command timed out after ${timeoutMs}ms`
-      });
-    }, timeoutMs);
-  });
-}
-function normalizeTimeout(value) {
-  if (value !== undefined && Number.isFinite(value) && value > 0) {
-    return value;
-  }
-  return DEFAULT_TIMEOUT_MS2;
-}
-function looksUnauthenticated(status) {
-  return /not\s+logged|logged\s*out|unauthenticated|no\s+stored\s+credentials/iu.test(status);
-}
-function firstNonEmptyLine(value) {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  return trimmed.split(/\r?\n/u)[0] ?? null;
-}
-function toErrorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-// src/sdk/usage-stats.ts
-import { readdir as readdir2 } from "fs/promises";
-import { join as join11 } from "path";
-var ROLLOUT_PREFIX3 = "rollout-";
-var ROLLOUT_EXT3 = ".jsonl";
-var DEFAULT_RECENT_DAYS = 14;
-var DEFAULT_CACHE_TTL_MS = 5000;
-var usageStatsCache = null;
-async function getCodexUsageStats(options) {
-  const sessionsDir = options?.codexSessionsDir ?? join11(resolveCodexHome(), "sessions");
-  const recentDays = normalizeRecentDays(options?.recentDays);
-  const now = resolveNowMs(options?.now);
-  const cacheKey = `${sessionsDir}::${String(recentDays)}`;
-  if (usageStatsCache !== null && usageStatsCache.key === cacheKey && usageStatsCache.expiresAt > now) {
-    return usageStatsCache.value;
-  }
-  const rolloutFiles = await listRolloutFiles(sessionsDir);
-  if (rolloutFiles === null) {
-    cacheUsageStats(cacheKey, now, null);
-    return null;
-  }
-  const lastComputedDate = dateKeyFromEpochMs(now);
-  const firstRecentDayEpochMs = dayStartEpochMs(now) - (recentDays - 1) * 86400000;
-  let totalSessions = 0;
-  let totalMessages = 0;
-  let firstSessionDate = null;
-  const modelUsageMap = new Map;
-  const dailyActivityMap = new Map;
-  const tokenCountStateByKey = new Map;
-  for (const rolloutFile of rolloutFiles) {
-    let hadParsableLine = false;
-    let sessionDateForFile = null;
-    try {
-      for await (const line of streamEvents(rolloutFile)) {
-        hadParsableLine = true;
-        const lineDate = dateKeyFromTimestamp(line.timestamp);
-        if (lineDate !== null && (sessionDateForFile === null || lineDate < sessionDateForFile)) {
-          sessionDateForFile = lineDate;
-        }
-        if (isSessionMeta(line)) {
-          const sessionMetaTimestamp = extractSessionMetaTimestamp(line.payload);
-          if (sessionMetaTimestamp !== undefined) {
-            const sessionMetaDate = dateKeyFromTimestamp(sessionMetaTimestamp);
-            if (sessionMetaDate !== null && (sessionDateForFile === null || sessionMetaDate < sessionDateForFile)) {
-              sessionDateForFile = sessionMetaDate;
-            }
-          }
-        }
-        if (isUserOrAssistantMessage(line)) {
-          totalMessages += 1;
-          if (lineDate !== null) {
-            getOrCreateDailyActivity(dailyActivityMap, lineDate).messageCount += 1;
-          }
-        }
-        const toolCalls = extractToolCallCount(line);
-        if (toolCalls > 0 && lineDate !== null) {
-          getOrCreateDailyActivity(dailyActivityMap, lineDate).toolCallCount += toolCalls;
-        }
-        const rawUsageEvent = extractUsageEvent(line);
-        const usageEvent = normalizeUsageEventForAggregation(rawUsageEvent, tokenCountStateByKey);
-        if (usageEvent === null || usageEvent.totalTokens <= 0) {
-          continue;
-        }
-        const model = usageEvent.model;
-        const modelUsage = getOrCreateModelUsage(modelUsageMap, model);
-        modelUsage.inputTokens += usageEvent.inputTokens;
-        modelUsage.outputTokens += usageEvent.outputTokens;
-        modelUsage.cacheReadInputTokens += usageEvent.cacheReadInputTokens;
-        modelUsage.cacheCreationInputTokens += usageEvent.cacheCreationInputTokens;
-        if (lineDate !== null) {
-          const daily = getOrCreateDailyActivity(dailyActivityMap, lineDate);
-          const prev = daily.tokensByModel.get(model) ?? 0;
-          daily.tokensByModel.set(model, prev + usageEvent.totalTokens);
-        }
-      }
-    } catch {
-      continue;
-    }
-    if (!hadParsableLine) {
-      continue;
-    }
-    totalSessions += 1;
-    if (sessionDateForFile !== null) {
-      if (firstSessionDate === null || sessionDateForFile < firstSessionDate) {
-        firstSessionDate = sessionDateForFile;
-      }
-      getOrCreateDailyActivity(dailyActivityMap, sessionDateForFile).sessionCount += 1;
-    }
-  }
-  const recentDailyActivity = [];
-  for (let offset = 0;offset < recentDays; offset += 1) {
-    const epochMs = firstRecentDayEpochMs + offset * 86400000;
-    const date = dateKeyFromEpochMs(epochMs);
-    const activity = dailyActivityMap.get(date);
-    if (activity === undefined) {
-      recentDailyActivity.push({ date });
-      continue;
-    }
-    const tokensByModel = mapToRecord(activity.tokensByModel);
-    recentDailyActivity.push({
-      date,
-      ...activity.messageCount > 0 ? { messageCount: activity.messageCount } : {},
-      ...activity.sessionCount > 0 ? { sessionCount: activity.sessionCount } : {},
-      ...activity.toolCallCount > 0 ? { toolCallCount: activity.toolCallCount } : {},
-      ...Object.keys(tokensByModel).length > 0 ? { tokensByModel } : {}
-    });
-  }
-  const result = {
-    totalSessions,
-    totalMessages,
-    firstSessionDate,
-    lastComputedDate,
-    modelUsage: mapToRecord(modelUsageMap),
-    recentDailyActivity
-  };
-  cacheUsageStats(cacheKey, now, result);
-  return result;
-}
-function normalizeRecentDays(value) {
-  if (value === undefined) {
-    return DEFAULT_RECENT_DAYS;
-  }
-  if (!Number.isFinite(value)) {
-    return DEFAULT_RECENT_DAYS;
-  }
-  const floored = Math.floor(value);
-  return floored > 0 ? floored : DEFAULT_RECENT_DAYS;
-}
-function resolveNowMs(value) {
-  if (value instanceof Date) {
-    const epochMs = value.getTime();
-    return Number.isFinite(epochMs) ? epochMs : Date.now();
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  return Date.now();
-}
-async function listRolloutFiles(sessionsDir) {
-  try {
-    const files = [];
-    await collectRolloutFilesRecursive(sessionsDir, files);
-    files.sort();
-    return files;
-  } catch {
-    return null;
-  }
-}
-async function collectRolloutFilesRecursive(dirPath, out) {
-  const entries = await readdir2(dirPath, { withFileTypes: true });
-  for (const entry of entries) {
-    const fullPath = join11(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      await collectRolloutFilesRecursive(fullPath, out);
-      continue;
-    }
-    if (entry.isFile() && entry.name.startsWith(ROLLOUT_PREFIX3) && entry.name.endsWith(ROLLOUT_EXT3)) {
-      out.push(fullPath);
-    }
-  }
-}
-function cacheUsageStats(key, nowEpochMs, value) {
-  usageStatsCache = {
-    key,
-    expiresAt: nowEpochMs + DEFAULT_CACHE_TTL_MS,
-    value
-  };
-}
-function getOrCreateModelUsage(modelUsageMap, model) {
-  const existing = modelUsageMap.get(model);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const created = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadInputTokens: 0,
-    cacheCreationInputTokens: 0
-  };
-  modelUsageMap.set(model, created);
-  return created;
-}
-function getOrCreateDailyActivity(activityMap, date) {
-  const existing = activityMap.get(date);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const created = {
-    messageCount: 0,
-    sessionCount: 0,
-    toolCallCount: 0,
-    tokensByModel: new Map
-  };
-  activityMap.set(date, created);
-  return created;
-}
-function mapToRecord(value) {
-  const result = {};
-  for (const [key, entry] of value.entries()) {
-    result[key] = entry;
-  }
-  return result;
-}
-function isUserOrAssistantMessage(line) {
-  if (isEventMsg(line)) {
-    const payload = toRecord7(line.payload);
-    const eventType = readString7(payload, "type");
-    return eventType === "UserMessage" || eventType === "AgentMessage";
-  }
-  if (isResponseItem(line)) {
-    const payload = toRecord7(line.payload);
-    if (readString7(payload, "type") !== "message") {
-      return false;
-    }
-    const role = readString7(payload, "role");
-    return role === "user" || role === "assistant";
-  }
-  return false;
-}
-function extractToolCallCount(line) {
-  if (isEventMsg(line)) {
-    const payload = toRecord7(line.payload);
-    if (readString7(payload, "type") === "ExecCommandBegin") {
-      return 1;
-    }
-  }
-  if (isResponseItem(line)) {
-    const payload = toRecord7(line.payload);
-    const itemType = readString7(payload, "type");
-    if (itemType === "function_call" || itemType === "local_shell_call") {
-      return 1;
-    }
-  }
-  return 0;
-}
-function extractUsageEvent(line) {
-  if (!isEventMsg(line)) {
-    return null;
-  }
-  const payload = toRecord7(line.payload);
-  if (payload === null) {
-    return null;
-  }
-  const eventType = readString7(payload, "type");
-  let usage = null;
-  let modelFromInfo;
-  let source = null;
-  let isCumulative = false;
-  let aggregationKey;
-  let model;
-  if (eventType === "TurnComplete") {
-    source = "turn_complete";
-    usage = toRecord7(payload["usage"]);
-  } else if (eventType === "token_count" || eventType === "TokenCount") {
-    const info = toRecord7(payload["info"]);
-    if (info === null) {
-      return null;
-    }
-    source = "token_count";
-    modelFromInfo = readString7(info, "model");
-    const lastTokenUsage = toRecord7(info["last_token_usage"]) ?? toRecord7(payload["last_token_usage"]);
-    const totalTokenUsage = toRecord7(info["total_token_usage"]) ?? toRecord7(payload["total_token_usage"]);
-    if (lastTokenUsage !== null) {
-      usage = lastTokenUsage;
-      isCumulative = false;
-    } else if (totalTokenUsage !== null) {
-      usage = totalTokenUsage;
-      isCumulative = true;
-    } else {
-      usage = toRecord7(info["usage"]) ?? toRecord7(payload["usage"]) ?? payload;
-      isCumulative = false;
-    }
-    model = resolveTokenCountModel(payload, usage, info, modelFromInfo);
-    aggregationKey = extractTokenCountAggregationKey(payload, info, model);
-  }
-  if (source === null || usage === null) {
-    return null;
-  }
-  const inputTokens = readNumber5(usage, "input_tokens") ?? readNumber5(usage, "inputTokens") ?? 0;
-  const outputTokens = readNumber5(usage, "output_tokens") ?? readNumber5(usage, "outputTokens") ?? 0;
-  const cacheReadInputTokens = readNumber5(usage, "cache_read_input_tokens") ?? readNumber5(usage, "cacheReadInputTokens") ?? readNumber5(usage, "cached_input_tokens") ?? 0;
-  const cacheCreationInputTokens = readNumber5(usage, "cache_creation_input_tokens") ?? readNumber5(usage, "cacheCreationInputTokens") ?? 0;
-  const computedTotal = inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
-  const totalTokens = readNumber5(usage, "total_tokens") ?? readNumber5(usage, "totalTokens") ?? computedTotal;
-  model = model ?? modelFromInfo ?? readString7(usage, "model") ?? readString7(usage, "model_id") ?? readString7(payload, "model") ?? "unknown";
-  return {
-    source,
-    model,
-    inputTokens,
-    outputTokens,
-    cacheReadInputTokens,
-    cacheCreationInputTokens,
-    totalTokens,
-    isCumulative,
-    ...aggregationKey !== undefined ? { aggregationKey } : {}
-  };
-}
-function normalizeUsageEventForAggregation(usageEvent, tokenCountStateByKey) {
-  if (usageEvent === null || usageEvent.source !== "token_count") {
-    return usageEvent;
-  }
-  const key = usageEvent.aggregationKey ?? usageEvent.model;
-  const state = getOrCreateTokenCountState(tokenCountStateByKey, key);
-  if (!usageEvent.isCumulative) {
-    return usageEvent;
-  }
-  if (state.lastTotalTokens !== undefined && usageEvent.totalTokens < state.lastTotalTokens) {
-    setTokenCountState(state, usageEvent);
-    return {
-      ...usageEvent,
-      isCumulative: false
-    };
-  }
-  const deltaInputTokens = positiveDelta(usageEvent.inputTokens, state.lastInputTokens);
-  const deltaOutputTokens = positiveDelta(usageEvent.outputTokens, state.lastOutputTokens);
-  const deltaCacheReadInputTokens = positiveDelta(usageEvent.cacheReadInputTokens, state.lastCacheReadInputTokens);
-  const deltaCacheCreationInputTokens = positiveDelta(usageEvent.cacheCreationInputTokens, state.lastCacheCreationInputTokens);
-  const deltaTotalTokens = positiveDelta(usageEvent.totalTokens, state.lastTotalTokens);
-  setTokenCountStateMax(state, usageEvent);
-  if (deltaTotalTokens <= 0) {
-    return null;
-  }
-  return {
-    ...usageEvent,
-    inputTokens: deltaInputTokens,
-    outputTokens: deltaOutputTokens,
-    cacheReadInputTokens: deltaCacheReadInputTokens,
-    cacheCreationInputTokens: deltaCacheCreationInputTokens,
-    totalTokens: deltaTotalTokens,
-    isCumulative: false
-  };
-}
-function getOrCreateTokenCountState(stateByKey, key) {
-  const existing = stateByKey.get(key);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const created = {};
-  stateByKey.set(key, created);
-  return created;
-}
-function setTokenCountState(state, usageEvent) {
-  state.lastInputTokens = usageEvent.inputTokens;
-  state.lastOutputTokens = usageEvent.outputTokens;
-  state.lastCacheReadInputTokens = usageEvent.cacheReadInputTokens;
-  state.lastCacheCreationInputTokens = usageEvent.cacheCreationInputTokens;
-  state.lastTotalTokens = usageEvent.totalTokens;
-}
-function setTokenCountStateMax(state, usageEvent) {
-  state.lastInputTokens = maxDefined(state.lastInputTokens, usageEvent.inputTokens);
-  state.lastOutputTokens = maxDefined(state.lastOutputTokens, usageEvent.outputTokens);
-  state.lastCacheReadInputTokens = maxDefined(state.lastCacheReadInputTokens, usageEvent.cacheReadInputTokens);
-  state.lastCacheCreationInputTokens = maxDefined(state.lastCacheCreationInputTokens, usageEvent.cacheCreationInputTokens);
-  state.lastTotalTokens = maxDefined(state.lastTotalTokens, usageEvent.totalTokens);
-}
-function positiveDelta(current, previous) {
-  if (previous === undefined) {
-    return current;
-  }
-  const delta = current - previous;
-  return delta > 0 ? delta : 0;
-}
-function maxDefined(previous, current) {
-  if (previous === undefined) {
-    return current;
-  }
-  return current > previous ? current : previous;
-}
-function extractTokenCountAggregationKey(payload, info, model) {
-  const parts = [];
-  const infoStreamId = readString7(info, "stream_id");
-  if (infoStreamId !== undefined) {
-    parts.push(`stream:${infoStreamId}`);
-  }
-  const infoTurnId = readString7(info, "turn_id");
-  if (infoTurnId !== undefined) {
-    parts.push(`info_turn:${infoTurnId}`);
-  }
-  const payloadTurnId = readString7(payload, "turn_id");
-  if (payloadTurnId !== undefined) {
-    parts.push(`payload_turn:${payloadTurnId}`);
-  }
-  const responseId = readString7(info, "response_id");
-  if (responseId !== undefined) {
-    parts.push(`response:${responseId}`);
-  }
-  const messageId = readString7(info, "message_id");
-  if (messageId !== undefined) {
-    parts.push(`message:${messageId}`);
-  }
-  parts.push(`model:${model}`);
-  return parts.join("|");
-}
-function resolveTokenCountModel(payload, usage, info, modelFromInfo) {
-  const explicitModel = modelFromInfo ?? readString7(usage, "model") ?? readString7(usage, "model_id") ?? readString7(payload, "model");
-  if (explicitModel !== undefined) {
-    return explicitModel;
-  }
-  const payloadRateLimitsModel = extractModelFromRateLimits(toRecord7(payload["rate_limits"]));
-  if (payloadRateLimitsModel !== undefined) {
-    return payloadRateLimitsModel;
-  }
-  const infoRateLimitsModel = extractModelFromRateLimits(toRecord7(info["rate_limits"]));
-  if (infoRateLimitsModel !== undefined) {
-    return infoRateLimitsModel;
-  }
-  return "unknown";
-}
-function extractModelFromRateLimits(rateLimits) {
-  const limitName = readString7(rateLimits, "limit_name");
-  const normalizedLimitName = normalizeRateLimitModel(limitName);
-  if (normalizedLimitName !== undefined) {
-    return normalizedLimitName;
-  }
-  const limitId = readString7(rateLimits, "limit_id");
-  return normalizeRateLimitModel(limitId);
-}
-function normalizeRateLimitModel(modelName) {
-  if (modelName === undefined) {
-    return;
-  }
-  const normalized = modelName.trim().toLowerCase().replace(/[\s_]+/g, "-").replace(/[^a-z0-9.-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-  return normalized.length > 0 ? normalized : undefined;
-}
-function extractSessionMetaTimestamp(payloadValue) {
-  const payload = toRecord7(payloadValue);
-  if (payload === null) {
-    return;
-  }
-  const payloadTimestamp = readString7(payload, "timestamp");
-  if (payloadTimestamp !== undefined) {
-    return payloadTimestamp;
-  }
-  const meta = toRecord7(payload["meta"]);
-  return readString7(meta, "timestamp");
-}
-function toRecord7(value) {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  return value;
-}
-function readString7(value, key) {
-  if (value === null) {
-    return;
-  }
-  const candidate = value[key];
-  return typeof candidate === "string" ? candidate : undefined;
-}
-function readNumber5(value, key) {
-  if (value === null) {
-    return;
-  }
-  const candidate = value[key];
-  if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
-    return;
-  }
-  return candidate;
-}
-function dateKeyFromTimestamp(timestamp) {
-  const date = new Date(timestamp);
-  const epochMs = date.getTime();
-  if (Number.isNaN(epochMs)) {
-    return null;
-  }
-  return dateKeyFromEpochMs(epochMs);
-}
-function dayStartEpochMs(epochMs) {
-  const date = new Date(epochMs);
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
-}
-function dateKeyFromEpochMs(epochMs) {
-  return new Date(epochMs).toISOString().slice(0, 10);
 }
 // src/graphql/command-handlers.ts
 async function executeCommand(name, params, context) {
@@ -13505,28 +13515,28 @@ async function collectItems(iterable) {
   return items;
 }
 async function handleVersionGet(params) {
-  const input = params === undefined ? {} : toRecord4(params);
+  const input = params === undefined ? {} : toRecord7(params);
   return getToolVersions({
     includeGit: readBoolean(input, "includeGit") ?? false
   });
 }
 async function handleSessionList(params, context) {
-  const input = params === undefined ? {} : toRecord4(params);
+  const input = params === undefined ? {} : toRecord7(params);
   const options = {};
-  const limit = readNumber3(input, "limit");
+  const limit = readNumber5(input, "limit");
   if (limit !== undefined)
     options.limit = limit;
-  const offset = readNumber3(input, "offset");
+  const offset = readNumber5(input, "offset");
   if (offset !== undefined)
     options.offset = offset;
-  const source = readString5(input, "source");
+  const source = readString7(input, "source");
   if (source === "cli" || source === "vscode" || source === "exec" || source === "unknown") {
     options.source = source;
   }
-  const cwd = readString5(input, "cwd");
+  const cwd = readString7(input, "cwd");
   if (cwd !== undefined)
     options.cwd = cwd;
-  const branch = readString5(input, "branch");
+  const branch = readString7(input, "branch");
   if (branch !== undefined)
     options.branch = branch;
   if (context.codexHome !== undefined)
@@ -13534,7 +13544,7 @@ async function handleSessionList(params, context) {
   return listSessions(options);
 }
 async function handleSessionShow(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const session = await findSession(requireString(input, "id"), context.codexHome);
   if (session === null) {
     throw new GraphQLError("Session not found");
@@ -13542,41 +13552,41 @@ async function handleSessionShow(params, context) {
   return session;
 }
 async function handleSessionSearch(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const options = {};
-  const limit = readNumber3(input, "limit");
+  const limit = readNumber5(input, "limit");
   if (limit !== undefined)
     options.limit = limit;
-  const offset = readNumber3(input, "offset");
+  const offset = readNumber5(input, "offset");
   if (offset !== undefined)
     options.offset = offset;
-  const source = readString5(input, "source");
+  const source = readString7(input, "source");
   if (source === "cli" || source === "vscode" || source === "exec" || source === "unknown") {
     options.source = source;
   }
-  const cwd = readString5(input, "cwd");
+  const cwd = readString7(input, "cwd");
   if (cwd !== undefined)
     options.cwd = cwd;
-  const branch = readString5(input, "branch");
+  const branch = readString7(input, "branch");
   if (branch !== undefined)
     options.branch = branch;
-  const role = readString5(input, "role");
+  const role = readString7(input, "role");
   if (role === "user" || role === "assistant" || role === "both") {
     options.role = role;
   }
   const caseSensitive = readBoolean(input, "caseSensitive");
   if (caseSensitive !== undefined)
     options.caseSensitive = caseSensitive;
-  const maxBytes = readNumber3(input, "maxBytes");
+  const maxBytes = readNumber5(input, "maxBytes");
   if (maxBytes !== undefined)
     options.maxBytes = maxBytes;
-  const maxEvents = readNumber3(input, "maxEvents");
+  const maxEvents = readNumber5(input, "maxEvents");
   if (maxEvents !== undefined)
     options.maxEvents = maxEvents;
-  const maxSessions = readNumber3(input, "maxSessions");
+  const maxSessions = readNumber5(input, "maxSessions");
   if (maxSessions !== undefined)
     options.maxSessions = maxSessions;
-  const timeoutMs = readNumber3(input, "timeoutMs");
+  const timeoutMs = readNumber5(input, "timeoutMs");
   if (timeoutMs !== undefined)
     options.timeoutMs = timeoutMs;
   if (context.codexHome !== undefined)
@@ -13584,22 +13594,22 @@ async function handleSessionSearch(params, context) {
   return searchSessions(requireString(input, "query"), options);
 }
 async function handleSessionSearchTranscript(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const options = {};
-  const role = readString5(input, "role");
+  const role = readString7(input, "role");
   if (role === "user" || role === "assistant" || role === "both") {
     options.role = role;
   }
   const caseSensitive = readBoolean(input, "caseSensitive");
   if (caseSensitive !== undefined)
     options.caseSensitive = caseSensitive;
-  const maxBytes = readNumber3(input, "maxBytes");
+  const maxBytes = readNumber5(input, "maxBytes");
   if (maxBytes !== undefined)
     options.maxBytes = maxBytes;
-  const maxEvents = readNumber3(input, "maxEvents");
+  const maxEvents = readNumber5(input, "maxEvents");
   if (maxEvents !== undefined)
     options.maxEvents = maxEvents;
-  const timeoutMs = readNumber3(input, "timeoutMs");
+  const timeoutMs = readNumber5(input, "timeoutMs");
   if (timeoutMs !== undefined)
     options.timeoutMs = timeoutMs;
   if (context.codexHome !== undefined)
@@ -13607,7 +13617,7 @@ async function handleSessionSearchTranscript(params, context) {
   return searchSessionTranscript(requireString(input, "id"), requireString(input, "query"), options);
 }
 async function handleSessionRun(params) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const prompt = requireString(input, "prompt");
   const options = readProcessOptions(input);
   const pm = new ProcessManager(options.codexBinary);
@@ -13619,32 +13629,32 @@ async function handleSessionRun(params) {
   };
 }
 async function handleSessionResume(params) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const options = readProcessOptions(input);
   const pm = new ProcessManager(options.codexBinary);
-  return pm.spawnResume(requireString(input, "id"), options, readString5(input, "prompt"));
+  return pm.spawnResume(requireString(input, "id"), options, readString7(input, "prompt"));
 }
 async function handleSessionFork(params) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const options = readProcessOptions(input);
   const pm = new ProcessManager(options.codexBinary);
-  return pm.spawnFork(requireString(input, "id"), readNumber3(input, "nthMessage"), options);
+  return pm.spawnFork(requireString(input, "id"), readNumber5(input, "nthMessage"), options);
 }
 async function handleSessionWatch(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const session = await findSession(requireString(input, "id"), context.codexHome);
   if (session === null) {
     throw new GraphQLError("Session not found");
   }
-  const startOffset = readNumber3(input, "startOffset");
+  const startOffset = readNumber5(input, "startOffset");
   return createWatchStream(session.rolloutPath, startOffset);
 }
 async function handleGroupCreate(params, context) {
-  const input = toRecord4(params);
-  return addGroup(requireString(input, "name"), readString5(input, "description"), context.configDir);
+  const input = toRecord7(params);
+  return addGroup(requireString(input, "name"), readString7(input, "description"), context.configDir);
 }
 async function handleGroupShow(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const group = await findGroup(requireString(input, "id"), context.configDir);
   if (group === null) {
     throw new GraphQLError("Group not found");
@@ -13652,7 +13662,7 @@ async function handleGroupShow(params, context) {
   return group;
 }
 async function handleGroupAdd(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const group = await findGroup(requireString(input, "id"), context.configDir);
   if (group === null) {
     throw new GraphQLError("Group not found");
@@ -13661,7 +13671,7 @@ async function handleGroupAdd(params, context) {
   return { ok: true };
 }
 async function handleGroupRemove(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const group = await findGroup(requireString(input, "id"), context.configDir);
   if (group === null) {
     throw new GraphQLError("Group not found");
@@ -13670,81 +13680,81 @@ async function handleGroupRemove(params, context) {
   return { ok: true };
 }
 async function handleGroupPause(params, context) {
-  const ok = await pauseGroup(requireString(toRecord4(params), "id"), context.configDir);
+  const ok = await pauseGroup(requireString(toRecord7(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Group not found");
   }
   return { ok: true };
 }
 async function handleGroupResume(params, context) {
-  const ok = await resumeGroup(requireString(toRecord4(params), "id"), context.configDir);
+  const ok = await resumeGroup(requireString(toRecord7(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Group not found");
   }
   return { ok: true };
 }
 async function handleGroupDelete(params, context) {
-  const ok = await removeGroup(requireString(toRecord4(params), "id"), context.configDir);
+  const ok = await removeGroup(requireString(toRecord7(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Group not found");
   }
   return { ok: true };
 }
 async function handleGroupRun(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const group = await findGroup(requireString(input, "id"), context.configDir);
   if (group === null) {
     throw new GraphQLError("Group not found");
   }
   return collectItems(runGroup(group, requireString(input, "prompt"), {
     ...readProcessOptions(input),
-    maxConcurrent: readNumber3(input, "maxConcurrent")
+    maxConcurrent: readNumber5(input, "maxConcurrent")
   }));
 }
 async function handleQueueCreate(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   return createQueue(requireString(input, "name"), requireString(input, "projectPath"), context.configDir);
 }
 async function handleQueueShow(params, context) {
-  const queue = await findQueue(requireString(toRecord4(params), "id"), context.configDir);
+  const queue = await findQueue(requireString(toRecord7(params), "id"), context.configDir);
   if (queue === null) {
     throw new GraphQLError("Queue not found");
   }
   return queue;
 }
 async function handleQueueAdd(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const queue = await findQueue(requireString(input, "id"), context.configDir);
   if (queue === null) {
     throw new GraphQLError("Queue not found");
   }
-  return addPrompt(queue.id, requireString(input, "prompt"), readStringArray2(input, "images"), context.configDir);
+  return addPrompt(queue.id, requireString(input, "prompt"), readStringArray3(input, "images"), context.configDir);
 }
 async function handleQueuePause(params, context) {
-  const ok = await pauseQueue(requireString(toRecord4(params), "id"), context.configDir);
+  const ok = await pauseQueue(requireString(toRecord7(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue not found");
   }
   return { ok: true };
 }
 async function handleQueueResume(params, context) {
-  const ok = await resumeQueue(requireString(toRecord4(params), "id"), context.configDir);
+  const ok = await resumeQueue(requireString(toRecord7(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue not found");
   }
   return { ok: true };
 }
 async function handleQueueDelete(params, context) {
-  const ok = await removeQueue(requireString(toRecord4(params), "id"), context.configDir);
+  const ok = await removeQueue(requireString(toRecord7(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue not found");
   }
   return { ok: true };
 }
 async function handleQueueUpdate(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const ok = await updateQueueCommand(requireString(input, "id"), requireString(input, "commandId"), {
-    prompt: readString5(input, "prompt"),
+    prompt: readString7(input, "prompt"),
     status: readStringUnion(input, "status", QUEUE_PROMPT_STATUSES)
   }, context.configDir);
   if (!ok) {
@@ -13753,7 +13763,7 @@ async function handleQueueUpdate(params, context) {
   return { ok: true };
 }
 async function handleQueueRemove(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const ok = await removeQueueCommand(requireString(input, "id"), requireString(input, "commandId"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue command not found");
@@ -13761,7 +13771,7 @@ async function handleQueueRemove(params, context) {
   return { ok: true };
 }
 async function handleQueueMove(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const ok = await moveQueueCommand(requireString(input, "id"), requireNumber(input, "from"), requireNumber(input, "to"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Queue or command position not found");
@@ -13769,7 +13779,7 @@ async function handleQueueMove(params, context) {
   return { ok: true };
 }
 async function handleQueueMode(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const mode = requireStringUnion(input, "mode", QUEUE_COMMAND_MODES);
   const ok = await toggleQueueCommandMode(requireString(input, "id"), requireString(input, "commandId"), mode, context.configDir);
   if (!ok) {
@@ -13778,7 +13788,7 @@ async function handleQueueMode(params, context) {
   return { ok: true };
 }
 async function handleQueueRun(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   const queue = await findQueue(requireString(input, "id"), context.configDir);
   if (queue === null) {
     throw new GraphQLError("Queue not found");
@@ -13792,47 +13802,47 @@ async function handleQueueRun(params, context) {
   return collectItems(runQueue(queue, options, { stopped: false }));
 }
 async function handleBookmarkAdd(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   return addBookmark({
     type: requireStringUnion(input, "type", BOOKMARK_TYPES),
     sessionId: requireString(input, "sessionId"),
     name: requireString(input, "name"),
-    description: readString5(input, "description"),
-    tags: readStringArray2(input, "tags"),
-    messageId: readString5(input, "messageId"),
-    fromMessageId: readString5(input, "fromMessageId"),
-    toMessageId: readString5(input, "toMessageId")
+    description: readString7(input, "description"),
+    tags: readStringArray3(input, "tags"),
+    messageId: readString7(input, "messageId"),
+    fromMessageId: readString7(input, "fromMessageId"),
+    toMessageId: readString7(input, "toMessageId")
   }, context.configDir);
 }
 async function handleBookmarkList(params, context) {
-  const input = params === undefined ? {} : toRecord4(params);
+  const input = params === undefined ? {} : toRecord7(params);
   return listBookmarks({
-    sessionId: readString5(input, "sessionId"),
+    sessionId: readString7(input, "sessionId"),
     type: readStringUnion(input, "type", BOOKMARK_TYPES),
-    tag: readString5(input, "tag")
+    tag: readString7(input, "tag")
   }, context.configDir);
 }
 async function handleBookmarkGet(params, context) {
-  const bookmark = await getBookmark(requireString(toRecord4(params), "id"), context.configDir);
+  const bookmark = await getBookmark(requireString(toRecord7(params), "id"), context.configDir);
   if (bookmark === null) {
     throw new GraphQLError("Bookmark not found");
   }
   return bookmark;
 }
 async function handleBookmarkDelete(params, context) {
-  const ok = await deleteBookmark(requireString(toRecord4(params), "id"), context.configDir);
+  const ok = await deleteBookmark(requireString(toRecord7(params), "id"), context.configDir);
   if (!ok) {
     throw new GraphQLError("Bookmark not found");
   }
   return { ok: true };
 }
 async function handleBookmarkSearch(params, context) {
-  const input = toRecord4(params);
-  return searchBookmarks(requireString(input, "query"), { limit: readNumber3(input, "limit") }, context.configDir);
+  const input = toRecord7(params);
+  return searchBookmarks(requireString(input, "query"), { limit: readNumber5(input, "limit") }, context.configDir);
 }
 async function handleTokenCreate(params, context) {
-  const input = toRecord4(params);
-  const rawPermissions = readStringArray2(input, "permissions");
+  const input = toRecord7(params);
+  const rawPermissions = readStringArray3(input, "permissions");
   const permissions = rawPermissions === undefined ? DEFAULT_TOKEN_PERMISSIONS : normalizePermissions(rawPermissions);
   if (permissions.length === 0) {
     throw new GraphQLError("permissions must include at least one valid permission");
@@ -13840,29 +13850,29 @@ async function handleTokenCreate(params, context) {
   return createToken({
     name: requireString(input, "name"),
     permissions,
-    expiresAt: readString5(input, "expiresAt")
+    expiresAt: readString7(input, "expiresAt")
   }, context.configDir);
 }
 async function handleTokenRevoke(params, context) {
-  return revokeToken(requireString(toRecord4(params), "id"), context.configDir);
+  return revokeToken(requireString(toRecord7(params), "id"), context.configDir);
 }
 async function handleTokenRotate(params, context) {
-  return rotateToken(requireString(toRecord4(params), "id"), context.configDir);
+  return rotateToken(requireString(toRecord7(params), "id"), context.configDir);
 }
 async function handleFilesList(params, context) {
-  return getChangedFiles(requireString(toRecord4(params), "sessionId"), {
+  return getChangedFiles(requireString(toRecord7(params), "sessionId"), {
     configDir: context.configDir,
     codexHome: context.codexHome
   });
 }
 async function handleFilesPatches(params, context) {
-  return getSessionFilePatchHistory(requireString(toRecord4(params), "sessionId"), {
+  return getSessionFilePatchHistory(requireString(toRecord7(params), "sessionId"), {
     configDir: context.configDir,
     codexHome: context.codexHome
   });
 }
 async function handleFilesFind(params, context) {
-  const input = toRecord4(params);
+  const input = toRecord7(params);
   return findSessionsByFile(requireString(input, "path"), {
     configDir: context.configDir,
     codexHome: context.codexHome

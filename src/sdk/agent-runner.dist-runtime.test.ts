@@ -23,7 +23,6 @@ afterEach(async () => {
 
 describe("dist runtime runAgent", () => {
   test("exports session search API from dist entrypoint", async () => {
-    // @ts-expect-error dist artifact is runtime-only in this repository.
     const distModule = await import("../../dist/main.js");
     expect(typeof distModule.searchSessions).toBe("function");
     expect(typeof distModule.searchSessionTranscript).toBe("function");
@@ -74,7 +73,6 @@ describe("dist runtime runAgent", () => {
       "utf-8",
     );
 
-    // @ts-expect-error dist artifact is runtime-only in this repository.
     const distModule = await import("../../dist/main.js");
     const messages = await distModule.getSessionMessages(rolloutPath);
     expect(messages).toHaveLength(1);
@@ -103,7 +101,6 @@ describe("dist runtime runAgent", () => {
     );
     await chmod(fakeCodexPath, 0o755);
 
-    // @ts-expect-error dist artifact is runtime-only in this repository.
     const distModule = await import("../../dist/main.js");
     const runAgent = distModule.runAgent as typeof runAgentType;
 
@@ -197,7 +194,6 @@ describe("dist runtime runAgent", () => {
     );
     await chmod(fakeCodexPath, 0o755);
 
-    // @ts-expect-error dist artifact is runtime-only in this repository.
     const distModule = await import("../../dist/main.js");
     const runAgent = distModule.runAgent as typeof runAgentType;
 
@@ -321,7 +317,6 @@ describe("dist runtime runAgent", () => {
       "utf-8",
     );
 
-    // @ts-expect-error dist artifact is runtime-only in this repository.
     const distModule = await import("../../dist/main.js");
     const getCodexUsageStats = distModule.getCodexUsageStats as (options?: {
       codexSessionsDir?: string;
