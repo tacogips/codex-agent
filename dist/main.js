@@ -2412,6 +2412,9 @@ async function readToolVersion(binary, options) {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let childResult;
+    let stdoutClosed = child.stdout === null;
+    let stderrClosed = child.stderr === null;
     const settle = (result) => {
       if (settled) {
         return;
@@ -2420,37 +2423,55 @@ async function readToolVersion(binary, options) {
       clearTimeout(timer);
       resolve2(result);
     };
+    const markStdoutClosed = () => {
+      stdoutClosed = true;
+      finalizeClosedCommand();
+    };
+    const markStderrClosed = () => {
+      stderrClosed = true;
+      finalizeClosedCommand();
+    };
+    const finalizeClosedCommand = () => {
+      if (childResult === undefined || !stdoutClosed || !stderrClosed || settled) {
+        return;
+      }
+      const { code, signal } = childResult;
+      if (code === 0) {
+        const line = firstLine(stdout);
+        if (line !== null) {
+          settle({ version: line, error: null });
+          return;
+        }
+        settle({
+          version: null,
+          error: "version command succeeded but produced no output"
+        });
+        return;
+      }
+      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+      const details = firstLine(stderr);
+      const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
+      settle({ version: null, error: message });
+    };
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
     });
+    child.stdout.on("end", markStdoutClosed);
+    child.stdout.on("close", markStdoutClosed);
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
+    child.stderr.on("end", markStderrClosed);
+    child.stderr.on("close", markStderrClosed);
     child.on("error", (err) => {
       const message = err instanceof Error ? err.message : String(err);
       settle({ version: null, error: message });
     });
     child.on("close", (code, signal) => {
-      setTimeout(() => {
-        if (code === 0) {
-          const line = firstLine(stdout);
-          if (line !== null) {
-            settle({ version: line, error: null });
-            return;
-          }
-          settle({
-            version: null,
-            error: "version command succeeded but produced no output"
-          });
-          return;
-        }
-        const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-        const details = firstLine(stderr);
-        const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
-        settle({ version: null, error: message });
-      }, 0);
+      childResult = { code, signal };
+      finalizeClosedCommand();
     });
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
@@ -2584,6 +2605,9 @@ async function runCodexCommand(binary, args, options) {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let childResult;
+    let stdoutClosed = child.stdout === null;
+    let stderrClosed = child.stderr === null;
     let timer;
     const settle = (result) => {
       if (settled) {
@@ -2595,14 +2619,49 @@ async function runCodexCommand(binary, args, options) {
       }
       resolve2(result);
     };
+    const markStdoutClosed = () => {
+      stdoutClosed = true;
+      finalizeClosedCommand();
+    };
+    const markStderrClosed = () => {
+      stderrClosed = true;
+      finalizeClosedCommand();
+    };
+    const finalizeClosedCommand = () => {
+      if (childResult === undefined || !stdoutClosed || !stderrClosed || settled) {
+        return;
+      }
+      const { code, signal } = childResult;
+      if (code === 0) {
+        settle({
+          exitCode: 0,
+          stdout,
+          stderr,
+          error: null
+        });
+        return;
+      }
+      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+      const details = extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ?? firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
+      settle({
+        exitCode: code ?? null,
+        stdout,
+        stderr,
+        error: details === null ? `command failed (${reason})` : `command failed (${reason}): ${details}`
+      });
+    };
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk) => {
       stdout += chunk;
     });
+    child.stdout?.on("end", markStdoutClosed);
+    child.stdout?.on("close", markStdoutClosed);
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk) => {
       stderr += chunk;
     });
+    child.stderr?.on("end", markStderrClosed);
+    child.stderr?.on("close", markStderrClosed);
     child.on("error", (error) => {
       settle({
         exitCode: null,
@@ -2612,25 +2671,8 @@ async function runCodexCommand(binary, args, options) {
       });
     });
     child.on("close", (code, signal) => {
-      setTimeout(() => {
-        if (code === 0) {
-          settle({
-            exitCode: 0,
-            stdout,
-            stderr,
-            error: null
-          });
-          return;
-        }
-        const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-        const details = extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ?? firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
-        settle({
-          exitCode: code ?? null,
-          stdout,
-          stderr,
-          error: details === null ? `command failed (${reason})` : `command failed (${reason}): ${details}`
-        });
-      }, 0);
+      childResult = { code, signal };
+      finalizeClosedCommand();
     });
     timer = setTimeout(() => {
       child.kill("SIGTERM");
