@@ -176,6 +176,53 @@ describe("executeGraphqlDocument", () => {
     expect(envValue).toBe("graphql-env-value");
   });
 
+  it("passes Codex CLI 0.137 process options to session.run without obsolete flags", async () => {
+    const fixtureDir = await makeTempDir(
+      "codex-agent-graphql-process-options-",
+    );
+    const argsLogPath = join(fixtureDir, "process-options.log");
+    const fakeCodexPath = join(fixtureDir, "fake-codex-process-options.sh");
+    await writeFile(
+      fakeCodexPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        `printf '%s\\n' "$@" > '${argsLogPath}'`,
+        'printf \'%s\\n\' \'{"timestamp":"2026-03-16T00:00:00.000Z","type":"session_meta","payload":{"meta":{"id":"graphql-process-options","timestamp":"2026-03-16T00:00:00.000Z","cwd":"/tmp/demo","originator":"codex","cli_version":"0.137.0","source":"exec"}}}\'',
+        "exit 0",
+      ].join("\n"),
+      "utf-8",
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    const result = await executeGraphqlDocument({
+      document:
+        'mutation ($param: JSON) { command(name: "session.run", params: $param) }',
+      variables: {
+        param: {
+          prompt: "hello from graphql",
+          codexBinary: fakeCodexPath,
+          sandbox: "workspace-write",
+          approvalMode: "on-failure",
+          fullAuto: true,
+        },
+      },
+    });
+
+    expect(result.errors).toBeUndefined();
+    const args = (await readFile(argsLogPath, "utf-8")).trimEnd().split("\n");
+    expect(args).toEqual([
+      "exec",
+      "--json",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--sandbox",
+      "workspace-write",
+      "hello from graphql",
+    ]);
+    expect(args).not.toContain("--ask-for-approval");
+    expect(args).not.toContain("--full-auto");
+  });
+
   it("rejects non-string environment variable values", async () => {
     const result = await executeGraphqlDocument({
       document:

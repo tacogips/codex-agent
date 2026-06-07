@@ -309,9 +309,16 @@ ProcessManager
 
 **Key flags:**
 - `--model <model>` - Model selection
-- `--full-auto` - Auto-approve all operations
-- `--sandbox <mode>` - Sandbox policy
-- `--ask-for-approval <mode>` - Approval policy
+- `fullAuto` - codex-agent compatibility input for hands-off execution. For
+  Codex CLI 0.137, ProcessManager maps it to
+  `--dangerously-bypass-approvals-and-sandbox` and must not emit the removed
+  `--full-auto` flag.
+- `--sandbox <mode>` - Sandbox policy. For Codex CLI 0.137 compatibility,
+  supported codex-agent values are `read-only`, `workspace-write`, and
+  `danger-full-access`.
+- `approvalMode` - Deprecated codex-agent compatibility input only. Codex CLI
+  0.137 no longer accepts `--ask-for-approval`, so ProcessManager must not emit
+  an approval flag.
 - `-c key=value` - Config overrides
 - `--json` - JSON output (exec mode)
 

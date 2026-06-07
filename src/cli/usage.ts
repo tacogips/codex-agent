@@ -64,9 +64,9 @@ Session list options:
 
 Common process options:
   --model <model>             Model to use
-  --sandbox <full|network-only|none>  Sandbox mode
-  --approval-mode <mode>       Approval mode: always, unless-allow-listed, never, on-failure
-  --full-auto                 Enable full-auto mode
+  --sandbox <read-only|workspace-write|danger-full-access>  Sandbox mode
+  --approval-mode <mode>       Deprecated no-op for Codex CLI 0.137+
+  --full-auto                 Enable Codex CLI bypass mode
   --stream-granularity <event|char>  Stream by rollout event or character
   --char-delay-ms <n>         Delay per rendered char in ms (session run only, default: 8)
   --image <path>              Attach image(s) to prompt (repeatable)

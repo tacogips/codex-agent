@@ -927,7 +927,11 @@ function buildExecArgs(prompt, options) {
   return args;
 }
 function buildResumeArgs(sessionId, options, prompt) {
-  const args = ["exec", "resume", "--json", ...buildCommonArgs(options)];
+  const args = ["exec"];
+  if (options?.sandbox !== undefined) {
+    args.push("--sandbox", options.sandbox);
+  }
+  args.push("resume", "--json", ...buildResumeCommonArgs(options));
   if (options?.images !== undefined) {
     for (const imagePath of options.images) {
       args.push("--image", imagePath);
@@ -939,6 +943,24 @@ function buildResumeArgs(sessionId, options, prompt) {
   args.push(sessionId);
   if (prompt !== undefined && prompt.trim().length > 0) {
     args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
+  }
+  return args;
+}
+function buildResumeCommonArgs(options) {
+  const args = [];
+  if (options?.model !== undefined) {
+    args.push("--model", options.model);
+  }
+  if (options?.fullAuto === true) {
+    args.push("--dangerously-bypass-approvals-and-sandbox");
+  }
+  if (options?.configOverrides !== undefined) {
+    for (const override of options.configOverrides) {
+      args.push("-c", override);
+    }
+  }
+  if (options?.additionalArgs !== undefined) {
+    args.push(...options.additionalArgs);
   }
   return args;
 }
@@ -956,13 +978,10 @@ function buildCommonArgs(options) {
     args.push("--model", options.model);
   }
   if (options?.fullAuto === true) {
-    args.push("--full-auto");
+    args.push("--dangerously-bypass-approvals-and-sandbox");
   }
   if (options?.sandbox !== undefined) {
     args.push("--sandbox", options.sandbox);
-  }
-  if (options?.approvalMode !== undefined) {
-    args.push("--ask-for-approval", options.approvalMode);
   }
   if (options?.configOverrides !== undefined) {
     for (const override of options.configOverrides) {
@@ -13285,7 +13304,11 @@ function getOperationAST(documentAST, operationName) {
   return operation;
 }
 // src/process/types.ts
-var SANDBOX_MODES = ["full", "network-only", "none"];
+var SANDBOX_MODES = [
+  "read-only",
+  "workspace-write",
+  "danger-full-access"
+];
 var APPROVAL_MODES = [
   "always",
   "unless-allow-listed",
@@ -14424,9 +14447,9 @@ Session list options:
 
 Common process options:
   --model <model>             Model to use
-  --sandbox <full|network-only|none>  Sandbox mode
-  --approval-mode <mode>       Approval mode: always, unless-allow-listed, never, on-failure
-  --full-auto                 Enable full-auto mode
+  --sandbox <read-only|workspace-write|danger-full-access>  Sandbox mode
+  --approval-mode <mode>       Deprecated no-op for Codex CLI 0.137+
+  --full-auto                 Enable Codex CLI bypass mode
   --stream-granularity <event|char>  Stream by rollout event or character
   --char-delay-ms <n>         Delay per rendered char in ms (session run only, default: 8)
   --image <path>              Attach image(s) to prompt (repeatable)

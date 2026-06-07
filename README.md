@@ -101,6 +101,52 @@ codex-agent graphql session.list --param '{"limit": 5}'
 bun run src/bin.ts version --json
 ```
 
+## Codex CLI 0.137 Process Options
+
+`codex-agent` targets Codex CLI 0.137 process compatibility at the
+`ProcessManager` boundary. It emits only current Codex CLI sandbox values:
+
+- `read-only`
+- `workspace-write`
+- `danger-full-access`
+
+The deprecated `approvalMode` option is still accepted by CLI, SDK, and GraphQL
+inputs for source compatibility, but it is a no-op. `ProcessManager` never emits
+the removed `--ask-for-approval` flag.
+
+The codex-agent `fullAuto` compatibility option maps to Codex CLI 0.137's
+current bypass flag, `--dangerously-bypass-approvals-and-sandbox`; it does not
+emit the removed `--full-auto` flag.
+
+CLI examples:
+
+```bash
+bun run src/bin.ts session run --prompt "say hello" --sandbox workspace-write
+bun run src/bin.ts session resume <session-id> --sandbox read-only --full-auto
+```
+
+SDK examples:
+
+```ts
+import { runAgent } from "codex-agent";
+
+for await (const event of runAgent({
+  prompt: "Run the focused tests",
+  sandbox: "workspace-write",
+  approvalMode: "on-failure", // Deprecated no-op for Codex CLI 0.137+
+  fullAuto: true,
+})) {
+  console.log(event.type);
+}
+```
+
+GraphQL shorthand example:
+
+```bash
+codex-agent graphql session.run \
+  --param '{"prompt":"say hello","sandbox":"workspace-write","approvalMode":"on-failure","fullAuto":true}'
+```
+
 ## Project Structure
 
 ```text

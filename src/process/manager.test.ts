@@ -92,10 +92,54 @@ describe("ProcessManager", () => {
       codexBinary: "echo",
       model: "gpt-4o",
       fullAuto: true,
-      sandbox: "none",
+      sandbox: "workspace-write",
     });
     // echo exits 0
     expect(result.exitCode).toBe(0);
+  });
+
+  test("spawnExec maps compatibility options to current Codex CLI args", async () => {
+    const fixtureDir = await mkdtemp(
+      join(tmpdir(), "codex-agent-process-manager-compat-args-"),
+    );
+    try {
+      const argsLogPath = join(fixtureDir, "args.log");
+      const fakeCodexPath = join(fixtureDir, "fake-codex-compat-args.sh");
+      await writeFile(
+        fakeCodexPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -eu",
+          `printf '%s\\n' "$@" > '${argsLogPath}'`,
+          "exit 0",
+        ].join("\n"),
+        "utf-8",
+      );
+      await chmod(fakeCodexPath, 0o755);
+
+      const pm = new ProcessManager(fakeCodexPath);
+      const result = await pm.spawnExec("test prompt", {
+        codexBinary: fakeCodexPath,
+        approvalMode: "on-failure",
+        fullAuto: true,
+        sandbox: "workspace-write",
+      });
+
+      expect(result.exitCode).toBe(0);
+      const args = (await readFile(argsLogPath, "utf-8")).trimEnd().split("\n");
+      expect(args).toEqual([
+        "exec",
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--sandbox",
+        "workspace-write",
+        "test prompt",
+      ]);
+      expect(args).not.toContain("--ask-for-approval");
+      expect(args).not.toContain("--full-auto");
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
   });
 
   test("spawnExec includes image attachment args", async () => {
@@ -239,6 +283,9 @@ describe("ProcessManager", () => {
         {
           codexBinary: fakeCodexPath,
           model: "gpt-5.5",
+          approvalMode: "on-failure",
+          fullAuto: true,
+          sandbox: "workspace-write",
           images: ["./one.png"],
           configOverrides: ['model_reasoning_effort="high"'],
           additionalArgs: ["--skip-git-repo-check"],
@@ -255,10 +302,13 @@ describe("ProcessManager", () => {
       const args = (await readFile(argsLogPath, "utf-8")).trimEnd().split("\n");
       expect(args).toEqual([
         "exec",
+        "--sandbox",
+        "workspace-write",
         "resume",
         "--json",
         "--model",
         "gpt-5.5",
+        "--dangerously-bypass-approvals-and-sandbox",
         "-c",
         'model_reasoning_effort="high"',
         "--skip-git-repo-check",
@@ -268,6 +318,8 @@ describe("ProcessManager", () => {
         "session-1",
         "resume prompt",
       ]);
+      expect(args).not.toContain("--ask-for-approval");
+      expect(args).not.toContain("--full-auto");
     } finally {
       await rm(fixtureDir, { recursive: true, force: true });
     }

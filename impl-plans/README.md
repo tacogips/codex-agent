@@ -94,6 +94,7 @@ None currently.
 
 | Plan                         | Completed  | Design Reference                                                            |
 | ---------------------------- | ---------- | --------------------------------------------------------------------------- |
+| `codex-cli-0137-process-compatibility` | 2026-06-07 | `design-docs/specs/command.md#process-manager-codex-cli-0137-compatibility` |
 | `issue22-normalized-stream-events` | 2026-03-30 | `https://github.com/tacogips/codex-agent/issues/22` |
 | `session-file-patch-history` | 2026-03-15 | `design-docs/specs/design-codex-session-management.md#22-persistence-modes` |
 | `source-refactor-auth-server-cleanup` | 2026-03-17 | `design-docs/specs/architecture.md#overview` |

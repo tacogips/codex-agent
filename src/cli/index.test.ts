@@ -88,12 +88,12 @@ describe("parseProcessOptions", () => {
   it("parses sandbox and approval mode flags", () => {
     const parsed = parseProcessOptions([
       "--sandbox",
-      "network-only",
+      "workspace-write",
       "--approval-mode",
       "on-failure",
     ]);
     expect(parsed).toEqual({
-      sandbox: "network-only",
+      sandbox: "workspace-write",
       approvalMode: "on-failure",
     });
   });

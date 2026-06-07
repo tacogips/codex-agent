@@ -2,7 +2,7 @@
  * Types for Codex CLI process management.
  */
 import type { RolloutLine } from "../types/rollout";
-export declare const SANDBOX_MODES: readonly ["full", "network-only", "none"];
+export declare const SANDBOX_MODES: readonly ["read-only", "workspace-write", "danger-full-access"];
 export type SandboxMode = (typeof SANDBOX_MODES)[number];
 export declare const APPROVAL_MODES: readonly ["always", "unless-allow-listed", "never", "on-failure"];
 export type ApprovalMode = (typeof APPROVAL_MODES)[number];
@@ -14,7 +14,16 @@ export interface CodexProcessOptions {
     readonly model?: string | undefined;
     readonly cwd?: string | undefined;
     readonly sandbox?: SandboxMode | undefined;
+    /**
+     * Deprecated: Codex CLI 0.137.0 removed the approval-mode flag for
+     * non-interactive exec. The field is kept as a no-op input for older SDK
+     * callers, but ProcessManager must not emit `--ask-for-approval`.
+     */
     readonly approvalMode?: ApprovalMode | undefined;
+    /**
+     * Enables Codex CLI's current explicit bypass flag for callers that request
+     * legacy full-auto behavior.
+     */
     readonly fullAuto?: boolean | undefined;
     readonly additionalArgs?: readonly string[] | undefined;
     readonly images?: readonly string[] | undefined;

@@ -302,7 +302,11 @@ function buildResumeArgs(
   options?: CodexProcessOptions,
   prompt?: string,
 ): string[] {
-  const args = ["exec", "resume", "--json", ...buildCommonArgs(options)];
+  const args = ["exec"];
+  if (options?.sandbox !== undefined) {
+    args.push("--sandbox", options.sandbox);
+  }
+  args.push("resume", "--json", ...buildResumeCommonArgs(options));
   if (options?.images !== undefined) {
     for (const imagePath of options.images) {
       args.push("--image", imagePath);
@@ -314,6 +318,25 @@ function buildResumeArgs(
   args.push(sessionId);
   if (prompt !== undefined && prompt.trim().length > 0) {
     args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
+  }
+  return args;
+}
+
+function buildResumeCommonArgs(options?: CodexProcessOptions): string[] {
+  const args: string[] = [];
+  if (options?.model !== undefined) {
+    args.push("--model", options.model);
+  }
+  if (options?.fullAuto === true) {
+    args.push("--dangerously-bypass-approvals-and-sandbox");
+  }
+  if (options?.configOverrides !== undefined) {
+    for (const override of options.configOverrides) {
+      args.push("-c", override);
+    }
+  }
+  if (options?.additionalArgs !== undefined) {
+    args.push(...options.additionalArgs);
   }
   return args;
 }
@@ -334,13 +357,10 @@ function buildCommonArgs(options?: CodexProcessOptions): string[] {
     args.push("--model", options.model);
   }
   if (options?.fullAuto === true) {
-    args.push("--full-auto");
+    args.push("--dangerously-bypass-approvals-and-sandbox");
   }
   if (options?.sandbox !== undefined) {
     args.push("--sandbox", options.sandbox);
-  }
-  if (options?.approvalMode !== undefined) {
-    args.push("--ask-for-approval", options.approvalMode);
   }
   if (options?.configOverrides !== undefined) {
     for (const override of options.configOverrides) {
