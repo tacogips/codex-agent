@@ -63,6 +63,14 @@ async function readToolVersion(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let childResult:
+      | {
+          readonly code: number | null;
+          readonly signal: NodeJS.Signals | null;
+        }
+      | undefined;
+    let stdoutClosed = child.stdout === null;
+    let stderrClosed = child.stderr === null;
 
     const settle = (result: ToolVersionInfo): void => {
       if (settled) {
@@ -73,15 +81,64 @@ async function readToolVersion(
       resolve(result);
     };
 
+    const markStdoutClosed = (): void => {
+      stdoutClosed = true;
+      finalizeClosedCommand();
+    };
+
+    const markStderrClosed = (): void => {
+      stderrClosed = true;
+      finalizeClosedCommand();
+    };
+
+    const finalizeClosedCommand = (): void => {
+      if (
+        childResult === undefined ||
+        !stdoutClosed ||
+        !stderrClosed ||
+        settled
+      ) {
+        return;
+      }
+      const { code, signal } = childResult;
+      if (code === 0) {
+        const line = firstLine(stdout);
+        if (line !== null) {
+          settle({ version: line, error: null });
+          return;
+        }
+        settle({
+          version: null,
+          error: "version command succeeded but produced no output",
+        });
+        return;
+      }
+
+      const reason =
+        signal !== null
+          ? `signal ${signal}`
+          : `exit code ${String(code ?? "unknown")}`;
+      const details = firstLine(stderr);
+      const message =
+        details === null
+          ? `version command failed (${reason})`
+          : `version command failed (${reason}): ${details}`;
+      settle({ version: null, error: message });
+    };
+
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
     });
+    child.stdout.on("end", markStdoutClosed);
+    child.stdout.on("close", markStdoutClosed);
 
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
+    child.stderr.on("end", markStderrClosed);
+    child.stderr.on("close", markStderrClosed);
 
     child.on("error", (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -89,31 +146,8 @@ async function readToolVersion(
     });
 
     child.on("close", (code, signal) => {
-      setTimeout(() => {
-        if (code === 0) {
-          const line = firstLine(stdout);
-          if (line !== null) {
-            settle({ version: line, error: null });
-            return;
-          }
-          settle({
-            version: null,
-            error: "version command succeeded but produced no output",
-          });
-          return;
-        }
-
-        const reason =
-          signal !== null
-            ? `signal ${signal}`
-            : `exit code ${String(code ?? "unknown")}`;
-        const details = firstLine(stderr);
-        const message =
-          details === null
-            ? `version command failed (${reason})`
-            : `version command failed (${reason}): ${details}`;
-        settle({ version: null, error: message });
-      }, 0);
+      childResult = { code, signal };
+      finalizeClosedCommand();
     });
 
     const timer = setTimeout(() => {
