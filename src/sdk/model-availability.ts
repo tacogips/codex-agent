@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_PROBE_PROMPT = "Reply with exactly OK.";
@@ -172,28 +175,28 @@ async function runCodexCommand(
   options?: GetCodexLoginStatusOptions,
 ): Promise<CommandResult> {
   const timeoutMs = normalizeTimeout(options?.timeoutMs);
+  const captureDir = await mkdtemp(join(tmpdir(), "codex-agent-command-"));
+  const stdoutPath = join(captureDir, "stdout.log");
+  const stderrPath = join(captureDir, "stderr.log");
+  const stdoutHandle = await open(stdoutPath, "w");
+  const stderrHandle = await open(stderrPath, "w");
 
   return await new Promise<CommandResult>((resolve) => {
     const child = spawn(binary, args, {
       cwd: options?.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", stdoutHandle.fd, stderrHandle.fd],
       env: buildProcessEnv(options?.env),
     });
 
-    let stdout = "";
-    let stderr = "";
     let settled = false;
-    let childResult:
-      | {
-          readonly code: number | null;
-          readonly signal: NodeJS.Signals | null;
-        }
-      | undefined;
-    let stdoutClosed = child.stdout === null;
-    let stderrClosed = child.stderr === null;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
-    const settle = (result: CommandResult): void => {
+    const settle = (
+      buildResult: (logs: {
+        readonly stdout: string;
+        readonly stderr: string;
+      }) => CommandResult,
+    ): void => {
       if (settled) {
         return;
       }
@@ -201,94 +204,68 @@ async function runCodexCommand(
       if (timer !== undefined) {
         clearTimeout(timer);
       }
-      resolve(result);
+      void (async () => {
+        await Promise.all([
+          stdoutHandle.close().catch(() => {}),
+          stderrHandle.close().catch(() => {}),
+        ]);
+        const [stdout, stderr] = await Promise.all([
+          readFile(stdoutPath, "utf8").catch(() => ""),
+          readFile(stderrPath, "utf8").catch(() => ""),
+        ]);
+        await rm(captureDir, { recursive: true, force: true }).catch(() => {});
+        resolve(buildResult({ stdout, stderr }));
+      })();
     };
-
-    const markStdoutClosed = (): void => {
-      stdoutClosed = true;
-      finalizeClosedCommand();
-    };
-
-    const markStderrClosed = (): void => {
-      stderrClosed = true;
-      finalizeClosedCommand();
-    };
-
-    const finalizeClosedCommand = (): void => {
-      if (
-        childResult === undefined ||
-        !stdoutClosed ||
-        !stderrClosed ||
-        settled
-      ) {
-        return;
-      }
-      const { code, signal } = childResult;
-      if (code === 0) {
-        settle({
-          exitCode: 0,
-          stdout,
-          stderr,
-          error: null,
-        });
-        return;
-      }
-
-      const reason =
-        signal !== null
-          ? `signal ${signal}`
-          : `exit code ${String(code ?? "unknown")}`;
-      const details =
-        extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ??
-        firstNonEmptyLine(stderr) ??
-        firstNonEmptyLine(stdout);
-      settle({
-        exitCode: code ?? null,
-        stdout,
-        stderr,
-        error:
-          details === null
-            ? `command failed (${reason})`
-            : `command failed (${reason}): ${details}`,
-      });
-    };
-
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stdout?.on("end", markStdoutClosed);
-    child.stdout?.on("close", markStdoutClosed);
-
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.stderr?.on("end", markStderrClosed);
-    child.stderr?.on("close", markStderrClosed);
 
     child.on("error", (error: unknown) => {
-      settle({
+      settle(({ stdout, stderr }) => ({
         exitCode: null,
         stdout,
         stderr,
         error: toErrorMessage(error),
-      });
+      }));
     });
 
     child.on("close", (code, signal) => {
-      childResult = { code, signal };
-      finalizeClosedCommand();
+      settle(({ stdout, stderr }) => {
+        if (code === 0) {
+          return {
+            exitCode: 0,
+            stdout,
+            stderr,
+            error: null,
+          };
+        }
+
+        const reason =
+          signal !== null
+            ? `signal ${signal}`
+            : `exit code ${String(code ?? "unknown")}`;
+        const details =
+          extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ??
+          firstNonEmptyLine(stderr) ??
+          firstNonEmptyLine(stdout);
+        return {
+          exitCode: code ?? null,
+          stdout,
+          stderr,
+          error:
+            details === null
+              ? `command failed (${reason})`
+              : `command failed (${reason}): ${details}`,
+        };
+      });
     });
 
     timer = setTimeout(() => {
       child.kill("SIGTERM");
-      settle({
+      settle(({ stdout, stderr }) => ({
         exitCode: null,
         stdout,
         stderr,
         error: `command timed out after ${timeoutMs}ms`,
-      });
+      }));
     }, timeoutMs);
   });
 }

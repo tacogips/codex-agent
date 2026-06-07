@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
@@ -52,110 +55,83 @@ async function readToolVersion(
     timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
       ? timeoutMs
       : DEFAULT_TIMEOUT_MS;
+  const captureDir = await mkdtemp(join(tmpdir(), "codex-agent-version-"));
+  const stdoutPath = join(captureDir, "stdout.log");
+  const stderrPath = join(captureDir, "stderr.log");
+  const stdoutHandle = await open(stdoutPath, "w");
+  const stderrHandle = await open(stderrPath, "w");
 
   return await new Promise<ToolVersionInfo>((resolve) => {
     const child = spawn(binary, ["--version"], {
       cwd: options?.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", stdoutHandle.fd, stderrHandle.fd],
       env: buildProcessEnv(options?.env),
     });
 
-    let stdout = "";
-    let stderr = "";
     let settled = false;
-    let childResult:
-      | {
-          readonly code: number | null;
-          readonly signal: NodeJS.Signals | null;
-        }
-      | undefined;
-    let stdoutClosed = child.stdout === null;
-    let stderrClosed = child.stderr === null;
 
-    const settle = (result: ToolVersionInfo): void => {
+    const settle = (
+      buildResult: (logs: {
+        readonly stdout: string;
+        readonly stderr: string;
+      }) => ToolVersionInfo,
+    ): void => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
-      resolve(result);
+      void (async () => {
+        await Promise.all([
+          stdoutHandle.close().catch(() => {}),
+          stderrHandle.close().catch(() => {}),
+        ]);
+        const [stdout, stderr] = await Promise.all([
+          readFile(stdoutPath, "utf8").catch(() => ""),
+          readFile(stderrPath, "utf8").catch(() => ""),
+        ]);
+        await rm(captureDir, { recursive: true, force: true }).catch(() => {});
+        resolve(buildResult({ stdout, stderr }));
+      })();
     };
-
-    const markStdoutClosed = (): void => {
-      stdoutClosed = true;
-      finalizeClosedCommand();
-    };
-
-    const markStderrClosed = (): void => {
-      stderrClosed = true;
-      finalizeClosedCommand();
-    };
-
-    const finalizeClosedCommand = (): void => {
-      if (
-        childResult === undefined ||
-        !stdoutClosed ||
-        !stderrClosed ||
-        settled
-      ) {
-        return;
-      }
-      const { code, signal } = childResult;
-      if (code === 0) {
-        const line = firstLine(stdout);
-        if (line !== null) {
-          settle({ version: line, error: null });
-          return;
-        }
-        settle({
-          version: null,
-          error: "version command succeeded but produced no output",
-        });
-        return;
-      }
-
-      const reason =
-        signal !== null
-          ? `signal ${signal}`
-          : `exit code ${String(code ?? "unknown")}`;
-      const details = firstLine(stderr);
-      const message =
-        details === null
-          ? `version command failed (${reason})`
-          : `version command failed (${reason}): ${details}`;
-      settle({ version: null, error: message });
-    };
-
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stdout.on("end", markStdoutClosed);
-    child.stdout.on("close", markStdoutClosed);
-
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.stderr.on("end", markStderrClosed);
-    child.stderr.on("close", markStderrClosed);
 
     child.on("error", (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      settle({ version: null, error: message });
+      settle(() => ({ version: null, error: message }));
     });
 
     child.on("close", (code, signal) => {
-      childResult = { code, signal };
-      finalizeClosedCommand();
+      settle(({ stdout, stderr }) => {
+        if (code === 0) {
+          const line = firstLine(stdout);
+          if (line !== null) {
+            return { version: line, error: null };
+          }
+          return {
+            version: null,
+            error: "version command succeeded but produced no output",
+          };
+        }
+
+        const reason =
+          signal !== null
+            ? `signal ${signal}`
+            : `exit code ${String(code ?? "unknown")}`;
+        const details = firstLine(stderr);
+        const message =
+          details === null
+            ? `version command failed (${reason})`
+            : `version command failed (${reason}): ${details}`;
+        return { version: null, error: message };
+      });
     });
 
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      settle({
+      settle(() => ({
         version: null,
         error: `version command timed out after ${effectiveTimeout}ms`,
-      });
+      }));
     }, effectiveTimeout);
   });
 }
