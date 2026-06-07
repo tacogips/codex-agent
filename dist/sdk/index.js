@@ -2388,6 +2388,9 @@ function parseMaybeJson(value) {
 }
 // src/sdk/tool-versions.ts
 import { spawn as spawn2 } from "child_process";
+import { mkdtemp as mkdtemp2, open as open2, readFile as readFile2, rm as rm2 } from "fs/promises";
+import { tmpdir as tmpdir2 } from "os";
+import { join as join5 } from "path";
 var DEFAULT_TIMEOUT_MS = 5000;
 async function getCodexCliVersion(options) {
   return await readToolVersion(options?.codexBinary ?? "codex", options);
@@ -2403,82 +2406,65 @@ async function getToolVersions(options) {
 async function readToolVersion(binary, options) {
   const timeoutMs = options?.timeoutMs;
   const effectiveTimeout = timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  const captureDir = await mkdtemp2(join5(tmpdir2(), "codex-agent-version-"));
+  const stdoutPath = join5(captureDir, "stdout.log");
+  const stderrPath = join5(captureDir, "stderr.log");
+  const stdoutHandle = await open2(stdoutPath, "w");
+  const stderrHandle = await open2(stderrPath, "w");
   return await new Promise((resolve2) => {
     const child = spawn2(binary, ["--version"], {
       cwd: options?.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", stdoutHandle.fd, stderrHandle.fd],
       env: buildProcessEnv(options?.env)
     });
-    let stdout = "";
-    let stderr = "";
     let settled = false;
-    let childResult;
-    let stdoutClosed = child.stdout === null;
-    let stderrClosed = child.stderr === null;
-    const settle = (result) => {
+    const settle = (buildResult) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
-      resolve2(result);
+      (async () => {
+        await Promise.all([
+          stdoutHandle.close().catch(() => {}),
+          stderrHandle.close().catch(() => {})
+        ]);
+        const [stdout, stderr] = await Promise.all([
+          readFile2(stdoutPath, "utf8").catch(() => ""),
+          readFile2(stderrPath, "utf8").catch(() => "")
+        ]);
+        await rm2(captureDir, { recursive: true, force: true }).catch(() => {});
+        resolve2(buildResult({ stdout, stderr }));
+      })();
     };
-    const markStdoutClosed = () => {
-      stdoutClosed = true;
-      finalizeClosedCommand();
-    };
-    const markStderrClosed = () => {
-      stderrClosed = true;
-      finalizeClosedCommand();
-    };
-    const finalizeClosedCommand = () => {
-      if (childResult === undefined || !stdoutClosed || !stderrClosed || settled) {
-        return;
-      }
-      const { code, signal } = childResult;
-      if (code === 0) {
-        const line = firstLine(stdout);
-        if (line !== null) {
-          settle({ version: line, error: null });
-          return;
-        }
-        settle({
-          version: null,
-          error: "version command succeeded but produced no output"
-        });
-        return;
-      }
-      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-      const details = firstLine(stderr);
-      const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
-      settle({ version: null, error: message });
-    };
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stdout.on("end", markStdoutClosed);
-    child.stdout.on("close", markStdoutClosed);
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.stderr.on("end", markStderrClosed);
-    child.stderr.on("close", markStderrClosed);
     child.on("error", (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      settle({ version: null, error: message });
+      settle(() => ({ version: null, error: message }));
     });
     child.on("close", (code, signal) => {
-      childResult = { code, signal };
-      finalizeClosedCommand();
+      settle(({ stdout, stderr }) => {
+        if (code === 0) {
+          const line = firstLine(stdout);
+          if (line !== null) {
+            return { version: line, error: null };
+          }
+          return {
+            version: null,
+            error: "version command succeeded but produced no output"
+          };
+        }
+        const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+        const details = firstLine(stderr);
+        const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
+        return { version: null, error: message };
+      });
     });
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      settle({
+      settle(() => ({
         version: null,
         error: `version command timed out after ${effectiveTimeout}ms`
-      });
+      }));
     }, effectiveTimeout);
   });
 }
@@ -2503,6 +2489,9 @@ function firstLine(value) {
 }
 // src/sdk/model-availability.ts
 import { spawn as spawn3 } from "child_process";
+import { mkdtemp as mkdtemp3, open as open3, readFile as readFile3, rm as rm3 } from "fs/promises";
+import { tmpdir as tmpdir3 } from "os";
+import { join as join6 } from "path";
 var DEFAULT_TIMEOUT_MS2 = 15000;
 var DEFAULT_PROBE_PROMPT = "Reply with exactly OK.";
 function buildProcessEnv2(env) {
@@ -2596,20 +2585,20 @@ async function runModelProbe(options) {
 }
 async function runCodexCommand(binary, args, options) {
   const timeoutMs = normalizeTimeout(options?.timeoutMs);
+  const captureDir = await mkdtemp3(join6(tmpdir3(), "codex-agent-command-"));
+  const stdoutPath = join6(captureDir, "stdout.log");
+  const stderrPath = join6(captureDir, "stderr.log");
+  const stdoutHandle = await open3(stdoutPath, "w");
+  const stderrHandle = await open3(stderrPath, "w");
   return await new Promise((resolve2) => {
     const child = spawn3(binary, args, {
       cwd: options?.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", stdoutHandle.fd, stderrHandle.fd],
       env: buildProcessEnv2(options?.env)
     });
-    let stdout = "";
-    let stderr = "";
     let settled = false;
-    let childResult;
-    let stdoutClosed = child.stdout === null;
-    let stderrClosed = child.stderr === null;
     let timer;
-    const settle = (result) => {
+    const settle = (buildResult) => {
       if (settled) {
         return;
       }
@@ -2617,71 +2606,55 @@ async function runCodexCommand(binary, args, options) {
       if (timer !== undefined) {
         clearTimeout(timer);
       }
-      resolve2(result);
+      (async () => {
+        await Promise.all([
+          stdoutHandle.close().catch(() => {}),
+          stderrHandle.close().catch(() => {})
+        ]);
+        const [stdout, stderr] = await Promise.all([
+          readFile3(stdoutPath, "utf8").catch(() => ""),
+          readFile3(stderrPath, "utf8").catch(() => "")
+        ]);
+        await rm3(captureDir, { recursive: true, force: true }).catch(() => {});
+        resolve2(buildResult({ stdout, stderr }));
+      })();
     };
-    const markStdoutClosed = () => {
-      stdoutClosed = true;
-      finalizeClosedCommand();
-    };
-    const markStderrClosed = () => {
-      stderrClosed = true;
-      finalizeClosedCommand();
-    };
-    const finalizeClosedCommand = () => {
-      if (childResult === undefined || !stdoutClosed || !stderrClosed || settled) {
-        return;
-      }
-      const { code, signal } = childResult;
-      if (code === 0) {
-        settle({
-          exitCode: 0,
-          stdout,
-          stderr,
-          error: null
-        });
-        return;
-      }
-      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-      const details = extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ?? firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
-      settle({
-        exitCode: code ?? null,
-        stdout,
-        stderr,
-        error: details === null ? `command failed (${reason})` : `command failed (${reason}): ${details}`
-      });
-    };
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stdout?.on("end", markStdoutClosed);
-    child.stdout?.on("close", markStdoutClosed);
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.stderr?.on("end", markStderrClosed);
-    child.stderr?.on("close", markStderrClosed);
     child.on("error", (error) => {
-      settle({
+      settle(({ stdout, stderr }) => ({
         exitCode: null,
         stdout,
         stderr,
         error: toErrorMessage(error)
-      });
+      }));
     });
     child.on("close", (code, signal) => {
-      childResult = { code, signal };
-      finalizeClosedCommand();
+      settle(({ stdout, stderr }) => {
+        if (code === 0) {
+          return {
+            exitCode: 0,
+            stdout,
+            stderr,
+            error: null
+          };
+        }
+        const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+        const details = extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ?? firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
+        return {
+          exitCode: code ?? null,
+          stdout,
+          stderr,
+          error: details === null ? `command failed (${reason})` : `command failed (${reason}): ${details}`
+        };
+      });
     });
     timer = setTimeout(() => {
       child.kill("SIGTERM");
-      settle({
+      settle(({ stdout, stderr }) => ({
         exitCode: null,
         stdout,
         stderr,
         error: `command timed out after ${timeoutMs}ms`
-      });
+      }));
     }, timeoutMs);
   });
 }
@@ -2728,14 +2701,14 @@ function toErrorMessage(error) {
 }
 // src/sdk/usage-stats.ts
 import { readdir as readdir2 } from "fs/promises";
-import { join as join5 } from "path";
+import { join as join7 } from "path";
 var ROLLOUT_PREFIX3 = "rollout-";
 var ROLLOUT_EXT3 = ".jsonl";
 var DEFAULT_RECENT_DAYS = 14;
 var DEFAULT_CACHE_TTL_MS = 5000;
 var usageStatsCache = null;
 async function getCodexUsageStats(options) {
-  const sessionsDir = options?.codexSessionsDir ?? join5(resolveCodexHome(), "sessions");
+  const sessionsDir = options?.codexSessionsDir ?? join7(resolveCodexHome(), "sessions");
   const recentDays = normalizeRecentDays(options?.recentDays);
   const now = resolveNowMs(options?.now);
   const cacheKey = `${sessionsDir}::${String(recentDays)}`;
@@ -2877,7 +2850,7 @@ async function listRolloutFiles(sessionsDir) {
 async function collectRolloutFilesRecursive(dirPath, out) {
   const entries = await readdir2(dirPath, { withFileTypes: true });
   for (const entry of entries) {
-    const fullPath = join5(dirPath, entry.name);
+    const fullPath = join7(dirPath, entry.name);
     if (entry.isDirectory()) {
       await collectRolloutFilesRecursive(fullPath, out);
       continue;

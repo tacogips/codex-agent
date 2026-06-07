@@ -2390,6 +2390,9 @@ function parseMaybeJson(value) {
 }
 // src/sdk/tool-versions.ts
 import { spawn as spawn2 } from "child_process";
+import { mkdtemp as mkdtemp2, open as open2, readFile as readFile2, rm as rm2 } from "fs/promises";
+import { tmpdir as tmpdir2 } from "os";
+import { join as join5 } from "path";
 var DEFAULT_TIMEOUT_MS = 5000;
 async function getCodexCliVersion(options) {
   return await readToolVersion(options?.codexBinary ?? "codex", options);
@@ -2405,82 +2408,65 @@ async function getToolVersions(options) {
 async function readToolVersion(binary, options) {
   const timeoutMs = options?.timeoutMs;
   const effectiveTimeout = timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  const captureDir = await mkdtemp2(join5(tmpdir2(), "codex-agent-version-"));
+  const stdoutPath = join5(captureDir, "stdout.log");
+  const stderrPath = join5(captureDir, "stderr.log");
+  const stdoutHandle = await open2(stdoutPath, "w");
+  const stderrHandle = await open2(stderrPath, "w");
   return await new Promise((resolve2) => {
     const child = spawn2(binary, ["--version"], {
       cwd: options?.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", stdoutHandle.fd, stderrHandle.fd],
       env: buildProcessEnv(options?.env)
     });
-    let stdout = "";
-    let stderr = "";
     let settled = false;
-    let childResult;
-    let stdoutClosed = child.stdout === null;
-    let stderrClosed = child.stderr === null;
-    const settle = (result) => {
+    const settle = (buildResult) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
-      resolve2(result);
+      (async () => {
+        await Promise.all([
+          stdoutHandle.close().catch(() => {}),
+          stderrHandle.close().catch(() => {})
+        ]);
+        const [stdout, stderr] = await Promise.all([
+          readFile2(stdoutPath, "utf8").catch(() => ""),
+          readFile2(stderrPath, "utf8").catch(() => "")
+        ]);
+        await rm2(captureDir, { recursive: true, force: true }).catch(() => {});
+        resolve2(buildResult({ stdout, stderr }));
+      })();
     };
-    const markStdoutClosed = () => {
-      stdoutClosed = true;
-      finalizeClosedCommand();
-    };
-    const markStderrClosed = () => {
-      stderrClosed = true;
-      finalizeClosedCommand();
-    };
-    const finalizeClosedCommand = () => {
-      if (childResult === undefined || !stdoutClosed || !stderrClosed || settled) {
-        return;
-      }
-      const { code, signal } = childResult;
-      if (code === 0) {
-        const line = firstLine(stdout);
-        if (line !== null) {
-          settle({ version: line, error: null });
-          return;
-        }
-        settle({
-          version: null,
-          error: "version command succeeded but produced no output"
-        });
-        return;
-      }
-      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-      const details = firstLine(stderr);
-      const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
-      settle({ version: null, error: message });
-    };
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stdout.on("end", markStdoutClosed);
-    child.stdout.on("close", markStdoutClosed);
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.stderr.on("end", markStderrClosed);
-    child.stderr.on("close", markStderrClosed);
     child.on("error", (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      settle({ version: null, error: message });
+      settle(() => ({ version: null, error: message }));
     });
     child.on("close", (code, signal) => {
-      childResult = { code, signal };
-      finalizeClosedCommand();
+      settle(({ stdout, stderr }) => {
+        if (code === 0) {
+          const line = firstLine(stdout);
+          if (line !== null) {
+            return { version: line, error: null };
+          }
+          return {
+            version: null,
+            error: "version command succeeded but produced no output"
+          };
+        }
+        const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+        const details = firstLine(stderr);
+        const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
+        return { version: null, error: message };
+      });
     });
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      settle({
+      settle(() => ({
         version: null,
         error: `version command timed out after ${effectiveTimeout}ms`
-      });
+      }));
     }, effectiveTimeout);
   });
 }
@@ -2505,6 +2491,9 @@ function firstLine(value) {
 }
 // src/sdk/model-availability.ts
 import { spawn as spawn3 } from "child_process";
+import { mkdtemp as mkdtemp3, open as open3, readFile as readFile3, rm as rm3 } from "fs/promises";
+import { tmpdir as tmpdir3 } from "os";
+import { join as join6 } from "path";
 var DEFAULT_TIMEOUT_MS2 = 15000;
 var DEFAULT_PROBE_PROMPT = "Reply with exactly OK.";
 function buildProcessEnv2(env) {
@@ -2598,20 +2587,20 @@ async function runModelProbe(options) {
 }
 async function runCodexCommand(binary, args, options) {
   const timeoutMs = normalizeTimeout(options?.timeoutMs);
+  const captureDir = await mkdtemp3(join6(tmpdir3(), "codex-agent-command-"));
+  const stdoutPath = join6(captureDir, "stdout.log");
+  const stderrPath = join6(captureDir, "stderr.log");
+  const stdoutHandle = await open3(stdoutPath, "w");
+  const stderrHandle = await open3(stderrPath, "w");
   return await new Promise((resolve2) => {
     const child = spawn3(binary, args, {
       cwd: options?.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", stdoutHandle.fd, stderrHandle.fd],
       env: buildProcessEnv2(options?.env)
     });
-    let stdout = "";
-    let stderr = "";
     let settled = false;
-    let childResult;
-    let stdoutClosed = child.stdout === null;
-    let stderrClosed = child.stderr === null;
     let timer;
-    const settle = (result) => {
+    const settle = (buildResult) => {
       if (settled) {
         return;
       }
@@ -2619,71 +2608,55 @@ async function runCodexCommand(binary, args, options) {
       if (timer !== undefined) {
         clearTimeout(timer);
       }
-      resolve2(result);
+      (async () => {
+        await Promise.all([
+          stdoutHandle.close().catch(() => {}),
+          stderrHandle.close().catch(() => {})
+        ]);
+        const [stdout, stderr] = await Promise.all([
+          readFile3(stdoutPath, "utf8").catch(() => ""),
+          readFile3(stderrPath, "utf8").catch(() => "")
+        ]);
+        await rm3(captureDir, { recursive: true, force: true }).catch(() => {});
+        resolve2(buildResult({ stdout, stderr }));
+      })();
     };
-    const markStdoutClosed = () => {
-      stdoutClosed = true;
-      finalizeClosedCommand();
-    };
-    const markStderrClosed = () => {
-      stderrClosed = true;
-      finalizeClosedCommand();
-    };
-    const finalizeClosedCommand = () => {
-      if (childResult === undefined || !stdoutClosed || !stderrClosed || settled) {
-        return;
-      }
-      const { code, signal } = childResult;
-      if (code === 0) {
-        settle({
-          exitCode: 0,
-          stdout,
-          stderr,
-          error: null
-        });
-        return;
-      }
-      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-      const details = extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ?? firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
-      settle({
-        exitCode: code ?? null,
-        stdout,
-        stderr,
-        error: details === null ? `command failed (${reason})` : `command failed (${reason}): ${details}`
-      });
-    };
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stdout?.on("end", markStdoutClosed);
-    child.stdout?.on("close", markStdoutClosed);
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.stderr?.on("end", markStderrClosed);
-    child.stderr?.on("close", markStderrClosed);
     child.on("error", (error) => {
-      settle({
+      settle(({ stdout, stderr }) => ({
         exitCode: null,
         stdout,
         stderr,
         error: toErrorMessage(error)
-      });
+      }));
     });
     child.on("close", (code, signal) => {
-      childResult = { code, signal };
-      finalizeClosedCommand();
+      settle(({ stdout, stderr }) => {
+        if (code === 0) {
+          return {
+            exitCode: 0,
+            stdout,
+            stderr,
+            error: null
+          };
+        }
+        const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+        const details = extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ?? firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
+        return {
+          exitCode: code ?? null,
+          stdout,
+          stderr,
+          error: details === null ? `command failed (${reason})` : `command failed (${reason}): ${details}`
+        };
+      });
     });
     timer = setTimeout(() => {
       child.kill("SIGTERM");
-      settle({
+      settle(({ stdout, stderr }) => ({
         exitCode: null,
         stdout,
         stderr,
         error: `command timed out after ${timeoutMs}ms`
-      });
+      }));
     }, timeoutMs);
   });
 }
@@ -2730,14 +2703,14 @@ function toErrorMessage(error) {
 }
 // src/sdk/usage-stats.ts
 import { readdir as readdir2 } from "fs/promises";
-import { join as join5 } from "path";
+import { join as join7 } from "path";
 var ROLLOUT_PREFIX3 = "rollout-";
 var ROLLOUT_EXT3 = ".jsonl";
 var DEFAULT_RECENT_DAYS = 14;
 var DEFAULT_CACHE_TTL_MS = 5000;
 var usageStatsCache = null;
 async function getCodexUsageStats(options) {
-  const sessionsDir = options?.codexSessionsDir ?? join5(resolveCodexHome(), "sessions");
+  const sessionsDir = options?.codexSessionsDir ?? join7(resolveCodexHome(), "sessions");
   const recentDays = normalizeRecentDays(options?.recentDays);
   const now = resolveNowMs(options?.now);
   const cacheKey = `${sessionsDir}::${String(recentDays)}`;
@@ -2879,7 +2852,7 @@ async function listRolloutFiles(sessionsDir) {
 async function collectRolloutFilesRecursive(dirPath, out) {
   const entries = await readdir2(dirPath, { withFileTypes: true });
   for (const entry of entries) {
-    const fullPath = join5(dirPath, entry.name);
+    const fullPath = join7(dirPath, entry.name);
     if (entry.isDirectory()) {
       await collectRolloutFilesRecursive(fullPath, out);
       continue;
@@ -3260,17 +3233,17 @@ function validateCreateBookmarkInput(input) {
   return errors;
 }
 // src/bookmark/repository.ts
-import { readFile as readFile2, writeFile as writeFile2, mkdir, rename } from "fs/promises";
-import { join as join6 } from "path";
+import { readFile as readFile4, writeFile as writeFile2, mkdir, rename } from "fs/promises";
+import { join as join8 } from "path";
 import { homedir as homedir2 } from "os";
 import { randomUUID as randomUUID3 } from "crypto";
-var DEFAULT_CONFIG_DIR = join6(homedir2(), ".config", "codex-agent");
+var DEFAULT_CONFIG_DIR = join8(homedir2(), ".config", "codex-agent");
 var BOOKMARKS_FILE = "bookmarks.json";
 function resolveConfigDir(configDir) {
   return configDir ?? DEFAULT_CONFIG_DIR;
 }
 function bookmarkFilePath(configDir) {
-  return join6(resolveConfigDir(configDir), BOOKMARKS_FILE);
+  return join8(resolveConfigDir(configDir), BOOKMARKS_FILE);
 }
 function toBookmark(data) {
   return {
@@ -3305,7 +3278,7 @@ function toData(bookmark) {
 async function loadBookmarks(configDir) {
   const path = bookmarkFilePath(configDir);
   try {
-    const raw = await readFile2(path, "utf-8");
+    const raw = await readFile4(path, "utf-8");
     const parsed = JSON.parse(raw);
     return parsed.bookmarks.map(toBookmark);
   } catch {
@@ -4411,21 +4384,21 @@ function extractChangedFiles(lines) {
 }
 // src/file-changes/service.ts
 import { homedir as homedir3 } from "os";
-import { join as join7 } from "path";
-import { mkdir as mkdir2, readFile as readFile3, rename as rename2, writeFile as writeFile3 } from "fs/promises";
+import { join as join9 } from "path";
+import { mkdir as mkdir2, readFile as readFile5, rename as rename2, writeFile as writeFile3 } from "fs/promises";
 import { randomUUID as randomUUID5 } from "crypto";
-var DEFAULT_CONFIG_DIR2 = join7(homedir3(), ".config", "codex-agent");
+var DEFAULT_CONFIG_DIR2 = join9(homedir3(), ".config", "codex-agent");
 var FILE_INDEX_FILE = "file-changes-index.json";
 function resolveConfigDir2(configDir) {
   return configDir ?? DEFAULT_CONFIG_DIR2;
 }
 function fileIndexPath(configDir) {
-  return join7(resolveConfigDir2(configDir), FILE_INDEX_FILE);
+  return join9(resolveConfigDir2(configDir), FILE_INDEX_FILE);
 }
 async function loadIndex(configDir) {
   const path = fileIndexPath(configDir);
   try {
-    const raw = await readFile3(path, "utf-8");
+    const raw = await readFile5(path, "utf-8");
     return JSON.parse(raw);
   } catch {
     return {
@@ -4702,17 +4675,17 @@ async function handleFilesRebuild() {
 }
 
 // src/group/repository.ts
-import { readFile as readFile4, writeFile as writeFile4, mkdir as mkdir3, rename as rename3 } from "fs/promises";
-import { join as join8 } from "path";
+import { readFile as readFile6, writeFile as writeFile4, mkdir as mkdir3, rename as rename3 } from "fs/promises";
+import { join as join10 } from "path";
 import { homedir as homedir4 } from "os";
 import { randomUUID as randomUUID6 } from "crypto";
-var DEFAULT_CONFIG_DIR3 = join8(homedir4(), ".config", "codex-agent");
+var DEFAULT_CONFIG_DIR3 = join10(homedir4(), ".config", "codex-agent");
 var GROUPS_FILE = "groups.json";
 function resolveConfigDir3(configDir) {
   return configDir ?? DEFAULT_CONFIG_DIR3;
 }
 function groupFilePath(configDir) {
-  return join8(resolveConfigDir3(configDir), GROUPS_FILE);
+  return join10(resolveConfigDir3(configDir), GROUPS_FILE);
 }
 function toGroup(data) {
   return {
@@ -4739,7 +4712,7 @@ function toData2(group) {
 async function loadGroups(configDir) {
   const path = groupFilePath(configDir);
   try {
-    const raw = await readFile4(path, "utf-8");
+    const raw = await readFile6(path, "utf-8");
     return JSON.parse(raw);
   } catch {
     return { groups: [] };
@@ -5158,17 +5131,17 @@ var QUEUE_PROMPT_STATUSES = [
 ];
 var QUEUE_COMMAND_MODES = ["auto", "manual"];
 // src/queue/repository.ts
-import { readFile as readFile5, writeFile as writeFile5, mkdir as mkdir4, rename as rename4 } from "fs/promises";
-import { join as join9 } from "path";
+import { readFile as readFile7, writeFile as writeFile5, mkdir as mkdir4, rename as rename4 } from "fs/promises";
+import { join as join11 } from "path";
 import { homedir as homedir5 } from "os";
 import { randomUUID as randomUUID7 } from "crypto";
-var DEFAULT_CONFIG_DIR4 = join9(homedir5(), ".config", "codex-agent");
+var DEFAULT_CONFIG_DIR4 = join11(homedir5(), ".config", "codex-agent");
 var QUEUES_FILE = "queues.json";
 function resolveConfigDir4(configDir) {
   return configDir ?? DEFAULT_CONFIG_DIR4;
 }
 function queueFilePath(configDir) {
-  return join9(resolveConfigDir4(configDir), QUEUES_FILE);
+  return join11(resolveConfigDir4(configDir), QUEUES_FILE);
 }
 function toPrompt(data) {
   return {
@@ -5219,7 +5192,7 @@ function toQueueData(queue) {
 async function loadQueues(configDir) {
   const path = queueFilePath(configDir);
   try {
-    const raw = await readFile5(path, "utf-8");
+    const raw = await readFile7(path, "utf-8");
     return JSON.parse(raw);
   } catch {
     return { queues: [] };
@@ -6227,15 +6200,15 @@ import {
   timingSafeEqual
 } from "crypto";
 import { homedir as homedir6 } from "os";
-import { join as join10 } from "path";
-import { mkdir as mkdir5, readFile as readFile6, rename as rename5, writeFile as writeFile6 } from "fs/promises";
-var DEFAULT_CONFIG_DIR5 = join10(homedir6(), ".config", "codex-agent");
+import { join as join12 } from "path";
+import { mkdir as mkdir5, readFile as readFile8, rename as rename5, writeFile as writeFile6 } from "fs/promises";
+var DEFAULT_CONFIG_DIR5 = join12(homedir6(), ".config", "codex-agent");
 var TOKENS_FILE = "tokens.json";
 function resolveConfigDir5(configDir) {
   return configDir ?? DEFAULT_CONFIG_DIR5;
 }
 function tokenFilePath(configDir) {
-  return join10(resolveConfigDir5(configDir), TOKENS_FILE);
+  return join12(resolveConfigDir5(configDir), TOKENS_FILE);
 }
 function hashSecret(secret) {
   return createHash("sha256").update(secret).digest("hex");
@@ -6274,7 +6247,7 @@ function isExpired(expiresAt) {
 async function loadTokenConfig(configDir) {
   const path = tokenFilePath(configDir);
   try {
-    const raw = await readFile6(path, "utf-8");
+    const raw = await readFile8(path, "utf-8");
     return JSON.parse(raw);
   } catch {
     return { tokens: [] };
@@ -6503,7 +6476,7 @@ async function handleTokenRotate(args) {
 }
 
 // src/cli/graphql.ts
-import { access, readFile as readFile7 } from "fs/promises";
+import { access, readFile as readFile9 } from "fs/promises";
 import { constants as fsConstants } from "fs";
 
 // node_modules/graphql/jsutils/devAssert.mjs
@@ -9024,28 +8997,28 @@ var printDocASTReducer = {
     leave: (node) => "$" + node.name
   },
   Document: {
-    leave: (node) => join11(node.definitions, `
+    leave: (node) => join13(node.definitions, `
 
 `)
   },
   OperationDefinition: {
     leave(node) {
       const varDefs = hasMultilineItems(node.variableDefinitions) ? wrap(`(
-`, join11(node.variableDefinitions, `
+`, join13(node.variableDefinitions, `
 `), `
-)`) : wrap("(", join11(node.variableDefinitions, ", "), ")");
+)`) : wrap("(", join13(node.variableDefinitions, ", "), ")");
       const prefix = wrap("", node.description, `
-`) + join11([
+`) + join13([
         node.operation,
-        join11([node.name, varDefs]),
-        join11(node.directives, " ")
+        join13([node.name, varDefs]),
+        join13(node.directives, " ")
       ], " ");
       return (prefix === "query" ? "" : prefix + " ") + node.selectionSet;
     }
   },
   VariableDefinition: {
     leave: ({ variable, type, defaultValue, directives, description }) => wrap("", description, `
-`) + variable + ": " + type + wrap(" = ", defaultValue) + wrap(" ", join11(directives, " "))
+`) + variable + ": " + type + wrap(" = ", defaultValue) + wrap(" ", join13(directives, " "))
   },
   SelectionSet: {
     leave: ({ selections }) => block(selections)
@@ -9053,27 +9026,27 @@ var printDocASTReducer = {
   Field: {
     leave({ alias, name, arguments: args, directives, selectionSet }) {
       const prefix = wrap("", alias, ": ") + name;
-      let argsLine = prefix + wrap("(", join11(args, ", "), ")");
+      let argsLine = prefix + wrap("(", join13(args, ", "), ")");
       if (argsLine.length > MAX_LINE_LENGTH) {
         argsLine = prefix + wrap(`(
-`, indent(join11(args, `
+`, indent(join13(args, `
 `)), `
 )`);
       }
-      return join11([argsLine, join11(directives, " "), selectionSet], " ");
+      return join13([argsLine, join13(directives, " "), selectionSet], " ");
     }
   },
   Argument: {
     leave: ({ name, value }) => name + ": " + value
   },
   FragmentSpread: {
-    leave: ({ name, directives }) => "..." + name + wrap(" ", join11(directives, " "))
+    leave: ({ name, directives }) => "..." + name + wrap(" ", join13(directives, " "))
   },
   InlineFragment: {
-    leave: ({ typeCondition, directives, selectionSet }) => join11([
+    leave: ({ typeCondition, directives, selectionSet }) => join13([
       "...",
       wrap("on ", typeCondition),
-      join11(directives, " "),
+      join13(directives, " "),
       selectionSet
     ], " ")
   },
@@ -9086,7 +9059,7 @@ var printDocASTReducer = {
       selectionSet,
       description
     }) => wrap("", description, `
-`) + `fragment ${name}${wrap("(", join11(variableDefinitions, ", "), ")")} ` + `on ${typeCondition} ${wrap("", join11(directives, " "), " ")}` + selectionSet
+`) + `fragment ${name}${wrap("(", join13(variableDefinitions, ", "), ")")} ` + `on ${typeCondition} ${wrap("", join13(directives, " "), " ")}` + selectionSet
   },
   IntValue: {
     leave: ({ value }) => value
@@ -9107,16 +9080,16 @@ var printDocASTReducer = {
     leave: ({ value }) => value
   },
   ListValue: {
-    leave: ({ values }) => "[" + join11(values, ", ") + "]"
+    leave: ({ values }) => "[" + join13(values, ", ") + "]"
   },
   ObjectValue: {
-    leave: ({ fields }) => "{" + join11(fields, ", ") + "}"
+    leave: ({ fields }) => "{" + join13(fields, ", ") + "}"
   },
   ObjectField: {
     leave: ({ name, value }) => name + ": " + value
   },
   Directive: {
-    leave: ({ name, arguments: args }) => "@" + name + wrap("(", join11(args, ", "), ")")
+    leave: ({ name, arguments: args }) => "@" + name + wrap("(", join13(args, ", "), ")")
   },
   NamedType: {
     leave: ({ name }) => name
@@ -9129,130 +9102,130 @@ var printDocASTReducer = {
   },
   SchemaDefinition: {
     leave: ({ description, directives, operationTypes }) => wrap("", description, `
-`) + join11(["schema", join11(directives, " "), block(operationTypes)], " ")
+`) + join13(["schema", join13(directives, " "), block(operationTypes)], " ")
   },
   OperationTypeDefinition: {
     leave: ({ operation, type }) => operation + ": " + type
   },
   ScalarTypeDefinition: {
     leave: ({ description, name, directives }) => wrap("", description, `
-`) + join11(["scalar", name, join11(directives, " ")], " ")
+`) + join13(["scalar", name, join13(directives, " ")], " ")
   },
   ObjectTypeDefinition: {
     leave: ({ description, name, interfaces, directives, fields }) => wrap("", description, `
-`) + join11([
+`) + join13([
       "type",
       name,
-      wrap("implements ", join11(interfaces, " & ")),
-      join11(directives, " "),
+      wrap("implements ", join13(interfaces, " & ")),
+      join13(directives, " "),
       block(fields)
     ], " ")
   },
   FieldDefinition: {
     leave: ({ description, name, arguments: args, type, directives }) => wrap("", description, `
 `) + name + (hasMultilineItems(args) ? wrap(`(
-`, indent(join11(args, `
+`, indent(join13(args, `
 `)), `
-)`) : wrap("(", join11(args, ", "), ")")) + ": " + type + wrap(" ", join11(directives, " "))
+)`) : wrap("(", join13(args, ", "), ")")) + ": " + type + wrap(" ", join13(directives, " "))
   },
   InputValueDefinition: {
     leave: ({ description, name, type, defaultValue, directives }) => wrap("", description, `
-`) + join11([name + ": " + type, wrap("= ", defaultValue), join11(directives, " ")], " ")
+`) + join13([name + ": " + type, wrap("= ", defaultValue), join13(directives, " ")], " ")
   },
   InterfaceTypeDefinition: {
     leave: ({ description, name, interfaces, directives, fields }) => wrap("", description, `
-`) + join11([
+`) + join13([
       "interface",
       name,
-      wrap("implements ", join11(interfaces, " & ")),
-      join11(directives, " "),
+      wrap("implements ", join13(interfaces, " & ")),
+      join13(directives, " "),
       block(fields)
     ], " ")
   },
   UnionTypeDefinition: {
     leave: ({ description, name, directives, types }) => wrap("", description, `
-`) + join11(["union", name, join11(directives, " "), wrap("= ", join11(types, " | "))], " ")
+`) + join13(["union", name, join13(directives, " "), wrap("= ", join13(types, " | "))], " ")
   },
   EnumTypeDefinition: {
     leave: ({ description, name, directives, values }) => wrap("", description, `
-`) + join11(["enum", name, join11(directives, " "), block(values)], " ")
+`) + join13(["enum", name, join13(directives, " "), block(values)], " ")
   },
   EnumValueDefinition: {
     leave: ({ description, name, directives }) => wrap("", description, `
-`) + join11([name, join11(directives, " ")], " ")
+`) + join13([name, join13(directives, " ")], " ")
   },
   InputObjectTypeDefinition: {
     leave: ({ description, name, directives, fields }) => wrap("", description, `
-`) + join11(["input", name, join11(directives, " "), block(fields)], " ")
+`) + join13(["input", name, join13(directives, " "), block(fields)], " ")
   },
   DirectiveDefinition: {
     leave: ({ description, name, arguments: args, repeatable, locations }) => wrap("", description, `
 `) + "directive @" + name + (hasMultilineItems(args) ? wrap(`(
-`, indent(join11(args, `
+`, indent(join13(args, `
 `)), `
-)`) : wrap("(", join11(args, ", "), ")")) + (repeatable ? " repeatable" : "") + " on " + join11(locations, " | ")
+)`) : wrap("(", join13(args, ", "), ")")) + (repeatable ? " repeatable" : "") + " on " + join13(locations, " | ")
   },
   SchemaExtension: {
-    leave: ({ directives, operationTypes }) => join11(["extend schema", join11(directives, " "), block(operationTypes)], " ")
+    leave: ({ directives, operationTypes }) => join13(["extend schema", join13(directives, " "), block(operationTypes)], " ")
   },
   ScalarTypeExtension: {
-    leave: ({ name, directives }) => join11(["extend scalar", name, join11(directives, " ")], " ")
+    leave: ({ name, directives }) => join13(["extend scalar", name, join13(directives, " ")], " ")
   },
   ObjectTypeExtension: {
-    leave: ({ name, interfaces, directives, fields }) => join11([
+    leave: ({ name, interfaces, directives, fields }) => join13([
       "extend type",
       name,
-      wrap("implements ", join11(interfaces, " & ")),
-      join11(directives, " "),
+      wrap("implements ", join13(interfaces, " & ")),
+      join13(directives, " "),
       block(fields)
     ], " ")
   },
   InterfaceTypeExtension: {
-    leave: ({ name, interfaces, directives, fields }) => join11([
+    leave: ({ name, interfaces, directives, fields }) => join13([
       "extend interface",
       name,
-      wrap("implements ", join11(interfaces, " & ")),
-      join11(directives, " "),
+      wrap("implements ", join13(interfaces, " & ")),
+      join13(directives, " "),
       block(fields)
     ], " ")
   },
   UnionTypeExtension: {
-    leave: ({ name, directives, types }) => join11([
+    leave: ({ name, directives, types }) => join13([
       "extend union",
       name,
-      join11(directives, " "),
-      wrap("= ", join11(types, " | "))
+      join13(directives, " "),
+      wrap("= ", join13(types, " | "))
     ], " ")
   },
   EnumTypeExtension: {
-    leave: ({ name, directives, values }) => join11(["extend enum", name, join11(directives, " "), block(values)], " ")
+    leave: ({ name, directives, values }) => join13(["extend enum", name, join13(directives, " "), block(values)], " ")
   },
   InputObjectTypeExtension: {
-    leave: ({ name, directives, fields }) => join11(["extend input", name, join11(directives, " "), block(fields)], " ")
+    leave: ({ name, directives, fields }) => join13(["extend input", name, join13(directives, " "), block(fields)], " ")
   },
   TypeCoordinate: {
     leave: ({ name }) => name
   },
   MemberCoordinate: {
-    leave: ({ name, memberName }) => join11([name, wrap(".", memberName)])
+    leave: ({ name, memberName }) => join13([name, wrap(".", memberName)])
   },
   ArgumentCoordinate: {
-    leave: ({ name, fieldName, argumentName }) => join11([name, wrap(".", fieldName), wrap("(", argumentName, ":)")])
+    leave: ({ name, fieldName, argumentName }) => join13([name, wrap(".", fieldName), wrap("(", argumentName, ":)")])
   },
   DirectiveCoordinate: {
-    leave: ({ name }) => join11(["@", name])
+    leave: ({ name }) => join13(["@", name])
   },
   DirectiveArgumentCoordinate: {
-    leave: ({ name, argumentName }) => join11(["@", name, wrap("(", argumentName, ":)")])
+    leave: ({ name, argumentName }) => join13(["@", name, wrap("(", argumentName, ":)")])
   }
 };
-function join11(maybeArray, separator = "") {
+function join13(maybeArray, separator = "") {
   var _maybeArray$filter$jo;
   return (_maybeArray$filter$jo = maybeArray === null || maybeArray === undefined ? undefined : maybeArray.filter((x) => x).join(separator)) !== null && _maybeArray$filter$jo !== undefined ? _maybeArray$filter$jo : "";
 }
 function block(array) {
   return wrap(`{
-`, indent(join11(array, `
+`, indent(join13(array, `
 `)), `
 }`);
 }
@@ -15820,7 +15793,7 @@ async function readVariables(args) {
 }
 async function parseJsonSource(raw) {
   const path = raw.startsWith("@") ? raw.slice(1) : raw;
-  const source = await isReadableFile(path) ? await readFile7(path, "utf-8") : raw;
+  const source = await isReadableFile(path) ? await readFile9(path, "utf-8") : raw;
   try {
     return JSON.parse(source);
   } catch (error) {
