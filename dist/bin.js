@@ -2435,22 +2435,24 @@ async function readToolVersion(binary, options) {
       settle({ version: null, error: message });
     });
     child.on("close", (code, signal) => {
-      if (code === 0) {
-        const line = firstLine(stdout);
-        if (line !== null) {
-          settle({ version: line, error: null });
+      setTimeout(() => {
+        if (code === 0) {
+          const line = firstLine(stdout);
+          if (line !== null) {
+            settle({ version: line, error: null });
+            return;
+          }
+          settle({
+            version: null,
+            error: "version command succeeded but produced no output"
+          });
           return;
         }
-        settle({
-          version: null,
-          error: "version command succeeded but produced no output"
-        });
-        return;
-      }
-      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-      const details = firstLine(stderr);
-      const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
-      settle({ version: null, error: message });
+        const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+        const details = firstLine(stderr);
+        const message = details === null ? `version command failed (${reason})` : `version command failed (${reason}): ${details}`;
+        settle({ version: null, error: message });
+      }, 0);
     });
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
@@ -2612,23 +2614,25 @@ async function runCodexCommand(binary, args, options) {
       });
     });
     child.on("close", (code, signal) => {
-      if (code === 0) {
+      setTimeout(() => {
+        if (code === 0) {
+          settle({
+            exitCode: 0,
+            stdout,
+            stderr,
+            error: null
+          });
+          return;
+        }
+        const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
+        const details = extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ?? firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
         settle({
-          exitCode: 0,
+          exitCode: code ?? null,
           stdout,
           stderr,
-          error: null
+          error: details === null ? `command failed (${reason})` : `command failed (${reason}): ${details}`
         });
-        return;
-      }
-      const reason = signal !== null ? `signal ${signal}` : `exit code ${String(code ?? "unknown")}`;
-      const details = extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ?? firstNonEmptyLine(stderr) ?? firstNonEmptyLine(stdout);
-      settle({
-        exitCode: code ?? null,
-        stdout,
-        stderr,
-        error: details === null ? `command failed (${reason})` : `command failed (${reason}): ${details}`
-      });
+      }, 0);
     });
     timer = setTimeout(() => {
       child.kill("SIGTERM");

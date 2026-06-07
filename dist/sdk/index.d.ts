@@ -2,7 +2,7 @@ export type { SdkEventType, SdkEventPayloadMap, SdkEventPayload, SdkEventHandler
 export { BasicSdkEventEmitter } from "./events";
 export type { ToolContext, ToolConfig, RegisteredTool } from "./tool-registry";
 export { tool, ToolRegistry } from "./tool-registry";
-export type { CodexEnvironmentVariables } from "../process/types";
+export type { ApprovalMode, CodexEnvironmentVariables, SandboxMode, StreamGranularity, } from "../process/types";
 export type { SessionRunnerOptions, SessionConfig, SessionResult, SessionCharStreamChunk, SessionStreamChunk, } from "./session-runner";
 export { SessionRunner, RunningSession } from "./session-runner";
 export type { MockCodexSessionConfig, MockCodexProcessOptions, MockCodexResumeOptions, MockCodexSessionResult, MockCodexSessionCharStreamChunk, MockCodexSessionStreamChunk, MockCodexSessionResultInput, MockCodexRunningSessionOptions, MockCodexStartSessionCall, MockCodexResumeSessionCall, } from "./mock-session-runner";
