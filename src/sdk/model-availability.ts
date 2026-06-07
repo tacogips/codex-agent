@@ -216,33 +216,35 @@ async function runCodexCommand(
     });
 
     child.on("close", (code, signal) => {
-      if (code === 0) {
+      setTimeout(() => {
+        if (code === 0) {
+          settle({
+            exitCode: 0,
+            stdout,
+            stderr,
+            error: null,
+          });
+          return;
+        }
+
+        const reason =
+          signal !== null
+            ? `signal ${signal}`
+            : `exit code ${String(code ?? "unknown")}`;
+        const details =
+          extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ??
+          firstNonEmptyLine(stderr) ??
+          firstNonEmptyLine(stdout);
         settle({
-          exitCode: 0,
+          exitCode: code ?? null,
           stdout,
           stderr,
-          error: null,
+          error:
+            details === null
+              ? `command failed (${reason})`
+              : `command failed (${reason}): ${details}`,
         });
-        return;
-      }
-
-      const reason =
-        signal !== null
-          ? `signal ${signal}`
-          : `exit code ${String(code ?? "unknown")}`;
-      const details =
-        extractCodexErrorMessage(commandOutputText({ stdout, stderr })) ??
-        firstNonEmptyLine(stderr) ??
-        firstNonEmptyLine(stdout);
-      settle({
-        exitCode: code ?? null,
-        stdout,
-        stderr,
-        error:
-          details === null
-            ? `command failed (${reason})`
-            : `command failed (${reason}): ${details}`,
-      });
+      }, 0);
     });
 
     timer = setTimeout(() => {

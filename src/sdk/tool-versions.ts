@@ -89,29 +89,31 @@ async function readToolVersion(
     });
 
     child.on("close", (code, signal) => {
-      if (code === 0) {
-        const line = firstLine(stdout);
-        if (line !== null) {
-          settle({ version: line, error: null });
+      setTimeout(() => {
+        if (code === 0) {
+          const line = firstLine(stdout);
+          if (line !== null) {
+            settle({ version: line, error: null });
+            return;
+          }
+          settle({
+            version: null,
+            error: "version command succeeded but produced no output",
+          });
           return;
         }
-        settle({
-          version: null,
-          error: "version command succeeded but produced no output",
-        });
-        return;
-      }
 
-      const reason =
-        signal !== null
-          ? `signal ${signal}`
-          : `exit code ${String(code ?? "unknown")}`;
-      const details = firstLine(stderr);
-      const message =
-        details === null
-          ? `version command failed (${reason})`
-          : `version command failed (${reason}): ${details}`;
-      settle({ version: null, error: message });
+        const reason =
+          signal !== null
+            ? `signal ${signal}`
+            : `exit code ${String(code ?? "unknown")}`;
+        const details = firstLine(stderr);
+        const message =
+          details === null
+            ? `version command failed (${reason})`
+            : `version command failed (${reason}): ${details}`;
+        settle({ version: null, error: message });
+      }, 0);
     });
 
     const timer = setTimeout(() => {
