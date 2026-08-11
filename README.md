@@ -48,14 +48,14 @@ bun run format
 bun run format:check
 ```
 
-Using `task` (see `Taskfile.yml`):
+Using `task` (see `mise.toml`):
 
 ```bash
-task install
-task test
-task typecheck
-task lint
-task ci
+mise run install
+mise run test
+mise run typecheck
+mise run lint
+mise run ci
 ```
 
 ## CLI Overview
@@ -334,5 +334,5 @@ determinism before widening the fix beyond `dist/main.js`.
 ## Notes
 
 - TypeScript strict mode is enabled (`tsconfig.json`).
-- Nix users can enter the environment with `nix develop`.
+- Install the environment with `mise install`.
 - Design docs are stored in `design-docs/` and implementation plans in `impl-plans/`.
