@@ -7,7 +7,7 @@
     {
       "name": "ts-lsp",
       "source": "./plugins/lsp",
-      "description": "TypeScript language server support for Claude Code",
+      "description": "TypeScript language server support for agent tooling",
       "version": "1.0.0"
     }
   ]

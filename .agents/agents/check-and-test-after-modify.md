@@ -6,6 +6,7 @@ model: haiku
 ---
 
 IMPORTANT: This agent MUST be invoked automatically by the main agent in the following scenarios:
+
 1. After ANY modification to TypeScript (.ts) files - The main agent should NOT wait for user request - it must proactively launch this agent as soon as code modifications are complete.
 2. When the user explicitly requests running tests or type checks - Even if no modifications were made, use this agent to execute the requested tests or checks.
 
@@ -18,6 +19,7 @@ The main agent should provide context about modifications in the prompt. This in
 ### Required Information:
 
 1. **Modification Summary**: Brief description of what was changed
+
    - Example: "Modified user service to use new repository pattern"
    - Example: "Refactored repository interface for Organization model"
 
@@ -28,6 +30,7 @@ The main agent should provide context about modifications in the prompt. This in
 ### Optional Information:
 
 3. **Modified Files**: Specific files changed (helps identify test requirements)
+
    - Example: "Modified files: packages/application/src/usecases/create-user.ts"
    - Helps determine which tests to run
 
@@ -83,7 +86,7 @@ Summary: Updated CreateUserUseCase logic.
 
 - Run Biome lint (`biome check . --diagnostic-level=warn`, or `bun run lint:biome`)
 - Run Vitest tests and TypeScript type checks
-- Execute Taskfile test and check targets (if available)
+- Execute mise test and check tasks (if available)
 - Filter and run specific test suites or individual tests
 - Parse test output and type errors to identify failure patterns
 - Verify that modifications don't break existing functionality or type safety
@@ -99,9 +102,11 @@ Summary: Updated CreateUserUseCase logic.
 If Biome, tests, or type checks fail:
 
 1. **First, verify command correctness**: Re-check this agent's prompt to confirm you are using the correct lint/test/check commands
-   - Confirm `biome check . --diagnostic-level=warn` (or `bun run lint:biome`), typecheck, and test commands match the project's conventions (including Taskfile targets such as `task lint` / `task ci` when applicable)
+
+   - Confirm `biome check . --diagnostic-level=warn` (or `bun run lint:biome`), typecheck, and test commands match the project's conventions (including mise tasks such as `mise run lint` / `mise run ci` when applicable)
 
 2. **Only proceed to code analysis if commands are correct**: If the error persists after confirming correct commands:
+
    - Analyze the error output to identify the root cause
    - **Capture and include ALL output**: stdout, stderr, Biome diagnostics, type errors, test failures
    - Report the complete error details to the calling agent with file locations and line numbers
@@ -127,11 +132,13 @@ If Biome, tests, or type checks fail:
 ### What to Include in Your Final Report:
 
 1. **Execution Summary**:
+
    - Which modules were tested
    - Which commands were executed
    - Overall pass/fail status
 
 2. **Complete Error Information** (if any failures occurred):
+
    - Full Biome output when `biome check` fails
    - Full type errors with complete tsc output
    - Full test failure output including ALL stdout/stderr
@@ -141,6 +148,8 @@ If Biome, tests, or type checks fail:
    - Any error messages with full context
 
 3. **Success Information** (if all passed):
+
+   - Confirmation that Biome lint succeeded (no diagnostics at error severity)
    - Number of tests passed
    - Confirmation that type checking succeeded
    - Brief summary of what was verified
@@ -188,6 +197,7 @@ Tests  1 failed (1)
 ```
 
 This shows the calling agent:
+
 - Exact test that failed and its location
 - All debug log output revealing search returned empty results
 - The assertion that failed with expected vs actual
@@ -201,6 +211,7 @@ Error: assertion failed
 ```
 
 This is useless because:
+
 - No file location
 - No context about what assertion failed
 - Missing the debug output showing search response
@@ -231,14 +242,14 @@ This is useless because:
 ### For Linting (Biome)
 
 1. **Biome (Rust linter, repo root)**: `biome check . --diagnostic-level=warn` (infos are omitted; **warnings and errors** are the usual fix targets)
-   - Use `nix develop` / flake devShell when `biome` is not on PATH (for example on NixOS); otherwise rely on `task lint` / `bun run lint` which includes Biome with this threshold
+   - Run `mise install` when `biome` is not on PATH; otherwise rely on `mise run lint` / `bun run lint`, which includes Biome with this threshold
    - Failures at **error** level must be reported in full to the calling agent
 
 ### For Type Checking
 
 1. **TypeScript type check**: `bun run typecheck` or `tsc --noEmit`
    - Fast type check without producing output
-2. **If Taskfile available**: `task typecheck` or `task lint` (lint runs Biome, Prettier check, then typecheck)
+2. **If mise tasks are available**: `mise run typecheck` or `mise run lint` (lint runs Biome, formatting checks, then typecheck)
 
 ### For Testing
 
@@ -246,7 +257,7 @@ This is useless because:
 2. **Specific file**: `vitest run src/usecase/userService.test.ts`
 3. **Verbose output**: `vitest run --reporter=verbose` when debugging failures
 4. **Watch mode**: `vitest` or `vitest --watch` for continuous testing
-5. **If Taskfile available**: Check for `task test` target
+5. **If mise tasks are available**: Check for `mise run test`
 
 ### Test Commands
 
@@ -284,7 +295,7 @@ bun run typecheck
 tsc --noEmit
 
 # Format check (Prettier; Biome formatter is disabled in this repo)
-bunx prettier --check "src/**/*.ts"
+biome format src
 ```
 
 ## Test Execution Guidelines
@@ -297,12 +308,15 @@ bunx prettier --check "src/**/*.ts"
 ### Determining Which Tests to Run
 
 1. **For domain package modifications**: Run all tests (domain affects everything)
+
    - Example: Changes in `packages/domain/` -> Run `vitest run`
 
 2. **For application package modifications**: Run application and adapter package tests
+
    - Example: Changes in `packages/application/src/usecases/` -> Run `vitest run packages/application`
 
 3. **For adapter package modifications**: Run adapter package tests plus integration tests
+
    - Example: Changes in `packages/adapter/src/persistence/` -> Run `vitest run packages/adapter`
 
 4. **For infrastructure package modifications**: Run infrastructure and integration tests
@@ -313,16 +327,23 @@ bunx prettier --check "src/**/*.ts"
 When reporting test results to the calling agent, use this format:
 
 ### Success Format:
+
 ```
+[OK] Biome: PASSED
 [OK] Type check: PASSED
 [OK] Tests passed: X/X
 All checks completed successfully.
 ```
 
 ### Failure Format (MUST include complete details):
+
 ```
+[ERROR] Biome: FAILED / [OK] Biome: PASSED
 [ERROR] Type check: FAILED / [OK] Type check: PASSED
 [ERROR] Tests failed: Z / [OK] Tests passed: X/Y
+
+=== BIOME ERRORS ===
+(If Biome failed, include FULL biome check output)
 
 === TYPE ERRORS ===
 (If type check failed, include FULL tsc output)
@@ -364,7 +385,7 @@ Output:
 
 ## Context Awareness
 
-- Understand project structure from CLAUDE.md
+- Understand project structure from AGENTS.md
 - Follow TypeScript testing conventions
 - Use appropriate testing strategies per module
-- Check for Taskfile targets for project-specific commands
+- Check for mise tasks for project-specific commands

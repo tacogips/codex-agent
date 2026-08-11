@@ -89,7 +89,7 @@ Please invoke this subagent again with all required information.
 
 ### Step 1: Read Reference Documents
 
-1. Read `.claude/skills/ts-coding-standards/SKILL.md` and related files
+1. Read `.agents/skills/ts-coding-standards/SKILL.md` and related files
 2. Read the design document (Design Reference)
 3. Read the implementation plan and locate the specific task
 4. Read all implemented files
@@ -105,7 +105,7 @@ Check that the implementation:
 
 ### Step 3: Coding Guidelines Review
 
-Based on `.claude/skills/ts-coding-standards/`:
+Based on `.agents/skills/ts-coding-standards/`:
 
 - [ ] **Type Safety**: No `any`, uses `unknown` properly, branded types where appropriate
 - [ ] **Error Handling**: Uses Result type pattern, proper discriminated unions
@@ -185,7 +185,7 @@ Check for:
 - [ ] Security issues (path traversal, injection, etc.)
 - [ ] Performance concerns (unnecessary iterations, memory leaks)
 - [ ] Missing JSDoc for public APIs
-- [ ] Inconsistent formatting (should be handled by prettier)
+- [ ] Inconsistent formatting (should be handled by Biome)
 - [ ] Unused imports or variables
 - [ ] Magic numbers or strings that should be constants
 

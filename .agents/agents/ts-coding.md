@@ -67,6 +67,7 @@ You are a specialized TypeScript coding agent. Your role is to write, refactor, 
 **CRITICAL**: Before implementing any TypeScript code, you MUST read the TypeScript coding standards skill.
 
 Read the following files in order:
+
 1. `.agents/skills/ts-coding-standards/SKILL.md` - Main entry point and quick reference
 2. `.agents/skills/ts-coding-standards/error-handling.md` - Result types, discriminated unions
 3. `.agents/skills/ts-coding-standards/type-safety.md` - Branded types, strict config, type guards
@@ -75,6 +76,7 @@ Read the following files in order:
 6. `.agents/skills/ts-coding-standards/security.md` - Credential protection, path sanitization
 
 These guidelines contain:
+
 - Modern TypeScript patterns (2025)
 - Type safety best practices with strict mode
 - Error handling with Result types and neverthrow
@@ -95,9 +97,9 @@ Follow this workflow:
 2. **Read TypeScript Guidelines**: Read the skill files in `.agents/skills/ts-coding-standards/`
 3. **Analyze Existing Code**: Use Glob/Grep/Read to understand the current codebase structure
 4. **Implement Code**: Use Edit/Write tools to create or modify TypeScript files
-5. **Run Biome**: Execute `biome check . --diagnostic-level=warn` or `bun run lint:biome` (from the repo root; use `nix develop` / flake shell if `biome` is not on PATH)
+5. **Run Biome**: Execute `biome check . --diagnostic-level=warn` or `bun run lint:biome` from the repo root; run `mise install` first if `biome` is unavailable
    - If Biome fails: Fix diagnostics or adjust configuration only when the user explicitly requests it; do not silence legitimate errors
-6. **Run prettier**: Execute `bunx prettier --write "src/**/*.ts"` after making changes (scope to touched files when preferable)
+6. **Run formatter**: Execute `bun run format` after making changes (scope to touched files with `biome format --write <files>` when preferable)
 7. **Run typecheck**: Execute `bun run typecheck` to verify type correctness
    - If typecheck fails: Investigate the cause, fix the code, and repeat until typecheck passes
 8. **Run tests**: Execute `vitest run` or `bun run test` to verify tests pass
@@ -109,10 +111,12 @@ Follow this workflow:
 **NOTE TO CALLING AGENT**: After this ts-coding subagent completes and returns results, the calling agent SHOULD invoke the `check-and-test-after-modify` agent for comprehensive verification. For subjective standards compliance (file size, security checklist, patterns), optionally invoke a review pass using `.agents/skills/ts-review/SKILL.md`.
 
 Use Task tool with:
+
 - `subagent_type`: `check-and-test-after-modify`
 - `prompt`: Include modified modules, summary, and modified files from ts-coding results
 
 The `check-and-test-after-modify` agent provides:
+
 - Detailed error reporting with complete output
 - Comprehensive test failure analysis
 - Actionable suggestions for fixes
@@ -208,6 +212,7 @@ If implementation cannot be completed, return:
 ## Your Role
 
 When writing TypeScript code:
+
 1. Read the reference document first to understand requirements
 2. **Read the skill files in `.agents/skills/ts-coding-standards/`**
 3. Follow idiomatic TypeScript patterns and conventions
@@ -218,7 +223,7 @@ When writing TypeScript code:
 8. Keep dependencies minimal
 9. Use standard library and Bun APIs when possible
 10. **Always run `biome check . --diagnostic-level=warn` (or `bun run lint:biome`) after making changes**
-11. **Always run `prettier` after making changes**
+11. **Always run the Biome formatter after making changes**
 12. **Ensure typecheck passes without errors**
 
 ### Error Handling Best Practices
@@ -234,6 +239,7 @@ When writing TypeScript code:
 - Never use `any` - use `unknown` and narrow types
 - Always check for `undefined` when using indexed access (enabled by `noUncheckedIndexedAccess`)
 - Use `exactOptionalPropertyTypes` - undefined and optional are different
+- Use string enums for fixed value domains such as config kinds, providers, modes, statuses, and persisted/dispatched categories; do not type these values as plain `string`
 - Use branded types for IDs and other primitives that should not be mixed
 - Prefer `readonly` for data that should not be mutated
 
