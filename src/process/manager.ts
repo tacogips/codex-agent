@@ -1,0 +1,478 @@
+/**
+ * ProcessManager - Spawn and manage Codex CLI subprocesses.
+ *
+ * Supports exec mode (non-interactive), resume, and fork.
+ * Parses JSONL output from `codex exec --json`.
+ */
+
+import { spawn, type ChildProcess } from "node:child_process";
+import { createInterface } from "node:readline";
+import { randomUUID } from "node:crypto";
+import type {
+  CodexProcess,
+  CodexProcessOptions,
+  ExecResult,
+  ExecStreamResult,
+  ProcessStatus,
+} from "./types";
+import type { RolloutLine } from "../types/rollout";
+import { parseRolloutLine } from "../rollout/reader";
+
+const DEFAULT_BINARY = "codex";
+
+/**
+ * Manages Codex CLI subprocess lifecycle.
+ */
+export class ProcessManager {
+  private readonly processes = new Map<string, ManagedProcess>();
+  private readonly binary: string;
+
+  constructor(binary?: string) {
+    this.binary = binary ?? DEFAULT_BINARY;
+  }
+
+  /**
+   * Spawn a non-interactive `codex exec --json` process.
+   * Returns the parsed JSONL output and exit code once complete.
+   */
+  async spawnExec(
+    prompt: string,
+    options?: CodexProcessOptions,
+  ): Promise<ExecResult> {
+    const stream = this.spawnExecStream(prompt, options);
+    const lines: RolloutLine[] = [];
+    for await (const line of stream.lines) {
+      lines.push(line);
+    }
+    const exitCode = await stream.completion;
+
+    return { exitCode, lines };
+  }
+
+  /**
+   * Spawn `codex exec --json` and stream parsed JSONL lines in real-time.
+   * Returns a process handle, line stream, and completion promise.
+   */
+  spawnExecStream(
+    prompt: string,
+    options?: CodexProcessOptions,
+  ): ExecStreamResult {
+    const args = buildExecArgs(prompt, options);
+    const binary = options?.codexBinary ?? this.binary;
+    const cwd = options?.cwd;
+
+    const child = spawn(binary, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: buildSpawnEnvironment(options),
+    });
+    drainPipe(child.stderr);
+
+    const id = randomUUID();
+    const managed = createManagedProcess(
+      id,
+      child,
+      binary + " " + args.join(" "),
+      prompt,
+    );
+    this.processes.set(id, managed);
+
+    const completion = waitForExit(child).then((exitCode) => {
+      managed.status = "exited";
+      managed.exitCode = exitCode;
+      return exitCode;
+    });
+
+    return {
+      process: toCodexProcess(managed),
+      lines: streamJsonlOutput(child),
+      completion,
+    };
+  }
+
+  /**
+   * Spawn `codex exec resume --json <sessionId> [prompt]` as a non-interactive process.
+   * Returns the process handle for monitoring.
+   */
+  spawnResume(
+    sessionId: string,
+    options?: CodexProcessOptions,
+    prompt?: string,
+  ): CodexProcess {
+    const stream = this.spawnResumeStream(sessionId, options, prompt);
+    drainAsyncIterable(stream.lines);
+    return stream.process;
+  }
+
+  /**
+   * Spawn `codex exec resume --json <sessionId> [prompt]` and stream parsed JSONL lines.
+   * This is used by higher-level session orchestration to combine stdout with rollout watch.
+   */
+  spawnResumeStream(
+    sessionId: string,
+    options?: CodexProcessOptions,
+    prompt?: string,
+  ): ExecStreamResult {
+    const args = buildResumeArgs(sessionId, options, prompt);
+    const binary = options?.codexBinary ?? this.binary;
+    const cwd = options?.cwd;
+
+    const child = spawn(binary, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: buildSpawnEnvironment(options),
+    });
+    drainPipe(child.stderr);
+
+    const id = randomUUID();
+    const managed = createManagedProcess(
+      id,
+      child,
+      binary + " " + args.join(" "),
+      `resume ${sessionId}`,
+    );
+    this.processes.set(id, managed);
+
+    const completion = waitForExit(child).then((exitCode) => {
+      managed.status = "exited";
+      managed.exitCode = exitCode;
+      return exitCode;
+    });
+
+    return {
+      process: toCodexProcess(managed),
+      lines: streamJsonlOutput(child),
+      completion,
+    };
+  }
+
+  /**
+   * Spawn `codex fork <sessionId>` as an interactive process.
+   * Returns the process handle for monitoring.
+   */
+  spawnFork(
+    sessionId: string,
+    nthMessage?: number,
+    options?: CodexProcessOptions,
+  ): CodexProcess {
+    const args = ["fork", sessionId];
+    if (nthMessage !== undefined) {
+      args.push("--nth-message", String(nthMessage));
+    }
+    args.push(...buildCommonArgs(options));
+    return this.spawnTracked(args, options, `fork ${sessionId}`);
+  }
+
+  /**
+   * List all tracked processes.
+   */
+  list(): readonly CodexProcess[] {
+    return Array.from(this.processes.values()).map(toCodexProcess);
+  }
+
+  /**
+   * Get a specific process by ID.
+   */
+  get(id: string): CodexProcess | null {
+    const managed = this.processes.get(id);
+    if (managed === undefined) {
+      return null;
+    }
+    return toCodexProcess(managed);
+  }
+
+  /**
+   * Kill a running process.
+   */
+  kill(id: string): boolean {
+    const managed = this.processes.get(id);
+    if (managed === undefined) {
+      return false;
+    }
+    if (managed.status !== "running") {
+      return false;
+    }
+    managed.child.kill("SIGTERM");
+    managed.status = "killed";
+    return true;
+  }
+
+  /**
+   * Write plain text input to a running interactive process.
+   */
+  writeInput(id: string, input: string): boolean {
+    const managed = this.processes.get(id);
+    if (managed === undefined || managed.status !== "running") {
+      return false;
+    }
+    if (managed.child.stdin === null) {
+      return false;
+    }
+    managed.child.stdin.write(input);
+    return true;
+  }
+
+  /**
+   * Kill all running processes.
+   */
+  killAll(): void {
+    for (const managed of this.processes.values()) {
+      if (managed.status === "running") {
+        managed.child.kill("SIGTERM");
+        managed.status = "killed";
+      }
+    }
+  }
+
+  /**
+   * Remove completed/killed processes from tracking.
+   */
+  prune(): number {
+    let count = 0;
+    for (const [id, managed] of this.processes) {
+      if (managed.status !== "running") {
+        this.processes.delete(id);
+        count++;
+      }
+    }
+    return count;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal
+  // ---------------------------------------------------------------------------
+
+  private spawnTracked(
+    args: string[],
+    options: CodexProcessOptions | undefined,
+    prompt: string,
+  ): CodexProcess {
+    const binary = options?.codexBinary ?? this.binary;
+    const cwd = options?.cwd;
+
+    const child = spawn(binary, args, {
+      cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: buildSpawnEnvironment(options),
+    });
+    drainPipe(child.stdout);
+    drainPipe(child.stderr);
+
+    const id = randomUUID();
+    const managed = createManagedProcess(
+      id,
+      child,
+      binary + " " + args.join(" "),
+      prompt,
+    );
+    this.processes.set(id, managed);
+
+    child.on("exit", (code) => {
+      managed.status = "exited";
+      managed.exitCode = code ?? 1;
+    });
+
+    return toCodexProcess(managed);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Arg builders
+// ---------------------------------------------------------------------------
+
+function buildExecArgs(
+  prompt: string,
+  options?: CodexProcessOptions,
+): string[] {
+  const args = ["exec", "--json", ...buildCommonArgs(options)];
+  if (options?.images !== undefined) {
+    for (const imagePath of options.images) {
+      args.push("--image", imagePath);
+    }
+  }
+  if (options?.images !== undefined && options.images.length > 0) {
+    args.push("--");
+  }
+  args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
+  return args;
+}
+
+function buildResumeArgs(
+  sessionId: string,
+  options?: CodexProcessOptions,
+  prompt?: string,
+): string[] {
+  const args = ["exec"];
+  if (options?.sandbox !== undefined) {
+    args.push("--sandbox", options.sandbox);
+  }
+  args.push("resume", "--json", ...buildResumeCommonArgs(options));
+  if (options?.images !== undefined) {
+    for (const imagePath of options.images) {
+      args.push("--image", imagePath);
+    }
+  }
+  if (options?.images !== undefined && options.images.length > 0) {
+    args.push("--");
+  }
+  args.push(sessionId);
+  if (prompt !== undefined && prompt.trim().length > 0) {
+    args.push(buildPromptWithSystemPrompt(prompt, options?.systemPrompt));
+  }
+  return args;
+}
+
+function buildResumeCommonArgs(options?: CodexProcessOptions): string[] {
+  const args: string[] = [];
+  if (options?.model !== undefined) {
+    args.push("--model", options.model);
+  }
+  if (options?.fullAuto === true) {
+    args.push("--dangerously-bypass-approvals-and-sandbox");
+  }
+  if (options?.configOverrides !== undefined) {
+    for (const override of options.configOverrides) {
+      args.push("-c", override);
+    }
+  }
+  if (options?.additionalArgs !== undefined) {
+    args.push(...options.additionalArgs);
+  }
+  return args;
+}
+
+function buildPromptWithSystemPrompt(
+  prompt: string,
+  systemPrompt: string | undefined,
+): string {
+  if (systemPrompt === undefined || systemPrompt.trim().length === 0) {
+    return prompt;
+  }
+  return `${systemPrompt}\n\n${prompt}`;
+}
+
+function buildCommonArgs(options?: CodexProcessOptions): string[] {
+  const args: string[] = [];
+  if (options?.model !== undefined) {
+    args.push("--model", options.model);
+  }
+  if (options?.fullAuto === true) {
+    args.push("--dangerously-bypass-approvals-and-sandbox");
+  }
+  if (options?.sandbox !== undefined) {
+    args.push("--sandbox", options.sandbox);
+  }
+  if (options?.configOverrides !== undefined) {
+    for (const override of options.configOverrides) {
+      args.push("-c", override);
+    }
+  }
+  if (options?.additionalArgs !== undefined) {
+    args.push(...options.additionalArgs);
+  }
+  return args;
+}
+
+function buildSpawnEnvironment(
+  options?: CodexProcessOptions,
+): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...options?.environmentVariables,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Process helpers
+// ---------------------------------------------------------------------------
+
+interface ManagedProcess {
+  id: string;
+  child: ChildProcess;
+  command: string;
+  prompt: string;
+  startedAt: Date;
+  status: ProcessStatus;
+  exitCode: number | undefined;
+}
+
+function createManagedProcess(
+  id: string,
+  child: ChildProcess,
+  command: string,
+  prompt: string,
+): ManagedProcess {
+  return {
+    id,
+    child,
+    command,
+    prompt,
+    startedAt: new Date(),
+    status: "running",
+    exitCode: undefined,
+  };
+}
+
+function toCodexProcess(managed: ManagedProcess): CodexProcess {
+  return {
+    id: managed.id,
+    pid: managed.child.pid ?? -1,
+    command: managed.command,
+    prompt: managed.prompt,
+    startedAt: managed.startedAt,
+    status: managed.status,
+    exitCode: managed.exitCode,
+  };
+}
+
+async function* streamJsonlOutput(
+  child: ChildProcess,
+): AsyncGenerator<RolloutLine, void, undefined> {
+  if (child.stdout === null) {
+    return;
+  }
+
+  const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  try {
+    for await (const line of rl) {
+      const parsed = parseRolloutLine(line);
+      if (parsed !== null) {
+        yield parsed;
+      }
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+function waitForExit(child: ChildProcess): Promise<number> {
+  // Fast path: child already exited before this call (common with short-lived binaries
+  // like 'echo' where the OS signals exit before the event loop delivers it as an event).
+  if (child.exitCode !== null) {
+    return Promise.resolve(child.exitCode);
+  }
+  return new Promise((resolve) => {
+    child.once("exit", (code) => {
+      resolve(code ?? 1);
+    });
+    child.once("error", () => {
+      resolve(1);
+    });
+  });
+}
+
+function drainPipe(stream: NodeJS.ReadableStream | null): void {
+  if (stream === null) {
+    return;
+  }
+  // Drop unconsumed child output to avoid pipe backpressure deadlocks.
+  stream.resume();
+}
+
+function drainAsyncIterable(lines: AsyncIterable<RolloutLine>): void {
+  void (async () => {
+    for await (const _ of lines) {
+      // Intentionally discard parsed lines while still draining stdout.
+    }
+  })();
+}

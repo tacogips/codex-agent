@@ -1,0 +1,1 @@
+{"version":3,"file":"types.d.ts","sourceRoot":"","sources":["../../src/activity/types.ts"],"names":[],"mappings":"AAAA,MAAM,MAAM,cAAc,GAAG,MAAM,GAAG,SAAS,GAAG,kBAAkB,GAAG,QAAQ,CAAC;AAEhF,MAAM,WAAW,aAAa;IAC5B,QAAQ,CAAC,SAAS,EAAE,MAAM,CAAC;IAC3B,QAAQ,CAAC,MAAM,EAAE,cAAc,CAAC;IAChC,QAAQ,CAAC,SAAS,EAAE,MAAM,CAAC;CAC5B"}
